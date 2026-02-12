@@ -9,3 +9,36 @@ tlm_rx_udp
 
 # editor
 .vscode/
+
+# build dirs
+build/
+out/
+bin/
+
+# object/deps
+*.d
+*.gcda
+*.gcno
+*.profraw
+
+# core dumps
+core
+core.*
+
+# temp/editor
+*~
+*.swp
+*.swo
+
+# python junk
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# local built executables in dev/src
+dev/src/stc_server
+dev/src/icd_tx_tcp
+dev/src/tlm_rx_udp
+dev/src/pd4c_test
+dev/src/test_icd
