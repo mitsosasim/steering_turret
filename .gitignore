@@ -1,0 +1,11 @@
+# build outputs
+stc_server
+icd_tx_tcp
+tlm_rx_udp
+*.o
+*.a
+*.so
+*.log
+
+# editor
+.vscode/
