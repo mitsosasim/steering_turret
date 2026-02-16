@@ -25,6 +25,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -605,7 +606,8 @@ static void* can_worker_thread(void* arg) {
       } else if (cmd.cmd_id == STC_CMD_TURRET && cmd.payload_decoded) {
         // ABS/REL are discrete PP actions. SPEED is handled by streaming below.
         if (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE || cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
-          double target_deg = (double)cmd.u.turret.az;
+          const double cmd_az_deg = (double)cmd.u.turret.az;
+          double target_deg = cmd_az_deg;
           if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
             pthread_mutex_lock(&a->sh->mtx);
             double cur_deg = pos_counts_to_deg(a->sh, a->sh->pos_raw);
@@ -613,12 +615,25 @@ static void* can_worker_thread(void* arg) {
             target_deg = cur_deg + target_deg;
           }
 
+          const int32_t target_counts = deg_to_counts(a->sh, target_deg);
+          fprintf(stderr,
+                  "TURRET %s seq=%u az_deg=%.6f target_counts=%" PRId32 "\n",
+                  (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE) ? "ABS" : "REL",
+                  cmd.seq,
+                  cmd_az_deg,
+                  target_counts);
+
           // PP move should stop any active speed streaming.
           pthread_mutex_lock(&a->sh->mtx);
           a->sh->speed_stream_enabled = 0;
           pthread_mutex_unlock(&a->sh->mtx);
 
-          (void)motor_do_pp_move(&ctx, a->sh, target_deg, &cur_mode, &enabled);
+          rc = motor_do_pp_move(&ctx, a->sh, target_deg, &cur_mode, &enabled);
+          fprintf(stderr,
+                  "TURRET seq=%u pd4c_pp_move=%d latest_statusword=0x%04X\n",
+                  cmd.seq,
+                  rc,
+                  pd4c_telem(&ctx)->statusword);
         }
       }
 
