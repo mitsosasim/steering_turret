@@ -249,11 +249,21 @@ static int cmdq_push(cmdq_t* q, const stc_icd_cmd_t* cmd) {
   return 0;
 }
 
-static int cmdq_try_pop(cmdq_t* q, stc_icd_cmd_t* out) {
+static int cmdq_try_peek(cmdq_t* q, stc_icd_cmd_t* out) {
   int ok = 0;
   pthread_mutex_lock(&q->mtx);
   if (q->count > 0) {
     *out = q->items[q->head];
+    ok = 1;
+  }
+  pthread_mutex_unlock(&q->mtx);
+  return ok;
+}
+
+static int cmdq_drop_head(cmdq_t* q) {
+  int ok = 0;
+  pthread_mutex_lock(&q->mtx);
+  if (q->count > 0) {
     q->head = (q->head + 1) % (sizeof(q->items) / sizeof(q->items[0]));
     q->count--;
     ok = 1;
@@ -497,17 +507,10 @@ static void* can_worker_thread(void* arg) {
   pd4c_ctx_t ctx;
   memset(&ctx, 0, sizeof(ctx));
 
-  int rc = pd4c_open(&ctx, a->can_if, (uint8_t)a->node_id);
-  pthread_mutex_lock(&a->sh->mtx);
-  a->sh->can_ok = (rc == PD4C_OK) ? 1 : 0;
-  pthread_mutex_unlock(&a->sh->mtx);
-
-  if (rc != PD4C_OK) {
-    fprintf(stderr, "pd4c_open(%s,node=%d) failed: %s\n", a->can_if, a->node_id, pd4c_strerror(rc));
-  } else {
-    // Best-effort: ensure node is started (many setups already are).
-    (void)pd4c_nmt_start(&ctx);
-  }
+  int can_connected = 0;
+  int reconnect_delay_ms = 500;
+  uint64_t next_reconnect_ms = 0;
+  int rc = PD4C_EIO;
 
   mtr_mode_t cur_mode = MTR_MODE_NONE;
   int enabled = 0;
@@ -517,8 +520,31 @@ static void* can_worker_thread(void* arg) {
   while (!g_stop) {
     uint64_t now = mono_ms();
 
+    if (!can_connected && now >= next_reconnect_ms) {
+      memset(&ctx, 0, sizeof(ctx));
+      rc = pd4c_open(&ctx, a->can_if, (uint8_t)a->node_id);
+      if (rc == PD4C_OK) {
+        // Best-effort: ensure node is started (many setups already are).
+        (void)pd4c_nmt_start(&ctx);
+
+        can_connected = 1;
+        reconnect_delay_ms = 500;
+        pthread_mutex_lock(&a->sh->mtx);
+        a->sh->can_ok = 1;
+        pthread_mutex_unlock(&a->sh->mtx);
+
+        fprintf(stderr, "CAN connected on %s (node=%d)\n", a->can_if, a->node_id);
+      } else {
+        fprintf(stderr, "pd4c_open(%s,node=%d) failed: %s; retry in %d ms\n",
+                a->can_if, a->node_id, pd4c_strerror(rc), reconnect_delay_ms);
+        next_reconnect_ms = now + (uint64_t)reconnect_delay_ms;
+        reconnect_delay_ms *= 2;
+        if (reconnect_delay_ms > 2000) reconnect_delay_ms = 2000;
+      }
+    }
+
     // --- poll CAN (non-blocking-ish)
-    if (rc == PD4C_OK) {
+    if (can_connected) {
       int ev = pd4c_poll(&ctx, 1);
       if (ev >= 0) {
         // Drain any extra frames quickly.
@@ -531,7 +557,17 @@ static void* can_worker_thread(void* arg) {
         copy_pd4c_telem_into_shared(a->sh, t);
         pthread_mutex_unlock(&a->sh->mtx);
       } else if (ev != PD4C_ETIMEDOUT) {
-        // Hard CAN error. Keep running; publish error via TLML.
+        // Hard CAN error. Close and transition to reconnect loop.
+        fprintf(stderr, "CAN poll error: %s\n", pd4c_strerror(ev));
+        pd4c_close(&ctx);
+        can_connected = 0;
+        rc = ev;
+        next_reconnect_ms = now + (uint64_t)reconnect_delay_ms;
+        reconnect_delay_ms *= 2;
+        if (reconnect_delay_ms > 2000) reconnect_delay_ms = 2000;
+        enabled = 0;
+        cur_mode = MTR_MODE_NONE;
+        last_vel_send_ms = 0;
         pthread_mutex_lock(&a->sh->mtx);
         a->sh->can_ok = 0;
         pthread_mutex_unlock(&a->sh->mtx);
@@ -540,10 +576,10 @@ static void* can_worker_thread(void* arg) {
 
     // --- process discrete command queue
     stc_icd_cmd_t cmd;
-    while (cmdq_try_pop(a->q, &cmd)) {
-      if (rc != PD4C_OK) {
-        // CAN not available yet. Nothing to do.
-        continue;
+    while (cmdq_try_peek(a->q, &cmd)) {
+      if (!can_connected) {
+        // CAN not available yet. Keep command queued for reconnect.
+        break;
       }
 
       if (cmd.cmd_id == STC_CMD_RESET) {
@@ -585,6 +621,8 @@ static void* can_worker_thread(void* arg) {
           (void)motor_do_pp_move(&ctx, a->sh, target_deg, &cur_mode, &enabled);
         }
       }
+
+      (void)cmdq_drop_head(a->q);
     }
 
     // --- enforce CU state gating from shared state
@@ -603,7 +641,7 @@ static void* can_worker_thread(void* arg) {
 
     if (cu_state != 3) {
       // Not operational: stop motion and disable streaming.
-      if (speed_on && rc == PD4C_OK) {
+      if (speed_on && can_connected) {
         pthread_mutex_lock(&a->sh->mtx);
         a->sh->speed_stream_enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
@@ -613,7 +651,7 @@ static void* can_worker_thread(void* arg) {
     }
 
     // --- speed watchdog + velocity streaming
-    if (rc == PD4C_OK && cu_state == 3) {
+    if (can_connected && cu_state == 3) {
       if (speed_on) {
         if (watchdog_ms > 0 && (int)(now - last_cmd_ms) > watchdog_ms) {
           // Watchdog: no new speed cmd.
@@ -637,7 +675,7 @@ static void* can_worker_thread(void* arg) {
     }
   }
 
-  if (rc == PD4C_OK) pd4c_close(&ctx);
+  if (can_connected) pd4c_close(&ctx);
   return NULL;
 }
 
