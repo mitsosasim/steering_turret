@@ -466,25 +466,31 @@ static int motor_ensure_enabled(pd4c_ctx_t* ctx, shared_t* sh, mtr_mode_t mode, 
   return rc;
 }
 
-static int motor_do_pp_move(pd4c_ctx_t* ctx, shared_t* sh, double target_deg, mtr_mode_t* cur_mode, int* enabled) {
+static int motor_do_pp_move(pd4c_ctx_t* ctx,
+                            shared_t* sh,
+                            double target_deg,
+                            mtr_mode_t* cur_mode,
+                            int* enabled) {
   if (!ctx || !sh) return PD4C_EINVAL;
+
   int rc = motor_ensure_enabled(ctx, sh, MTR_MODE_PP, cur_mode, enabled);
   if (rc != PD4C_OK) return rc;
 
-  int32_t target_counts = deg_to_counts(sh, target_deg);
-  uint16_t pv = sh->pp_profile_vel;
-  rc = pd4c_rpdo2_send_pp(ctx, target_counts, pv);
-  if (rc != PD4C_OK) return rc;
+  // Convert turret degrees -> motor counts and call low-level PP handshake.
+  const int32_t target_counts = deg_to_counts(sh, target_deg);
+  const uint16_t pv = sh->pp_profile_vel;
 
-  // Trigger move: rising edge on bit4 "new set-point".
-  // Pattern: 0x0F (enable op) -> 0x1F (bit4 set) -> 0x0F.
-  (void)pd4c_rpdo1_send_control_mode(ctx, 0x000F, (int8_t)MTR_MODE_PP);
-  usleep(2000);
-  (void)pd4c_rpdo1_send_control_mode(ctx, 0x001F, (int8_t)MTR_MODE_PP);
-  usleep(2000);
-  (void)pd4c_rpdo1_send_control_mode(ctx, 0x000F, (int8_t)MTR_MODE_PP);
-  return PD4C_OK;
+  // NOTE: stc_server already resolves ABS vs REL at a higher level:
+  // - ABS: target_deg is absolute angle
+  // - REL: you already computed absolute target (cur + delta) before calling motor_do_pp_move()
+  // Therefore we call pd4c_pp_move as absolute (is_relative=0).
+  const int is_relative = 0;
+
+  rc = pd4c_pp_move(ctx, target_counts, pv, is_relative, sh->ds402_timeout_ms);
+  return rc;
 }
+
+
 
 static void* can_worker_thread(void* arg) {
   can_worker_arg_t* a = (can_worker_arg_t*)arg;

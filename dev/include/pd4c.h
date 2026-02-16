@@ -172,6 +172,26 @@ int pd4c_rpdo3_send_target_velocity(pd4c_ctx_t* ctx, int16_t target_vel);
 
 /* --------- DS402 convenience (uses PDO + telemetry) --------- */
 const char* pd4c_ds402_state_str(uint16_t statusword);
+int pd4c_ds402_quick_stop(pd4c_ctx_t* ctx, int8_t mode);
+
+/* Profile Position move with correct DS402 "new set-point" handshake.
+ *
+ * This function:
+ *  - assumes caller owns the ctx and polling thread (single-threaded lib).
+ *  - uses RPDO2 to send 607A+6081, and RPDO1 to toggle controlword bit4.
+ *  - enforces bounded timeouts and progresses by calling pd4c_poll().
+ *
+ * Params:
+ *  target_pos: position in counts (device units in 0x607A)
+ *  profile_vel: profile velocity in units of 0x6081 (whatever your mapping expects)
+ *  is_relative: 0 = absolute positioning, 1 = relative (CiA402 bit6 is set when relative)
+ *  timeout_ms: total per-handshake wait bound (>= 50 recommended; typical 200..600)
+ */
+int pd4c_pp_move(pd4c_ctx_t* ctx,
+                 int32_t target_pos,
+                 uint16_t profile_vel,
+                 int is_relative,
+                 int timeout_ms);
 
 /* Sends DS402 enable sequence via RPDO1 (mode is sent too).
  * Requires TPDO1 updates (statusword) to observe completion.

@@ -506,6 +506,10 @@ int pd4c_rpdo3_send_target_velocity(pd4c_ctx_t* ctx, int16_t target_vel) {
 
 /* ---------------- DS402 convenience ---------------- */
 
+// DS402 statusword bits relevant to Profile Position handshake
+#define PD4C_SW_SETPOINT_ACK   0x1000u  // bit12
+#define PD4C_SW_TARGET_REACHED 0x0400u  // bit10 (optional)
+
 static int ds402_state(uint16_t sw) {
     /* Derived from CiA402 state machine patterns (mask 0x006F). */
     uint16_t m = sw & 0x006F;
@@ -551,6 +555,30 @@ static int wait_status(pd4c_ctx_t* ctx, int desired_state, int timeout_ms) {
     }
     return PD4C_ETIMEDOUT;
 }
+
+static int wait_statusword_mask_eq(pd4c_ctx_t* ctx,
+                                   uint16_t mask,
+                                   uint16_t want,
+                                   int timeout_ms) {
+    if (!ctx) return PD4C_EINVAL;
+    if (timeout_ms < 50) timeout_ms = 50;
+
+    uint64_t start = now_ms();
+    while ((int)(now_ms() - start) < timeout_ms) {
+        // progress by polling (small bounded slice)
+        int prc = pd4c_poll(ctx, 10);
+        if (prc < 0 && prc != PD4C_ETIMEDOUT) return prc;
+
+        if (ctx->telem.have_tpdo1) {
+            // if drive enters FAULT, stop early
+            if (ds402_state(ctx->telem.statusword) == 7) return PD4C_ESTATE;
+
+            if ((ctx->telem.statusword & mask) == want) return PD4C_OK;
+        }
+    }
+    return PD4C_ETIMEDOUT;
+}
+
 
 int pd4c_ds402_enable_operation(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms) {
     if (!ctx) return PD4C_EINVAL;
@@ -605,6 +633,56 @@ int pd4c_ds402_quick_stop(pd4c_ctx_t* ctx, int8_t mode) {
      */
     return pd4c_rpdo1_send_control_mode(ctx, 0x000B, mode);
 }
+
+int pd4c_pp_move(pd4c_ctx_t* ctx,
+                 int32_t target_pos,
+                 uint16_t profile_vel,
+                 int is_relative,
+                 int timeout_ms) {
+    if (!ctx) return PD4C_EINVAL;
+    if (timeout_ms < 50) timeout_ms = 50;
+
+    // Ensure we're operational enabled in PP mode
+    int rc = pd4c_ds402_enable_operation(ctx, PD4C_MODE_PROFILE_POSITION, timeout_ms);
+    if (rc != PD4C_OK) return rc;
+
+    // Base controlword for PP in "operation enabled".
+    // We set bit5 ("change set immediately") to avoid buffered semantics.
+    // For relative moves, set bit6 (CiA402 PP abs/rel selection).
+    uint16_t cw_base = (uint16_t)(0x000F | 0x0020);
+    if (is_relative) cw_base |= 0x0040;  // bit6
+
+    uint16_t cw_sp0 = (uint16_t)(cw_base & ~0x0010); // bit4 = 0
+    uint16_t cw_sp1 = (uint16_t)(cw_base |  0x0010); // bit4 = 1
+
+    // (1) Arm: bit4 low, wait set-point-ack low (bit12=0)
+    rc = pd4c_rpdo1_send_control_mode(ctx, cw_sp0, PD4C_MODE_PROFILE_POSITION);
+    if (rc != PD4C_OK) return rc;
+
+    rc = wait_statusword_mask_eq(ctx, PD4C_SW_SETPOINT_ACK, 0, timeout_ms);
+    if (rc != PD4C_OK) return (rc == PD4C_ETIMEDOUT) ? PD4C_ETIMEDOUT : rc;
+
+    // (2) Send setpoint + profile vel via RPDO2
+    rc = pd4c_rpdo2_send_pp(ctx, target_pos, profile_vel);
+    if (rc != PD4C_OK) return rc;
+
+    // (3) Rising edge: bit4 high, wait ack set (bit12=1)
+    rc = pd4c_rpdo1_send_control_mode(ctx, cw_sp1, PD4C_MODE_PROFILE_POSITION);
+    if (rc != PD4C_OK) return rc;
+
+    rc = wait_statusword_mask_eq(ctx, PD4C_SW_SETPOINT_ACK, PD4C_SW_SETPOINT_ACK, timeout_ms);
+    if (rc != PD4C_OK) return (rc == PD4C_ETIMEDOUT) ? PD4C_ETIMEDOUT : rc;
+
+    // (4) Clear bit4, wait ack clear (bit12=0) so next command works reliably
+    rc = pd4c_rpdo1_send_control_mode(ctx, cw_sp0, PD4C_MODE_PROFILE_POSITION);
+    if (rc != PD4C_OK) return rc;
+
+    rc = wait_statusword_mask_eq(ctx, PD4C_SW_SETPOINT_ACK, 0, timeout_ms);
+    if (rc != PD4C_OK) return (rc == PD4C_ETIMEDOUT) ? PD4C_ETIMEDOUT : rc;
+
+    return PD4C_OK;
+}
+
 
 /* ---------------- misc helpers ---------------- */
 
