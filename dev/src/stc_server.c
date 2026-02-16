@@ -128,6 +128,7 @@ typedef struct {
 
   uint16_t pp_profile_vel;      // 0x6081 (vendor scaling; typically rpm)
   int ds402_timeout_ms;
+  int pp_sdo_diag;              // enable SDO snapshot before PP move
 
   // --- software state / navigation
   uint8_t cu_state;             // from CU_STATE command
@@ -486,9 +487,72 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   int rc = motor_ensure_enabled(ctx, sh, MTR_MODE_PP, cur_mode, enabled);
   if (rc != PD4C_OK) return rc;
 
+  int32_t cur_pos_raw = 0;
+  double counts_per_rev = 0.0;
+  double gear_ratio = 0.0;
+  uint16_t pp_profile_vel = 0;
+  int run_sdo_diag = 0;
+  pthread_mutex_lock(&sh->mtx);
+  cur_pos_raw = sh->pos_raw;
+  counts_per_rev = sh->counts_per_rev;
+  gear_ratio = sh->gear_ratio;
+  pp_profile_vel = sh->pp_profile_vel;
+  run_sdo_diag = sh->pp_sdo_diag;
+  pthread_mutex_unlock(&sh->mtx);
+
   // Convert turret degrees -> motor counts and call low-level PP handshake.
   const int32_t target_counts = deg_to_counts(sh, target_deg);
-  const uint16_t pv = sh->pp_profile_vel;
+  const uint16_t pv = pp_profile_vel;
+  const double cur_deg = pos_counts_to_deg(sh, cur_pos_raw);
+
+  fprintf(stderr,
+          "PP move request: requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f "
+          "counts_per_rev=%.3f gear_ratio=%.3f pp_profile_vel=%u\n",
+          target_deg,
+          target_counts,
+          cur_pos_raw,
+          cur_deg,
+          counts_per_rev,
+          gear_ratio,
+          (unsigned)pv);
+
+  if (run_sdo_diag) {
+    uint8_t mode_disp = 0;
+    int32_t min_pos_lim = 0;
+    int32_t max_pos_lim = 0;
+    uint32_t home_method = 0;
+    int32_t home_offset = 0;
+    int32_t home_speed_fast = 0;
+    int32_t home_speed_slow = 0;
+
+    int rc_mode = pd4c_sdo_read_u8(ctx, 0x6061, 0x00, &mode_disp);
+    int rc_min_lim = pd4c_sdo_read_i32(ctx, 0x607D, 0x01, &min_pos_lim);
+    int rc_max_lim = pd4c_sdo_read_i32(ctx, 0x607D, 0x02, &max_pos_lim);
+    int rc_home_method = pd4c_sdo_read_u32(ctx, 0x6098, 0x00, &home_method);
+    int rc_home_offset = pd4c_sdo_read_i32(ctx, 0x607C, 0x00, &home_offset);
+    int rc_home_fast = pd4c_sdo_read_i32(ctx, 0x6099, 0x01, &home_speed_fast);
+    int rc_home_slow = pd4c_sdo_read_i32(ctx, 0x6099, 0x02, &home_speed_slow);
+
+    fprintf(stderr,
+            "PP pre-move SDO diag: 6061:0 mode_display rc=%d val=%u | "
+            "607D:1 min_pos_limit rc=%d val=%d | 607D:2 max_pos_limit rc=%d val=%d | "
+            "6098:0 homing_method rc=%d val=%u | 607C:0 home_offset rc=%d val=%d | "
+            "6099:1 home_speed_fast rc=%d val=%d | 6099:2 home_speed_slow rc=%d val=%d\n",
+            rc_mode,
+            (unsigned)mode_disp,
+            rc_min_lim,
+            min_pos_lim,
+            rc_max_lim,
+            max_pos_lim,
+            rc_home_method,
+            home_method,
+            rc_home_offset,
+            home_offset,
+            rc_home_fast,
+            home_speed_fast,
+            rc_home_slow,
+            home_speed_slow);
+  }
 
   // NOTE: stc_server already resolves ABS vs REL at a higher level:
   // - ABS: target_deg is absolute angle
@@ -816,7 +880,7 @@ static void usage(const char* p) {
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-is-rpm 0|1]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
-          "          [--ds402-timeout-ms MS]\n"
+          "          [--ds402-timeout-ms MS] [--pp-sdo-diag 0|1]\n"
           "          [--tlmh-ip 239.255.10.2 --tlmh-port 6010 --tlmh-hz 100]\n"
           "          [--tlml-ip 239.255.10.3 --tlml-port 6020 --tlml-hz 10]\n",
           p);
@@ -850,6 +914,7 @@ int main(int argc, char** argv) {
   sh.speed_watchdog_ms = 250;
   sh.pp_profile_vel = 500;       // default profile velocity
   sh.ds402_timeout_ms = 2000;
+  sh.pp_sdo_diag = 0;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--can") && i + 1 < argc) can_if = argv[++i];
@@ -864,6 +929,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--speed-watchdog-ms") && i + 1 < argc) sh.speed_watchdog_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--pp-profile-vel") && i + 1 < argc) sh.pp_profile_vel = (uint16_t)atoi(argv[++i]);
     else if (!strcmp(argv[i], "--ds402-timeout-ms") && i + 1 < argc) sh.ds402_timeout_ms = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--pp-sdo-diag") && i + 1 < argc) sh.pp_sdo_diag = atoi(argv[++i]) ? 1 : 0;
     else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) tlmh_ip = argv[++i];
     else if (!strcmp(argv[i], "--tlmh-port") && i + 1 < argc) tlmh_port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--tlmh-hz") && i + 1 < argc) tlmh_hz = atoi(argv[++i]);
