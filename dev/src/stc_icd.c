@@ -556,6 +556,24 @@ stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
   wr_u64_le(&out_buf[8], tlm->timestamp_ms);
 
   size_t off = 16;
+  out_buf[off] = tlm->state; off += 1;
+  wr_u32_le(&out_buf[off], tlm->uptime_sec); off += 4;
+
+  wr_f32_le(&out_buf[off], tlm->temperature_c); off += 4;
+  wr_f32_le(&out_buf[off], tlm->humidity_pct); off += 4;
+  wr_f32_le(&out_buf[off], tlm->pressure_hpa); off += 4;
+
+  wr_f64_le(&out_buf[off], tlm->lat); off += 8;
+  wr_f64_le(&out_buf[off], tlm->lon); off += 8;
+  wr_f64_le(&out_buf[off], tlm->alt_m); off += 8;
+  wr_f64_le(&out_buf[off], tlm->heading_deg); off += 8;
+
+  memcpy(&out_buf[off], tlm->motor_status, 8); off += 8;
+  memcpy(&out_buf[off], tlm->laser_status, 8); off += 8;
+
+  wr_f32_le(&out_buf[off], tlm->level_x); off += 4;
+  wr_f32_le(&out_buf[off], tlm->level_y); off += 4;
+
   out_buf[off] = (uint8_t)n; off += 1;
 
   for (uint16_t i = 0; i < n; i++) {

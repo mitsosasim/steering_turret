@@ -113,7 +113,6 @@ static void test_tlmh_pack_parse(void) {
   stc_tlmh_t tlm;
   memset(&tlm, 0, sizeof(tlm));
   tlm.version = 0x01;
-  tlm.sender_id = 99;
   tlm.seq = 1000;
   tlm.timestamp_ms = 55555;
 
@@ -141,11 +140,12 @@ static void test_tlmh_pack_parse(void) {
 
 static void test_tlml_pack_parse(void) {
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
+  cfg.strict_version = 1;
 
   stc_tlml_t tlm;
   memset(&tlm, 0, sizeof(tlm));
   tlm.version = 0x01;
-  tlm.sender_id = 7;
+  tlm.controller_id = 7;
   tlm.seq = 222;
   tlm.timestamp_ms = 8888;
   tlm.state = 3;
@@ -174,8 +174,23 @@ static void test_tlml_pack_parse(void) {
   rc = stc_icd_tlml_parse(&cfg, buf, out_len, &parsed);
   assert_true(rc==STC_ICD_OK, "tlml_parse");
 
+  assert_true(parsed.version == 0x01, "tlml version");
+  assert_true(parsed.controller_id == 7, "tlml controller_id");
   assert_eq_u16(parsed.seq, 222, "tlml seq");
+  assert_eq_u64(parsed.timestamp_ms, 8888, "tlml timestamp");
+  assert_true(parsed.state == 3, "tlml state");
   assert_eq_u32(parsed.uptime_sec, 1234, "tlml uptime");
+  assert_true(parsed.temperature_c == 25.5f, "tlml temperature");
+  assert_true(parsed.humidity_pct == 45.0f, "tlml humidity");
+  assert_true(parsed.pressure_hpa == 1013.25f, "tlml pressure");
+  assert_true(parsed.lat == 35.123, "tlml lat");
+  assert_true(parsed.lon == 24.456, "tlml lon");
+  assert_true(parsed.alt_m == 120.0, "tlml alt");
+  assert_true(parsed.heading_deg == 270.0, "tlml heading");
+  assert_mem(parsed.motor_status, tlm.motor_status, 8, "tlml motor_status");
+  assert_mem(parsed.laser_status, tlm.laser_status, 8, "tlml laser_status");
+  assert_true(parsed.level_x == 0.1f, "tlml level_x");
+  assert_true(parsed.level_y == -0.2f, "tlml level_y");
   assert_eq_u16(parsed.error_count, 3, "tlml error_count");
   assert_eq_u32(parsed.errors[0], 0xAABBCCDDu, "tlml err0");
   assert_eq_u32(parsed.errors[2], 0x55667788u, "tlml err2");
