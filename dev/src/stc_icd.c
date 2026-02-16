@@ -549,13 +549,13 @@ stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
   const size_t total = base + ((size_t)n * 4u);
   if (total > out_cap) return STC_ICD_EBUFS;
 
-  memcpy(&out_buf[0], cfg->tlml_magic, 4);
-  out_buf[4] = tlm->version ? tlm->version : cfg->protocol_version_default;
-  out_buf[5] = tlm->controller_id;
-  wr_u16_le(&out_buf[6], tlm->seq);
-  wr_u64_le(&out_buf[8], tlm->timestamp_ms);
+  size_t off = 0;
+  memcpy(&out_buf[off], cfg->tlml_magic, 4); off += 4;
+  out_buf[off] = tlm->version ? tlm->version : cfg->protocol_version_default; off += 1;
+  out_buf[off] = tlm->controller_id; off += 1;
+  wr_u16_le(&out_buf[off], tlm->seq); off += 2;
+  wr_u64_le(&out_buf[off], tlm->timestamp_ms); off += 8;
 
-  size_t off = 16;
   out_buf[off] = tlm->state; off += 1;
   wr_u32_le(&out_buf[off], tlm->uptime_sec); off += 4;
 
@@ -580,6 +580,7 @@ stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
     wr_u32_le(&out_buf[off], tlm->errors[i]); off += 4;
   }
 
+  if (off != total) return STC_ICD_EPROTO;
   *out_len = total;
   return STC_ICD_OK;
 }
