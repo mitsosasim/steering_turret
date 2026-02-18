@@ -774,7 +774,7 @@ static void* tlmh_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
-  const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 10000000L;
+  long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 10000000L;
 
   while (!g_stop) {
     stc_tlmh_t m;
@@ -799,7 +799,7 @@ static void* tlmh_tx_thread(void* arg) {
     if (stc_icd_tlmh_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
       (void)udp_send_to(a->udp_fd, a->ip, a->port, buf, blen);
     }
-
+    period_ns = 1000000000L;
     sleep_until(&next, period_ns);
   }
   return NULL;
@@ -809,7 +809,7 @@ static void* tlml_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
-  const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 100000000L;
+  long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 100000000L;
 
   while (!g_stop) {
     stc_tlml_t m;
@@ -879,7 +879,7 @@ static void* tlml_tx_thread(void* arg) {
     if (stc_icd_tlml_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
       (void)udp_send_to(a->udp_fd, a->ip, a->port, buf, blen);
     }
-
+    period_ns = 1000000000L;
     sleep_until(&next, period_ns);
   }
   return NULL;
