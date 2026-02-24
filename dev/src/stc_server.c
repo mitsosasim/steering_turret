@@ -10,7 +10,7 @@
 //  - Telemetry threads: publish TLMH @100Hz and TLML @10Hz over UDP multicast.
 //
 /* Build example:
- *   gcc -std=c11 -O2 -Wall -Wextra -pthread \
+ *   gcc -std=c11 -O2 -Wall -Wextra -pthread -I../include \
  *       stc_icd.c pd4c.c stc_server.c -o stc_server -lm
  */
 
@@ -18,7 +18,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "stc_icd.h"
-#include "../include/pd4c.h"
+#include "pd4c.h"
 
 #include <arpa/inet.h>
 #include <errno.h>

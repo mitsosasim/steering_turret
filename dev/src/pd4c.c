@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "../include/pd4c.h"
+#include "pd4c.h"
 
 #include <stdio.h>
 #include <string.h>
