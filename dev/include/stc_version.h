@@ -1,6 +1,4 @@
-#ifndef STC_VERSION_H
-#define STC_VERSION_H
+#pragma once
 
-/* Project version metadata placeholder. */
-
-#endif /* STC_VERSION_H */
+/* Single source of truth for STC software version string. */
+#define STC_SW_VERSION "1.0"
