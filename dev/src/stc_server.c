@@ -19,6 +19,7 @@
 
 #include "stc_icd.h"
 #include "pd4c.h"
+#include "stc_version.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -887,8 +888,6 @@ static void* tlml_tx_thread(void* arg) {
 
 /* ----------------------------- TCP server loop ----------------------------- */
 
-static const char* STC_SW_VERSION_STR = "STC_SW_v0.2";
-
 static void usage(const char* p) {
   fprintf(stderr,
           "Usage: %s [--tcp-port 7000] [--can can0] [--node 1]\n"
@@ -1184,8 +1183,8 @@ int main(int argc, char** argv) {
       }
 
       if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_SW_VERSION) {
-        rsp.payload_size = (uint16_t)strlen(STC_SW_VERSION_STR);
-        memcpy(rsp.payload, STC_SW_VERSION_STR, rsp.payload_size);
+        rsp.payload_size = (uint16_t)strlen(STC_SW_VERSION);
+        memcpy(rsp.payload, STC_SW_VERSION, rsp.payload_size);
       } else {
         rsp.payload_size = 0;
       }
