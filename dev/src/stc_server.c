@@ -18,7 +18,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "stc_icd.h"
-#include "../include/pd4c.h"
+#include "pd4c.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
