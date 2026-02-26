@@ -115,8 +115,6 @@ static int udp_send_to(int fd, const char* mcast_ip, int port, const uint8_t* bu
 /* ----------------------------- shared state ----------------------------- */
 
 typedef struct {
-  pthread_mutex_t mtx;
-
   // --- config (single-axis for now: axis0 = turret az)
   double counts_per_rev;
   double gear_ratio;
@@ -170,15 +168,20 @@ typedef struct {
   uint16_t seq_h;
   uint16_t seq_l;
   uint64_t boot_ms;
+} shared_data_t;
+
+typedef struct {
+  pthread_mutex_t mtx;
+  shared_data_t d;
 } shared_t;
 
-static double pos_counts_to_deg(const shared_t* sh, int32_t counts) {
+static double pos_counts_to_deg(const shared_data_t* sh, int32_t counts) {
   double cpr = (sh->counts_per_rev > 0.0) ? sh->counts_per_rev : 1.0;
   double gr  = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
   return ((double)counts) * 360.0 / (cpr * gr);
 }
 
-static double vel_to_deg_s(const shared_t* sh, int32_t vel_raw) {
+static double vel_to_deg_s(const shared_data_t* sh, int32_t vel_raw) {
   double gr = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
   if (sh->vel_is_rpm) {
     // rpm -> deg/s: (rpm/60)*360/gr = rpm*6/gr
@@ -188,7 +191,7 @@ static double vel_to_deg_s(const shared_t* sh, int32_t vel_raw) {
   return ((double)vel_raw) * 360.0 / (cpr * gr);
 }
 
-static int32_t deg_to_counts(const shared_t* sh, double deg) {
+static int32_t deg_to_counts(const shared_data_t* sh, double deg) {
   double cpr = (sh->counts_per_rev > 0.0) ? sh->counts_per_rev : 1.0;
   double gr  = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
   double counts = deg * (cpr * gr) / 360.0;
@@ -197,7 +200,7 @@ static int32_t deg_to_counts(const shared_t* sh, double deg) {
   return (int32_t)llround(counts);
 }
 
-static int16_t degs_to_target_vel_units(const shared_t* sh, double deg_s, int* clipped) {
+static int16_t degs_to_target_vel_units(const shared_data_t* sh, double deg_s, int* clipped) {
   // Our assumption for PD4C target velocity units follows your existing practice:
   // - if vel_is_rpm=1, treat 0x6042 units as motor rpm
   // - else treat 0x6042 as counts/sec
@@ -292,7 +295,7 @@ static int is_allowed_controller(uint8_t cid) {
 }
 
 static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
-                                       const shared_t* sh,
+                                       const shared_data_t* sh,
                                        const stc_icd_cmd_t* c) {
   // magic
   if (!(c->magic[0] == cfg->cmd_magic[0] && c->magic[1] == cfg->cmd_magic[1] &&
@@ -442,22 +445,22 @@ typedef struct {
 
 static void copy_pd4c_telem_into_shared(shared_t* sh, const pd4c_telemetry_t* t) {
   // Caller holds sh->mtx
-  sh->status_word = t->statusword;
-  sh->mode_disp   = t->mode_display;
-  sh->pos_raw     = t->pos_actual;
-  sh->vel_raw     = t->vel_actual;
-  sh->hb_state    = (uint8_t)t->hb_state;
-  sh->have_hb     = t->have_hb ? 1 : 0;
+  sh->d.status_word = t->statusword;
+  sh->d.mode_disp   = t->mode_display;
+  sh->d.pos_raw     = t->pos_actual;
+  sh->d.vel_raw     = t->vel_actual;
+  sh->d.hb_state    = (uint8_t)t->hb_state;
+  sh->d.have_hb     = t->have_hb ? 1 : 0;
 
-  sh->have_emcy   = t->have_emcy ? 1 : 0;
-  sh->emcy_code   = t->emcy_error_code;
-  sh->emcy_reg    = t->emcy_error_reg;
+  sh->d.have_emcy   = t->have_emcy ? 1 : 0;
+  sh->d.emcy_code   = t->emcy_error_code;
+  sh->d.emcy_reg    = t->emcy_error_reg;
 
-  sh->ts_tpdo1_ms = t->ts_tpdo1_ms;
-  sh->ts_tpdo2_ms = t->ts_tpdo2_ms;
-  sh->ts_tpdo3_ms = t->ts_tpdo3_ms;
-  sh->ts_hb_ms    = t->ts_hb_ms;
-  sh->ts_emcy_ms  = t->ts_emcy_ms;
+  sh->d.ts_tpdo1_ms = t->ts_tpdo1_ms;
+  sh->d.ts_tpdo2_ms = t->ts_tpdo2_ms;
+  sh->d.ts_tpdo3_ms = t->ts_tpdo3_ms;
+  sh->d.ts_hb_ms    = t->ts_hb_ms;
+  sh->d.ts_emcy_ms  = t->ts_emcy_ms;
 }
 
 static void motor_stop_and_disable(pd4c_ctx_t* ctx, mtr_mode_t mode) {
@@ -471,7 +474,7 @@ static int motor_ensure_enabled(pd4c_ctx_t* ctx, shared_t* sh, mtr_mode_t mode, 
   if (!ctx || !sh || !cur_mode || !enabled) return PD4C_EINVAL;
   if (*enabled && *cur_mode == mode) return PD4C_OK;
 
-  int rc = pd4c_ds402_enable_operation(ctx, (int8_t)mode, sh->ds402_timeout_ms);
+  int rc = pd4c_ds402_enable_operation(ctx, (int8_t)mode, sh->d.ds402_timeout_ms);
   if (rc == PD4C_OK) {
     *cur_mode = mode;
     *enabled = 1;
@@ -495,17 +498,17 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   uint16_t pp_profile_vel = 0;
   int run_sdo_diag = 0;
   pthread_mutex_lock(&sh->mtx);
-  cur_pos_raw = sh->pos_raw;
-  counts_per_rev = sh->counts_per_rev;
-  gear_ratio = sh->gear_ratio;
-  pp_profile_vel = sh->pp_profile_vel;
-  run_sdo_diag = sh->pp_sdo_diag;
+  cur_pos_raw = sh->d.pos_raw;
+  counts_per_rev = sh->d.counts_per_rev;
+  gear_ratio = sh->d.gear_ratio;
+  pp_profile_vel = sh->d.pp_profile_vel;
+  run_sdo_diag = sh->d.pp_sdo_diag;
   pthread_mutex_unlock(&sh->mtx);
 
   // Convert turret degrees -> motor counts and call low-level PP handshake.
-  const int32_t target_counts = deg_to_counts(sh, target_deg);
+  const int32_t target_counts = deg_to_counts(&sh->d, target_deg);
   const uint16_t pv = pp_profile_vel;
-  const double cur_deg = pos_counts_to_deg(sh, cur_pos_raw);
+  const double cur_deg = pos_counts_to_deg(&sh->d, cur_pos_raw);
 
   fprintf(stderr,
           "PP move request: requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f "
@@ -562,7 +565,7 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   // Therefore we call pd4c_pp_move as absolute (is_relative=0).
   const int is_relative = 0;
 
-  rc = pd4c_pp_move(ctx, target_counts, pv, is_relative, sh->ds402_timeout_ms);
+  rc = pd4c_pp_move(ctx, target_counts, pv, is_relative, sh->d.ds402_timeout_ms);
   return rc;
 }
 
@@ -596,7 +599,7 @@ static void* can_worker_thread(void* arg) {
         can_connected = 1;
         reconnect_delay_ms = 500;
         pthread_mutex_lock(&a->sh->mtx);
-        a->sh->can_ok = 1;
+        a->sh->d.can_ok = 1;
         pthread_mutex_unlock(&a->sh->mtx);
 
         fprintf(stderr, "CAN connected on %s (node=%d)\n", a->can_if, a->node_id);
@@ -635,7 +638,7 @@ static void* can_worker_thread(void* arg) {
         cur_mode = MTR_MODE_NONE;
         last_vel_send_ms = 0;
         pthread_mutex_lock(&a->sh->mtx);
-        a->sh->can_ok = 0;
+        a->sh->d.can_ok = 0;
         pthread_mutex_unlock(&a->sh->mtx);
       }
     }
@@ -650,11 +653,11 @@ static void* can_worker_thread(void* arg) {
 
       if (cmd.cmd_id == STC_CMD_RESET) {
         (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
-        (void)pd4c_ds402_fault_reset(&ctx, (int8_t)cur_mode, a->sh->ds402_timeout_ms);
+        (void)pd4c_ds402_fault_reset(&ctx, (int8_t)cur_mode, a->sh->d.ds402_timeout_ms);
         enabled = 0;  // force re-enable next command
       } else if (cmd.cmd_id == STC_CMD_SHUTDOWN) {
         pthread_mutex_lock(&a->sh->mtx);
-        a->sh->speed_stream_enabled = 0;
+        a->sh->d.speed_stream_enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
         motor_stop_and_disable(&ctx, cur_mode);
         enabled = 0;
@@ -675,12 +678,12 @@ static void* can_worker_thread(void* arg) {
           double target_deg = cmd_az_deg;
           if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
             pthread_mutex_lock(&a->sh->mtx);
-            double cur_deg = pos_counts_to_deg(a->sh, a->sh->pos_raw);
+            double cur_deg = pos_counts_to_deg(&a->sh->d, a->sh->d.pos_raw);
             pthread_mutex_unlock(&a->sh->mtx);
             target_deg = cur_deg + target_deg;
           }
 
-          const int32_t target_counts = deg_to_counts(a->sh, target_deg);
+          const int32_t target_counts = deg_to_counts(&a->sh->d, target_deg);
           fprintf(stderr,
                   "TURRET %s seq=%u az_deg=%.6f target_counts=%" PRId32 "\n",
                   (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE) ? "ABS" : "REL",
@@ -690,7 +693,7 @@ static void* can_worker_thread(void* arg) {
 
           // PP move should stop any active speed streaming.
           pthread_mutex_lock(&a->sh->mtx);
-          a->sh->speed_stream_enabled = 0;
+          a->sh->d.speed_stream_enabled = 0;
           pthread_mutex_unlock(&a->sh->mtx);
 
           rc = motor_do_pp_move(&ctx, a->sh, target_deg, &cur_mode, &enabled);
@@ -712,18 +715,18 @@ static void* can_worker_thread(void* arg) {
     uint64_t last_cmd_ms = 0;
     int watchdog_ms = 0;
     pthread_mutex_lock(&a->sh->mtx);
-    cu_state = a->sh->cu_state;
-    speed_on = a->sh->speed_stream_enabled;
-    desired_deg_s = a->sh->desired_speed_deg_s;
-    last_cmd_ms = a->sh->last_speed_cmd_ms;
-    watchdog_ms = a->sh->speed_watchdog_ms;
+    cu_state = a->sh->d.cu_state;
+    speed_on = a->sh->d.speed_stream_enabled;
+    desired_deg_s = a->sh->d.desired_speed_deg_s;
+    last_cmd_ms = a->sh->d.last_speed_cmd_ms;
+    watchdog_ms = a->sh->d.speed_watchdog_ms;
     pthread_mutex_unlock(&a->sh->mtx);
 
     if (cu_state != 3) {
       // Not operational: stop motion and disable streaming.
       if (speed_on && can_connected) {
         pthread_mutex_lock(&a->sh->mtx);
-        a->sh->speed_stream_enabled = 0;
+        a->sh->d.speed_stream_enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
         motor_stop_and_disable(&ctx, cur_mode);
         enabled = 0;
@@ -736,7 +739,7 @@ static void* can_worker_thread(void* arg) {
         if (watchdog_ms > 0 && (int)(now - last_cmd_ms) > watchdog_ms) {
           // Watchdog: no new speed cmd.
           pthread_mutex_lock(&a->sh->mtx);
-          a->sh->speed_stream_enabled = 0;
+          a->sh->d.speed_stream_enabled = 0;
           pthread_mutex_unlock(&a->sh->mtx);
           (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
         } else {
@@ -746,7 +749,7 @@ static void* can_worker_thread(void* arg) {
           // Send velocity at ~100Hz.
           if (last_vel_send_ms == 0 || (now - last_vel_send_ms) >= 10) {
             int clipped = 0;
-            int16_t tv = degs_to_target_vel_units(a->sh, desired_deg_s, &clipped);
+            int16_t tv = degs_to_target_vel_units(&a->sh->d, desired_deg_s, &clipped);
             (void)pd4c_rpdo3_send_target_velocity(&ctx, tv);
             last_vel_send_ms = now;
           }
@@ -775,7 +778,7 @@ static void* tlmh_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
-  long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 10000000L;
+  const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 10000000L;
 
   while (!g_stop) {
     stc_tlmh_t m;
@@ -784,23 +787,22 @@ static void* tlmh_tx_thread(void* arg) {
     m.version = a->cfg.protocol_version_default;
 
     pthread_mutex_lock(&a->sh->mtx);
-    m.seq = a->sh->seq_h++;
-    int32_t pos = a->sh->pos_raw;
-    int32_t vel = a->sh->vel_raw;
+    m.seq = a->sh->d.seq_h++;
+    int32_t pos = a->sh->d.pos_raw;
+    int32_t vel = a->sh->d.vel_raw;
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = wall_ms();
 
     // axis 0 only for now
-    m.position[0] = (float)pos_counts_to_deg(a->sh, pos);
-    m.rates[0]    = (float)vel_to_deg_s(a->sh, vel);
+    m.position[0] = (float)pos_counts_to_deg(&a->sh->d, pos);
+    m.rates[0]    = (float)vel_to_deg_s(&a->sh->d, vel);
 
     uint8_t buf[512];
     size_t blen = 0;
     if (stc_icd_tlmh_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
       (void)udp_send_to(a->udp_fd, a->ip, a->port, buf, blen);
     }
-    period_ns = 1000000000L;
     sleep_until(&next, period_ns);
   }
   return NULL;
@@ -810,7 +812,7 @@ static void* tlml_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
-  long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 100000000L;
+  const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 100000000L;
 
   while (!g_stop) {
     stc_tlml_t m;
@@ -824,24 +826,24 @@ static void* tlml_tx_thread(void* arg) {
 
     // snapshot shared
     pthread_mutex_lock(&a->sh->mtx);
-    m.seq = a->sh->seq_l++;
-    m.state = a->sh->cu_state;
-    uint64_t uptime_ms = nowm - a->sh->boot_ms;
+    m.seq = a->sh->d.seq_l++;
+    m.state = a->sh->d.cu_state;
+    uint64_t uptime_ms = nowm - a->sh->d.boot_ms;
     m.uptime_sec = (uint32_t)(uptime_ms / 1000ULL);
-    m.lat = a->sh->has_manualpos ? a->sh->lat : 0.0;
-    m.lon = a->sh->has_manualpos ? a->sh->lon : 0.0;
-    m.alt_m = a->sh->has_manualpos ? (float)a->sh->alt : 0.0f;
-    m.heading_deg = a->sh->has_manualpos ? (float)a->sh->heading : 0.0f;
+    m.lat = a->sh->d.has_manualpos ? a->sh->d.lat : 0.0;
+    m.lon = a->sh->d.has_manualpos ? a->sh->d.lon : 0.0;
+    m.alt_m = a->sh->d.has_manualpos ? (float)a->sh->d.alt : 0.0f;
+    m.heading_deg = a->sh->d.has_manualpos ? (float)a->sh->d.heading : 0.0f;
 
-    int can_ok = a->sh->can_ok;
-    uint16_t sw = a->sh->status_word;
-    int have_emcy = a->sh->have_emcy;
-    uint16_t emcy_code = a->sh->emcy_code;
-    uint8_t emcy_reg = a->sh->emcy_reg;
+    int can_ok = a->sh->d.can_ok;
+    uint16_t sw = a->sh->d.status_word;
+    int have_emcy = a->sh->d.have_emcy;
+    uint16_t emcy_code = a->sh->d.emcy_code;
+    uint8_t emcy_reg = a->sh->d.emcy_reg;
 
-    uint64_t t1 = a->sh->ts_tpdo1_ms;
-    uint64_t t2 = a->sh->ts_tpdo2_ms;
-    uint64_t t3 = a->sh->ts_tpdo3_ms;
+    uint64_t t1 = a->sh->d.ts_tpdo1_ms;
+    uint64_t t2 = a->sh->d.ts_tpdo2_ms;
+    uint64_t t3 = a->sh->d.ts_tpdo3_ms;
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = noww;
@@ -880,7 +882,6 @@ static void* tlml_tx_thread(void* arg) {
     if (stc_icd_tlml_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
       (void)udp_send_to(a->udp_fd, a->ip, a->port, buf, blen);
     }
-    period_ns = 1000000000L;
     sleep_until(&next, period_ns);
   }
   return NULL;
@@ -916,34 +917,34 @@ int main(int argc, char** argv) {
   shared_t sh;
   memset(&sh, 0, sizeof(sh));
   pthread_mutex_init(&sh.mtx, NULL);
-  sh.boot_ms = mono_ms();
+  sh.d.boot_ms = mono_ms();
 
   // defaults (tune per node config)
-  sh.counts_per_rev = 4096.0;
-  sh.gear_ratio = 1.0;
-  sh.vel_is_rpm = 1;
-  sh.az_min_deg = -180.0;
-  sh.az_max_deg = 180.0;
-  sh.max_speed_deg_s = 90.0;
-  sh.speed_watchdog_ms = 250;
-  sh.pp_profile_vel = 500;       // default profile velocity
-  sh.ds402_timeout_ms = 2000;
-  sh.pp_sdo_diag = 0;
+  sh.d.counts_per_rev = 4096.0;
+  sh.d.gear_ratio = 1.0;
+  sh.d.vel_is_rpm = 1;
+  sh.d.az_min_deg = -180.0;
+  sh.d.az_max_deg = 180.0;
+  sh.d.max_speed_deg_s = 90.0;
+  sh.d.speed_watchdog_ms = 250;
+  sh.d.pp_profile_vel = 500;       // default profile velocity
+  sh.d.ds402_timeout_ms = 2000;
+  sh.d.pp_sdo_diag = 0;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--can") && i + 1 < argc) can_if = argv[++i];
     else if (!strcmp(argv[i], "--node") && i + 1 < argc) node_id = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--tcp-port") && i + 1 < argc) tcp_port = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) sh.counts_per_rev = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--gear-ratio") && i + 1 < argc) sh.gear_ratio = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--vel-is-rpm") && i + 1 < argc) sh.vel_is_rpm = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--az-min") && i + 1 < argc) sh.az_min_deg = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--az-max") && i + 1 < argc) sh.az_max_deg = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--max-speed-deg-s") && i + 1 < argc) sh.max_speed_deg_s = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--speed-watchdog-ms") && i + 1 < argc) sh.speed_watchdog_ms = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--pp-profile-vel") && i + 1 < argc) sh.pp_profile_vel = (uint16_t)atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--ds402-timeout-ms") && i + 1 < argc) sh.ds402_timeout_ms = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--pp-sdo-diag") && i + 1 < argc) sh.pp_sdo_diag = atoi(argv[++i]) ? 1 : 0;
+    else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) sh.d.counts_per_rev = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--gear-ratio") && i + 1 < argc) sh.d.gear_ratio = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--vel-is-rpm") && i + 1 < argc) sh.d.vel_is_rpm = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--az-min") && i + 1 < argc) sh.d.az_min_deg = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--az-max") && i + 1 < argc) sh.d.az_max_deg = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--max-speed-deg-s") && i + 1 < argc) sh.d.max_speed_deg_s = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--speed-watchdog-ms") && i + 1 < argc) sh.d.speed_watchdog_ms = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--pp-profile-vel") && i + 1 < argc) sh.d.pp_profile_vel = (uint16_t)atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--ds402-timeout-ms") && i + 1 < argc) sh.d.ds402_timeout_ms = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--pp-sdo-diag") && i + 1 < argc) sh.d.pp_sdo_diag = atoi(argv[++i]) ? 1 : 0;
     else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) tlmh_ip = argv[++i];
     else if (!strcmp(argv[i], "--tlmh-port") && i + 1 < argc) tlmh_port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--tlmh-hz") && i + 1 < argc) tlmh_hz = atoi(argv[++i]);
@@ -1110,9 +1111,9 @@ int main(int argc, char** argv) {
       }
 
       // Fast snapshot for validation (single mutex lock)
-      shared_t snap;
+      shared_data_t snap;
       pthread_mutex_lock(&sh.mtx);
-      snap = sh;
+      snap = sh.d;
       pthread_mutex_unlock(&sh.mtx);
 
       print_cmd(&cmd);
@@ -1122,20 +1123,20 @@ int main(int argc, char** argv) {
       if (v == STC_ERR_NO_ERROR && cmd.payload_decoded) {
         pthread_mutex_lock(&sh.mtx);
         if (cmd.cmd_id == STC_CMD_CU_STATE) {
-          sh.cu_state = cmd.u.cu_state.state;
+          sh.d.cu_state = cmd.u.cu_state.state;
         } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
-          sh.lat = cmd.u.manualpos.lat;
-          sh.lon = cmd.u.manualpos.lon;
-          sh.alt = cmd.u.manualpos.alt;
-          sh.heading = cmd.u.manualpos.heading;
-          sh.has_manualpos = 1;
+          sh.d.lat = cmd.u.manualpos.lat;
+          sh.d.lon = cmd.u.manualpos.lon;
+          sh.d.alt = cmd.u.manualpos.alt;
+          sh.d.heading = cmd.u.manualpos.heading;
+          sh.d.has_manualpos = 1;
         } else if (cmd.cmd_id == STC_CMD_POSMODE) {
-          sh.posmode = cmd.u.posmode.v;
+          sh.d.posmode = cmd.u.posmode.v;
         } else if (cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_SPEED) {
           // SPEED is handled via streaming: update desired speed + watchdog timestamp
-          sh.desired_speed_deg_s = (double)cmd.u.turret.az;
-          sh.last_speed_cmd_ms = mono_ms();
-          sh.speed_stream_enabled = 1;
+          sh.d.desired_speed_deg_s = (double)cmd.u.turret.az;
+          sh.d.last_speed_cmd_ms = mono_ms();
+          sh.d.speed_stream_enabled = 1;
         }
         pthread_mutex_unlock(&sh.mtx);
       }
@@ -1157,7 +1158,7 @@ int main(int argc, char** argv) {
 
         if (enq) {
           pthread_mutex_lock(&sh.mtx);
-          int can_ok = sh.can_ok;
+          int can_ok = sh.d.can_ok;
           pthread_mutex_unlock(&sh.mtx);
           if (!can_ok && need_can) {
             v = STC_ERR_INSUFFICIENT_RES;
