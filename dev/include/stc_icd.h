@@ -245,7 +245,8 @@ stc_icd_rc_t stc_icd_rsp_pack(const stc_icd_cfg_t* cfg,
  *   timestamp_ms u64
  *   position[18] float
  *   rates[18]    float
- * Total size = 160 bytes
+ *   acceleration[18] float
+ * Total size = 231 bytes (15-byte header + 3 * 72-byte vectors)
  */
 
 typedef struct stc_tlmh_s {
@@ -255,6 +256,7 @@ typedef struct stc_tlmh_s {
   uint64_t timestamp_ms;
   float position[STC_ICD_AXES_COUNT];
   float rates[STC_ICD_AXES_COUNT];
+  float acceleration[STC_ICD_AXES_COUNT];
 } stc_tlmh_t;
 
 stc_icd_rc_t stc_icd_tlmh_parse(const stc_icd_cfg_t* cfg,

@@ -419,7 +419,9 @@ stc_icd_rc_t stc_icd_tlmh_parse(const stc_icd_cfg_t* cfg,
                                 stc_tlmh_t* out) {
   if (!cfg || !buf || !out) return STC_ICD_EINVAL;
 
-  const size_t expect = 4u + 1u + 1u + 2u + 8u + (STC_ICD_AXES_COUNT * 4u) + (STC_ICD_AXES_COUNT * 4u);
+  const size_t header = 4u + 1u + 2u + 8u;
+  const size_t arrays = (STC_ICD_AXES_COUNT * 4u) * 3u;
+  const size_t expect = header + arrays;
   if (len != expect) return STC_ICD_EPROTO;
 
   memset(out, 0, sizeof(*out));
@@ -438,6 +440,9 @@ stc_icd_rc_t stc_icd_tlmh_parse(const stc_icd_cfg_t* cfg,
   for (size_t i = 0; i < STC_ICD_AXES_COUNT; i++) {
     out->rates[i] = rd_f32_le(&buf[off]); off += 4;
   }
+  for (size_t i = 0; i < STC_ICD_AXES_COUNT; i++) {
+    out->acceleration[i] = rd_f32_le(&buf[off]); off += 4;
+  }
 
   if (cfg->strict_version && out->version != cfg->protocol_version_default) return STC_ICD_EPROTO;
   return STC_ICD_OK;
@@ -449,7 +454,9 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
                                size_t* out_len) {
   if (!cfg || !tlm || !out_buf || !out_len) return STC_ICD_EINVAL;
 
-  const size_t total = 4u + 1u + 1u + 2u + 8u + (STC_ICD_AXES_COUNT * 4u) + (STC_ICD_AXES_COUNT * 4u);
+  const size_t header = 4u + 1u + 2u + 8u;
+  const size_t arrays = (STC_ICD_AXES_COUNT * 4u) * 3u;
+  const size_t total = header + arrays;
   if (total > out_cap) return STC_ICD_EBUFS;
 
   memcpy(&out_buf[0], cfg->tlmh_magic, 4);
@@ -463,6 +470,9 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
   }
   for (size_t i = 0; i < STC_ICD_AXES_COUNT; i++) {
     wr_f32_le(&out_buf[off], tlm->rates[i]); off += 4;
+  }
+  for (size_t i = 0; i < STC_ICD_AXES_COUNT; i++) {
+    wr_f32_le(&out_buf[off], tlm->acceleration[i]); off += 4;
   }
 
   *out_len = total;

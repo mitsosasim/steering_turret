@@ -20,12 +20,13 @@ static void usage(const char* p) {
     "Usage: %s [--ifname eth0]\n"
     "          [--tlmh-ip 239.255.10.2 --tlmh-port 6010]\n"
     "          [--tlml-ip 239.255.10.3 --tlml-port 6020]\n"
-    "          [--raw]\n"
+    "          [--raw] [--verbose]\n"
     "\n"
     "Examples:\n"
     "  %s --ifname eth0\n"
-    "  %s --raw\n",
-    p, p, p);
+    "  %s --raw\n"
+    "  %s --verbose\n",
+    p, p, p, p);
 }
 
 static void hexdump_line(const uint8_t* b, size_t n) {
@@ -106,6 +107,7 @@ int main(int argc, char** argv) {
   int tlml_port = 6020;
 
   int print_raw = 0;
+  int verbose = 0;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--ifname") && i + 1 < argc) ifname = argv[++i];
@@ -114,6 +116,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--tlml-ip") && i + 1 < argc) tlml_ip = argv[++i];
     else if (!strcmp(argv[i], "--tlml-port") && i + 1 < argc) tlml_port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--raw")) print_raw = 1;
+    else if (!strcmp(argv[i], "--verbose")) verbose = 1;
     else { usage(argv[0]); return 2; }
   }
 
@@ -187,9 +190,16 @@ int main(int argc, char** argv) {
         last_h = t;
 
         // Print compact line (axis0 is the only one you fill right now)
-        printf("[TLMH] seq=%u ts_ms=%llu pos0=% .3f deg vel0=% .3f deg/s",
+        printf("[TLMH] seq=%u ts_ms=%llu pos0=% .3f deg vel0=% .3f deg/s acc0=% .3f deg/s^2",
                m.seq, (unsigned long long)m.timestamp_ms,
-               m.position[0], m.rates[0]);
+               m.position[0], m.rates[0], m.acceleration[0]);
+
+        if (verbose) {
+          printf("\n  acc[0..17]=");
+          for (size_t i = 0; i < STC_ICD_AXES_COUNT; i++) {
+            printf(" % .3f", m.acceleration[i]);
+          }
+        }
 
         if (dt > 0.0) printf("  (dt=%.3f ms)", dt*1000.0);
         printf("\n");
