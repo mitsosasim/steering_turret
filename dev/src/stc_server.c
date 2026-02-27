@@ -18,6 +18,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "stc_icd.h"
+#include "stc_model.h"
 #include "pd4c.h"
 #include "stc_version.h"
 
@@ -116,14 +117,10 @@ static int udp_send_to(int fd, const char* mcast_ip, int port, const uint8_t* bu
 
 typedef struct {
   // --- config (single-axis for now: axis0 = turret az)
-  double counts_per_rev;
-  double gear_ratio;
-  int vel_is_rpm;
+  axis_cfg_t axis_cfg[STC_AXIS_COUNT];
 
   double az_min_deg;
   double az_max_deg;
-
-  double max_speed_deg_s;
   int speed_watchdog_ms;
 
   uint16_t pp_profile_vel;      // 0x6081 (vendor scaling; typically rpm)
@@ -139,6 +136,8 @@ typedef struct {
 
   // --- latest motor telemetry (from pd4c_poll)
   int32_t pos_raw;
+  axis_telem_t axis_telem[STC_AXIS_COUNT];
+
   int32_t vel_raw;
   uint16_t status_word;
   int8_t mode_disp;
@@ -176,52 +175,23 @@ typedef struct {
 } shared_t;
 
 static double pos_counts_to_deg(const shared_data_t* sh, int32_t counts) {
-  double cpr = (sh->counts_per_rev > 0.0) ? sh->counts_per_rev : 1.0;
-  double gr  = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
-  return ((double)counts) * 360.0 / (cpr * gr);
-}
-
-static double vel_to_deg_s(const shared_data_t* sh, int32_t vel_raw) {
-  double gr = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
-  if (sh->vel_is_rpm) {
-    // rpm -> deg/s: (rpm/60)*360/gr = rpm*6/gr
-    return ((double)vel_raw) * 6.0 / gr;
-  }
-  double cpr = (sh->counts_per_rev > 0.0) ? sh->counts_per_rev : 1.0;
-  return ((double)vel_raw) * 360.0 / (cpr * gr);
+  return axis_counts_to_deg(&sh->axis_cfg[0], counts);
 }
 
 static int32_t deg_to_counts(const shared_data_t* sh, double deg) {
-  double cpr = (sh->counts_per_rev > 0.0) ? sh->counts_per_rev : 1.0;
-  double gr  = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
-  double counts = deg * (cpr * gr) / 360.0;
-  if (counts > (double)INT32_MAX) counts = (double)INT32_MAX;
-  if (counts < (double)INT32_MIN) counts = (double)INT32_MIN;
-  return (int32_t)llround(counts);
+  return axis_deg_to_counts(&sh->axis_cfg[0], deg);
 }
 
 static int16_t degs_to_target_vel_units(const shared_data_t* sh, double deg_s, int* clipped) {
-  // Our assumption for PD4C target velocity units follows your existing practice:
-  // - if vel_is_rpm=1, treat 0x6042 units as motor rpm
-  // - else treat 0x6042 as counts/sec
-  // This is configurable by --vel-is-rpm.
-  *clipped = 0;
-
-  if (sh->vel_is_rpm) {
-    double gr = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
-    double rpm = deg_s * gr / 6.0;
-    if (rpm > 32767.0) { rpm = 32767.0; *clipped = 1; }
-    if (rpm < -32768.0) { rpm = -32768.0; *clipped = 1; }
-    return (int16_t)llround(rpm);
+  int32_t raw = axis_deg_s_to_target_vel_units(&sh->axis_cfg[0], deg_s, clipped);
+  if (raw > INT16_MAX) {
+    if (clipped) *clipped = 1;
+    raw = INT16_MAX;
+  } else if (raw < INT16_MIN) {
+    if (clipped) *clipped = 1;
+    raw = INT16_MIN;
   }
-
-  // counts/sec
-  double cpr = (sh->counts_per_rev > 0.0) ? sh->counts_per_rev : 1.0;
-  double gr  = (sh->gear_ratio > 0.0) ? sh->gear_ratio : 1.0;
-  double cps = deg_s * (cpr * gr) / 360.0;
-  if (cps > 32767.0) { cps = 32767.0; *clipped = 1; }
-  if (cps < -32768.0) { cps = -32768.0; *clipped = 1; }
-  return (int16_t)llround(cps);
+  return (int16_t)raw;
 }
 
 /* ----------------------------- command queue ----------------------------- */
@@ -361,7 +331,7 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
       double tgt = cur_deg + az;
       if (tgt < sh->az_min_deg || tgt > sh->az_max_deg) return STC_ERR_VALUE_OUT_OF_RANGE;
     } else if (c->u.turret.motion_type == STC_MOTION_SPEED) {
-      if (az > sh->max_speed_deg_s || az < -sh->max_speed_deg_s) return STC_ERR_VALUE_OUT_OF_RANGE;
+      if (az > sh->axis_cfg[0].max_speed_deg_s || az < -sh->axis_cfg[0].max_speed_deg_s) return STC_ERR_VALUE_OUT_OF_RANGE;
     }
   }
 
@@ -499,8 +469,8 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   int run_sdo_diag = 0;
   pthread_mutex_lock(&sh->mtx);
   cur_pos_raw = sh->d.pos_raw;
-  counts_per_rev = sh->d.counts_per_rev;
-  gear_ratio = sh->d.gear_ratio;
+  counts_per_rev = sh->d.axis_cfg[0].counts_per_rev;
+  gear_ratio = sh->d.axis_cfg[0].gear_ratio;
   pp_profile_vel = sh->d.pp_profile_vel;
   run_sdo_diag = sh->d.pp_sdo_diag;
   pthread_mutex_unlock(&sh->mtx);
@@ -786,17 +756,23 @@ static void* tlmh_tx_thread(void* arg) {
     memcpy(m.magic, a->cfg.tlmh_magic, 4);
     m.version = a->cfg.protocol_version_default;
 
+    const uint64_t ts_mono_ms = mono_ms();
     pthread_mutex_lock(&a->sh->mtx);
     m.seq = a->sh->d.seq_h++;
-    int32_t pos = a->sh->d.pos_raw;
-    int32_t vel = a->sh->d.vel_raw;
+    axis_telem_update(&a->sh->d.axis_telem[0],
+                      &a->sh->d.axis_cfg[0],
+                      a->sh->d.pos_raw,
+                      a->sh->d.vel_raw,
+                      ts_mono_ms);
+    axis_telem_t axis0 = a->sh->d.axis_telem[0];
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = wall_ms();
 
     // axis 0 only for now
-    m.position[0] = (float)pos_counts_to_deg(&a->sh->d, pos);
-    m.rates[0]    = (float)vel_to_deg_s(&a->sh->d, vel);
+    m.position[0] = (float)axis0.pos_deg;
+    m.rates[0]    = (float)axis0.vel_deg_s;
+    m.acceleration[0] = (float)axis0.accel_deg_s2;
 
     uint8_t buf[512];
     size_t blen = 0;
@@ -892,7 +868,7 @@ static void* tlml_tx_thread(void* arg) {
 static void usage(const char* p) {
   fprintf(stderr,
           "Usage: %s [--tcp-port 7000] [--can can0] [--node 1]\n"
-          "          [--counts-per-rev N] [--gear-ratio N] [--vel-is-rpm 0|1]\n"
+          "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
           "          [--ds402-timeout-ms MS] [--pp-sdo-diag 0|1]\n"
@@ -920,12 +896,13 @@ int main(int argc, char** argv) {
   sh.d.boot_ms = mono_ms();
 
   // defaults (tune per node config)
-  sh.d.counts_per_rev = 4096.0;
-  sh.d.gear_ratio = 1.0;
-  sh.d.vel_is_rpm = 1;
+  sh.d.axis_cfg[0].counts_per_rev = 4096.0;
+  sh.d.axis_cfg[0].gear_ratio = 1.0;
+  sh.d.axis_cfg[0].vel_raw_units = AXIS_VEL_RAW_DEG_PER_SEC;
+  sh.d.axis_cfg[0].vel_scale = 1.0;
   sh.d.az_min_deg = -180.0;
   sh.d.az_max_deg = 180.0;
-  sh.d.max_speed_deg_s = 90.0;
+  sh.d.axis_cfg[0].max_speed_deg_s = 90.0;
   sh.d.speed_watchdog_ms = 250;
   sh.d.pp_profile_vel = 500;       // default profile velocity
   sh.d.ds402_timeout_ms = 2000;
@@ -935,12 +912,12 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[i], "--can") && i + 1 < argc) can_if = argv[++i];
     else if (!strcmp(argv[i], "--node") && i + 1 < argc) node_id = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--tcp-port") && i + 1 < argc) tcp_port = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) sh.d.counts_per_rev = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--gear-ratio") && i + 1 < argc) sh.d.gear_ratio = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--vel-is-rpm") && i + 1 < argc) sh.d.vel_is_rpm = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) sh.d.axis_cfg[0].counts_per_rev = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--gear-ratio") && i + 1 < argc) sh.d.axis_cfg[0].gear_ratio = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--vel-scale") && i + 1 < argc) sh.d.axis_cfg[0].vel_scale = atof(argv[++i]);
     else if (!strcmp(argv[i], "--az-min") && i + 1 < argc) sh.d.az_min_deg = atof(argv[++i]);
     else if (!strcmp(argv[i], "--az-max") && i + 1 < argc) sh.d.az_max_deg = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--max-speed-deg-s") && i + 1 < argc) sh.d.max_speed_deg_s = atof(argv[++i]);
+    else if (!strcmp(argv[i], "--max-speed-deg-s") && i + 1 < argc) sh.d.axis_cfg[0].max_speed_deg_s = atof(argv[++i]);
     else if (!strcmp(argv[i], "--speed-watchdog-ms") && i + 1 < argc) sh.d.speed_watchdog_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--pp-profile-vel") && i + 1 < argc) sh.d.pp_profile_vel = (uint16_t)atoi(argv[++i]);
     else if (!strcmp(argv[i], "--ds402-timeout-ms") && i + 1 < argc) sh.d.ds402_timeout_ms = atoi(argv[++i]);
