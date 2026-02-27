@@ -160,26 +160,6 @@ typedef struct {
   shared_data_t d;
 } shared_t;
 
-static double pos_counts_to_deg(const shared_data_t* sh, int32_t counts) {
-  return axis_counts_to_deg(&sh->cfg[0], counts);
-}
-
-static int32_t deg_to_counts(const shared_data_t* sh, double deg) {
-  return axis_deg_to_counts(&sh->cfg[0], deg);
-}
-
-static int16_t degs_to_target_vel_units(const shared_data_t* sh, double deg_s, int* clipped) {
-  int32_t raw = axis_deg_s_to_target_vel_units(&sh->cfg[0], deg_s, clipped);
-  if (raw > INT16_MAX) {
-    if (clipped) *clipped = 1;
-    raw = INT16_MAX;
-  } else if (raw < INT16_MIN) {
-    if (clipped) *clipped = 1;
-    raw = INT16_MIN;
-  }
-  return (int16_t)raw;
-}
-
 /* ----------------------------- command queue ----------------------------- */
 
 typedef struct {
@@ -313,7 +293,7 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
     if (c->u.turret.motion_type == STC_MOTION_ABSOLUTE) {
       if (az < sh->cfg[0].az_min_deg || az > sh->cfg[0].az_max_deg) return STC_ERR_VALUE_OUT_OF_RANGE;
     } else if (c->u.turret.motion_type == STC_MOTION_RELATIVE) {
-      double cur_deg = pos_counts_to_deg(sh, sh->telem[0].pos_raw);
+      double cur_deg = axis_counts_to_deg(&sh->cfg[0], sh->telem[0].pos_raw);
       double tgt = cur_deg + az;
       if (tgt < sh->cfg[0].az_min_deg || tgt > sh->cfg[0].az_max_deg) return STC_ERR_VALUE_OUT_OF_RANGE;
     } else if (c->u.turret.motion_type == STC_MOTION_SPEED) {
@@ -462,9 +442,9 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   pthread_mutex_unlock(&sh->mtx);
 
   // Convert turret degrees -> motor counts and call low-level PP handshake.
-  const int32_t target_counts = deg_to_counts(&sh->d, target_deg);
+  const int32_t target_counts = axis_deg_to_counts(&sh->d.cfg[0], target_deg);
   const uint16_t pv = pp_profile_vel;
-  const double cur_deg = pos_counts_to_deg(&sh->d, cur_pos_raw);
+  const double cur_deg = axis_counts_to_deg(&sh->d.cfg[0], cur_pos_raw);
 
   fprintf(stderr,
           "PP move request: requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f "
@@ -634,12 +614,12 @@ static void* can_worker_thread(void* arg) {
           double target_deg = cmd_az_deg;
           if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
             pthread_mutex_lock(&a->sh->mtx);
-            double cur_deg = pos_counts_to_deg(&a->sh->d, a->sh->d.telem[0].pos_raw);
+            double cur_deg = axis_counts_to_deg(&a->sh->d.cfg[0], a->sh->d.telem[0].pos_raw);
             pthread_mutex_unlock(&a->sh->mtx);
             target_deg = cur_deg + target_deg;
           }
 
-          const int32_t target_counts = deg_to_counts(&a->sh->d, target_deg);
+          const int32_t target_counts = axis_deg_to_counts(&a->sh->d.cfg[0], target_deg);
           fprintf(stderr,
                   "TURRET %s seq=%u az_deg=%.6f target_counts=%" PRId32 "\n",
                   (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE) ? "ABS" : "REL",
@@ -705,7 +685,15 @@ static void* can_worker_thread(void* arg) {
           // Send velocity at ~100Hz.
           if (last_vel_send_ms == 0 || (now - last_vel_send_ms) >= 10) {
             int clipped = 0;
-            int16_t tv = degs_to_target_vel_units(&a->sh->d, desired_deg_s, &clipped);
+            int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[0], desired_deg_s, &clipped);
+            if (tv_raw > INT16_MAX) {
+              clipped = 1;
+              tv_raw = INT16_MAX;
+            } else if (tv_raw < INT16_MIN) {
+              clipped = 1;
+              tv_raw = INT16_MIN;
+            }
+            int16_t tv = (int16_t)tv_raw;
             (void)pd4c_rpdo3_send_target_velocity(&ctx, tv);
             last_vel_send_ms = now;
           }
