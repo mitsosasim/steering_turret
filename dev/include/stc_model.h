@@ -21,12 +21,17 @@ typedef struct axis_cfg_s {
   double gear_ratio;
   axis_vel_raw_units_t vel_raw_units;
   double vel_scale;
+  double az_min_deg;
+  double az_max_deg;
   double max_speed_deg_s;
+  uint16_t pp_profile_vel;
 } axis_cfg_t;
 
 typedef struct axis_telem_s {
   int32_t pos_raw;
   int32_t vel_raw;
+  uint16_t status_word;
+  int8_t mode_disp;
 
   double pos_deg;
   double vel_deg_s;
