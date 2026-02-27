@@ -87,11 +87,15 @@ void axis_telem_update(axis_telem_t* telem,
                        const axis_cfg_t* cfg,
                        int32_t pos_raw,
                        int32_t vel_raw,
+                       uint16_t status_word,
+                       int8_t mode_disp,
                        uint64_t ts_ms) {
   if (!telem) return;
 
   telem->pos_raw = pos_raw;
   telem->vel_raw = vel_raw;
+  telem->status_word = status_word;
+  telem->mode_disp = mode_disp;
 
   const double vel_now = axis_vel_to_deg_s(cfg, vel_raw);
   telem->pos_deg = axis_counts_to_deg(cfg, pos_raw);

@@ -58,6 +58,8 @@ void axis_telem_update(axis_telem_t* telem,
                        const axis_cfg_t* cfg,
                        int32_t pos_raw,
                        int32_t vel_raw,
+                       uint16_t status_word,
+                       int8_t mode_disp,
                        uint64_t ts_ms);
 
 #ifdef __cplusplus

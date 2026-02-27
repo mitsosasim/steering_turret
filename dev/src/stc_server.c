@@ -379,12 +379,15 @@ typedef struct {
   cmdq_t* q;
 } can_worker_arg_t;
 
-static void copy_pd4c_telem_into_shared(shared_t* sh, const pd4c_telemetry_t* t) {
+static void copy_pd4c_telem_into_shared(shared_t* sh, const pd4c_telemetry_t* t, uint64_t now_ms) {
   // Caller holds sh->mtx
-  sh->d.telem[0].status_word = t->statusword;
-  sh->d.telem[0].mode_disp   = t->mode_display;
-  sh->d.telem[0].pos_raw     = t->pos_actual;
-  sh->d.telem[0].vel_raw     = t->vel_actual;
+  axis_telem_update(&sh->d.telem[0],
+                    &sh->d.cfg[0],
+                    t->pos_actual,
+                    t->vel_actual,
+                    t->statusword,
+                    t->mode_display,
+                    now_ms);
   sh->d.hb_state    = (uint8_t)t->hb_state;
   sh->d.have_hb     = t->have_hb ? 1 : 0;
 
@@ -559,7 +562,7 @@ static void* can_worker_thread(void* arg) {
         }
         const pd4c_telemetry_t* t = pd4c_telem(&ctx);
         pthread_mutex_lock(&a->sh->mtx);
-        copy_pd4c_telem_into_shared(a->sh, t);
+        copy_pd4c_telem_into_shared(a->sh, t, now);
         pthread_mutex_unlock(&a->sh->mtx);
       } else if (ev != PD4C_ETIMEDOUT) {
         // Hard CAN error. Close and transition to reconnect loop.
@@ -730,23 +733,19 @@ static void* tlmh_tx_thread(void* arg) {
     memcpy(m.magic, a->cfg.tlmh_magic, 4);
     m.version = a->cfg.protocol_version_default;
 
-    const uint64_t ts_mono_ms = mono_ms();
+    shared_data_t snap;
     pthread_mutex_lock(&a->sh->mtx);
     m.seq = a->sh->d.seq_h++;
-    axis_telem_update(&a->sh->d.telem[0],
-                      &a->sh->d.cfg[0],
-                      a->sh->d.telem[0].pos_raw,
-                      a->sh->d.telem[0].vel_raw,
-                      ts_mono_ms);
-    axis_telem_t axis0 = a->sh->d.telem[0];
+    snap = a->sh->d;
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = wall_ms();
 
-    // axis 0 only for now
-    m.position[0] = (float)axis0.pos_deg;
-    m.rates[0]    = (float)axis0.vel_deg_s;
-    m.acceleration[0] = (float)axis0.accel_deg_s2;
+    for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
+      m.position[i] = (float)snap.telem[i].pos_deg;
+      m.rates[i] = (float)snap.telem[i].vel_deg_s;
+      m.acceleration[i] = (float)snap.telem[i].accel_deg_s2;
+    }
 
     uint8_t buf[512];
     size_t blen = 0;
