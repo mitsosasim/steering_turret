@@ -853,7 +853,7 @@ static void* tlml_tx_thread(void* arg) {
 static void usage(const char* p) {
   fprintf(stderr,
           "Usage: %s [--tcp-port 7000] [--can can0] [--node 1]\n"
-          "          [--config config/stc_default.ini]\n"
+          "          [--config dev/config/stc_default.ini]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
@@ -1017,10 +1017,10 @@ int main(int argc, char** argv) {
   }
 
   if (!config_path && !legacy_cli_mode) {
-    FILE* f = fopen("config/stc_default.ini", "r");
+    FILE* f = fopen("dev/config/stc_default.ini", "r");
     if (f) {
       fclose(f);
-      config_path = "config/stc_default.ini";
+      config_path = "dev/config/stc_default.ini";
     }
   }
 
