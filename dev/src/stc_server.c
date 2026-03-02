@@ -34,6 +34,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <poll.h>
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
@@ -119,6 +120,7 @@ static int udp_send_to(int fd, const char* mcast_ip, int port, const uint8_t* bu
 typedef struct {
   // --- per-axis config/telemetry/stream (axis0 = turret az active in step3)
   axis_cfg_t cfg[STC_AXIS_COUNT];
+  uint8_t axis_node_id[STC_AXIS_COUNT];
   axis_telem_t telem[STC_AXIS_COUNT];
   axis_stream_t stream[STC_AXIS_COUNT];
   double storage_deg[STC_AXIS_COUNT];
@@ -332,32 +334,33 @@ typedef enum {
 
 typedef struct {
   const char* can_if;
-  int node_id;
   shared_t* sh;
   actionq_t* q;
 } can_worker_arg_t;
 
-static void copy_pd4c_telem_into_shared(shared_t* sh, const pd4c_telemetry_t* t, uint64_t now_ms) {
+static void copy_pd4c_telem_into_shared(shared_t* sh, size_t axis, const pd4c_telemetry_t* t, uint64_t now_ms) {
   // Caller holds sh->mtx
-  axis_telem_update(&sh->d.telem[0],
-                    &sh->d.cfg[0],
+  axis_telem_update(&sh->d.telem[axis],
+                    &sh->d.cfg[axis],
                     t->pos_actual,
                     t->vel_actual,
                     t->statusword,
                     t->mode_display,
                     now_ms);
-  sh->d.hb_state    = (uint8_t)t->hb_state;
-  sh->d.have_hb     = t->have_hb ? 1 : 0;
+  if (axis == 0) {
+    sh->d.hb_state    = (uint8_t)t->hb_state;
+    sh->d.have_hb     = t->have_hb ? 1 : 0;
 
-  sh->d.have_emcy   = t->have_emcy ? 1 : 0;
-  sh->d.emcy_code   = t->emcy_error_code;
-  sh->d.emcy_reg    = t->emcy_error_reg;
+    sh->d.have_emcy   = t->have_emcy ? 1 : 0;
+    sh->d.emcy_code   = t->emcy_error_code;
+    sh->d.emcy_reg    = t->emcy_error_reg;
 
-  sh->d.ts_tpdo1_ms = t->ts_tpdo1_ms;
-  sh->d.ts_tpdo2_ms = t->ts_tpdo2_ms;
-  sh->d.ts_tpdo3_ms = t->ts_tpdo3_ms;
-  sh->d.ts_hb_ms    = t->ts_hb_ms;
-  sh->d.ts_emcy_ms  = t->ts_emcy_ms;
+    sh->d.ts_tpdo1_ms = t->ts_tpdo1_ms;
+    sh->d.ts_tpdo2_ms = t->ts_tpdo2_ms;
+    sh->d.ts_tpdo3_ms = t->ts_tpdo3_ms;
+    sh->d.ts_hb_ms    = t->ts_hb_ms;
+    sh->d.ts_emcy_ms  = t->ts_emcy_ms;
+  }
 }
 
 static void motor_stop_and_disable(pd4c_ctx_t* ctx, mtr_mode_t mode) {
@@ -381,6 +384,7 @@ static int motor_ensure_enabled(pd4c_ctx_t* ctx, shared_t* sh, mtr_mode_t mode, 
 
 static int motor_do_pp_move(pd4c_ctx_t* ctx,
                             shared_t* sh,
+                            size_t axis,
                             double target_deg,
                             mtr_mode_t* cur_mode,
                             int* enabled) {
@@ -395,21 +399,22 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   uint16_t pp_profile_vel = 0;
   int run_sdo_diag = 0;
   pthread_mutex_lock(&sh->mtx);
-  cur_pos_raw = sh->d.telem[0].pos_raw;
-  counts_per_rev = sh->d.cfg[0].counts_per_rev;
-  gear_ratio = sh->d.cfg[0].gear_ratio;
-  pp_profile_vel = sh->d.cfg[0].pp_profile_vel;
+  cur_pos_raw = sh->d.telem[axis].pos_raw;
+  counts_per_rev = sh->d.cfg[axis].counts_per_rev;
+  gear_ratio = sh->d.cfg[axis].gear_ratio;
+  pp_profile_vel = sh->d.cfg[axis].pp_profile_vel;
   run_sdo_diag = sh->d.pp_sdo_diag;
   pthread_mutex_unlock(&sh->mtx);
 
   // Convert turret degrees -> motor counts and call low-level PP handshake.
-  const int32_t target_counts = axis_deg_to_counts(&sh->d.cfg[0], target_deg);
+  const int32_t target_counts = axis_deg_to_counts(&sh->d.cfg[axis], target_deg);
   const uint16_t pv = pp_profile_vel;
-  const double cur_deg = axis_counts_to_deg(&sh->d.cfg[0], cur_pos_raw);
+  const double cur_deg = axis_counts_to_deg(&sh->d.cfg[axis], cur_pos_raw);
 
   fprintf(stderr,
-          "PP move request: requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f "
+          "PP move request: axis=%zu requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f "
           "counts_per_rev=%.3f gear_ratio=%.3f pp_profile_vel=%u\n",
+          axis,
           target_deg,
           target_counts,
           cur_pos_raw,
@@ -470,143 +475,155 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
 
 static void* can_worker_thread(void* arg) {
   can_worker_arg_t* a = (can_worker_arg_t*)arg;
-  pd4c_ctx_t ctx;
-  memset(&ctx, 0, sizeof(ctx));
+  pd4c_ctx_t pd_ctx[STC_AXIS_COUNT];
+  int axis_connected[STC_AXIS_COUNT] = {0};
+  mtr_mode_t axis_mode[STC_AXIS_COUNT] = {0};
+  int axis_enabled[STC_AXIS_COUNT] = {0};
 
-  int can_connected = 0;
-  int reconnect_delay_ms = 500;
-  uint64_t next_reconnect_ms = 0;
-  int rc = PD4C_EIO;
+  memset(pd_ctx, 0, sizeof(pd_ctx));
 
-  mtr_mode_t cur_mode = MTR_MODE_NONE;
-  int enabled = 0;
+  int any_connected = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    uint8_t node_id;
+    pthread_mutex_lock(&a->sh->mtx);
+    node_id = a->sh->d.axis_node_id[axis];
+    pthread_mutex_unlock(&a->sh->mtx);
 
-  uint64_t last_vel_send_ms = 0;
+    if (node_id == 0) continue;
+
+    int rc = pd4c_open(&pd_ctx[axis], a->can_if, node_id);
+    if (rc == PD4C_OK) {
+      (void)pd4c_nmt_start(&pd_ctx[axis]);
+      axis_connected[axis] = 1;
+      any_connected = 1;
+      fprintf(stderr, "CAN axis %zu connected on %s (node=%u)\n", axis, a->can_if, (unsigned)node_id);
+    } else {
+      fprintf(stderr, "pd4c_open(%s,node=%u) axis=%zu failed: %s\n",
+              a->can_if,
+              (unsigned)node_id,
+              axis,
+              pd4c_strerror(rc));
+    }
+  }
+
+  pthread_mutex_lock(&a->sh->mtx);
+  a->sh->d.can_ok = any_connected;
+  pthread_mutex_unlock(&a->sh->mtx);
 
   while (!g_stop) {
     uint64_t now = mono_ms();
 
-    if (!can_connected && now >= next_reconnect_ms) {
-      memset(&ctx, 0, sizeof(ctx));
-      rc = pd4c_open(&ctx, a->can_if, (uint8_t)a->node_id);
-      if (rc == PD4C_OK) {
-        // Best-effort: ensure node is started (many setups already are).
-        (void)pd4c_nmt_start(&ctx);
+    struct pollfd pfds[STC_AXIS_COUNT];
+    size_t axis_idx[STC_AXIS_COUNT];
+    nfds_t nfds = 0;
 
-        can_connected = 1;
-        reconnect_delay_ms = 500;
-        pthread_mutex_lock(&a->sh->mtx);
-        a->sh->d.can_ok = 1;
-        pthread_mutex_unlock(&a->sh->mtx);
-
-        fprintf(stderr, "CAN connected on %s (node=%d)\n", a->can_if, a->node_id);
-      } else {
-        fprintf(stderr, "pd4c_open(%s,node=%d) failed: %s; retry in %d ms\n",
-                a->can_if, a->node_id, pd4c_strerror(rc), reconnect_delay_ms);
-        next_reconnect_ms = now + (uint64_t)reconnect_delay_ms;
-        reconnect_delay_ms *= 2;
-        if (reconnect_delay_ms > 2000) reconnect_delay_ms = 2000;
-      }
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!axis_connected[axis]) continue;
+      pfds[nfds].fd = pd_ctx[axis].sock;
+      pfds[nfds].events = POLLIN;
+      pfds[nfds].revents = 0;
+      axis_idx[nfds] = axis;
+      nfds++;
     }
 
-    // --- poll CAN (non-blocking-ish)
-    if (can_connected) {
-      int ev = pd4c_poll(&ctx, 1);
-      if (ev >= 0) {
-        // Drain any extra frames quickly.
-        for (int i = 0; i < 32; i++) {
-          int ev2 = pd4c_poll(&ctx, 0);
-          if (ev2 < 0) break;
+    if (nfds > 0) {
+      int prc = poll(pfds, nfds, 10);
+      if (prc > 0) {
+        for (nfds_t j = 0; j < nfds; j++) {
+          if ((pfds[j].revents & POLLIN) == 0) continue;
+          size_t axis = axis_idx[j];
+          int ev = pd4c_poll(&pd_ctx[axis], 0);
+          if (ev >= 0) {
+            const pd4c_telemetry_t* t = pd4c_telem(&pd_ctx[axis]);
+            axis_mode[axis] = (mtr_mode_t)t->mode_display;
+            pthread_mutex_lock(&a->sh->mtx);
+            copy_pd4c_telem_into_shared(a->sh, axis, t, now);
+            pthread_mutex_unlock(&a->sh->mtx);
+          }
         }
-        const pd4c_telemetry_t* t = pd4c_telem(&ctx);
-        pthread_mutex_lock(&a->sh->mtx);
-        copy_pd4c_telem_into_shared(a->sh, t, now);
-        pthread_mutex_unlock(&a->sh->mtx);
-      } else if (ev != PD4C_ETIMEDOUT) {
-        // Hard CAN error. Close and transition to reconnect loop.
-        fprintf(stderr, "CAN poll error: %s\n", pd4c_strerror(ev));
-        pd4c_close(&ctx);
-        can_connected = 0;
-        rc = ev;
-        next_reconnect_ms = now + (uint64_t)reconnect_delay_ms;
-        reconnect_delay_ms *= 2;
-        if (reconnect_delay_ms > 2000) reconnect_delay_ms = 2000;
-        enabled = 0;
-        cur_mode = MTR_MODE_NONE;
-        last_vel_send_ms = 0;
-        pthread_mutex_lock(&a->sh->mtx);
-        a->sh->d.can_ok = 0;
-        pthread_mutex_unlock(&a->sh->mtx);
       }
     }
 
-    // --- process discrete action queue
     stc_action_t act;
     while (actionq_try_peek(a->q, &act)) {
-      if (!can_connected) {
-        // CAN not available yet. Keep action queued for reconnect.
-        break;
-      }
-
       switch (act.type) {
         case ACTION_SET_STATE:
           if (act.u.new_state != 3) {
-            (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
-            enabled = 0;
+            for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+              if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+              (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
+              axis_enabled[axis] = 0;
+            }
           }
           break;
         case ACTION_PP_MOVE:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-            if ((act.axes_mask & (1u << axis)) == 0) continue;
+            if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
             pthread_mutex_lock(&a->sh->mtx);
             a->sh->d.stream[axis].enabled = 0;
             pthread_mutex_unlock(&a->sh->mtx);
 
-            rc = motor_do_pp_move(&ctx, a->sh, act.u.target_deg[axis], &cur_mode, &enabled);
+            int rc = motor_do_pp_move(&pd_ctx[axis], a->sh, axis, act.u.target_deg[axis], &axis_mode[axis], &axis_enabled[axis]);
             fprintf(stderr,
                     "PP_MOVE axis=%zu pd4c_pp_move=%d latest_statusword=0x%04X\n",
                     axis,
                     rc,
-                    pd4c_telem(&ctx)->statusword);
+                    pd4c_telem(&pd_ctx[axis])->statusword);
           }
           break;
         case ACTION_STREAM_SPEED:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-            if ((act.axes_mask & (1u << axis)) == 0) continue;
-            (void)motor_ensure_enabled(&ctx, a->sh, MTR_MODE_PV, &cur_mode, &enabled);
+            if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            (void)motor_ensure_enabled(&pd_ctx[axis], a->sh, MTR_MODE_PV, &axis_mode[axis], &axis_enabled[axis]);
             int clipped = 0;
             int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[axis], act.u.speed_deg_s[axis], &clipped);
             if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
             if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
-            (void)pd4c_rpdo3_send_target_velocity(&ctx, (int16_t)tv_raw);
-            last_vel_send_ms = now;
+            (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
           }
           break;
         case ACTION_STOP:
         case ACTION_QUICK_STOP:
-          (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
+            axis_enabled[axis] = 0;
+          }
           break;
         case ACTION_ENTER_STORE:
-          (void)pd4c_sdo_write_u32(&ctx, 0x1010, 0x01, 0x65766173UL);
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            (void)pd4c_sdo_write_u32(&pd_ctx[axis], 0x1010, 0x01, 0x65766173UL);
+          }
           break;
         case ACTION_RESET:
-          (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
-          (void)pd4c_ds402_fault_reset(&ctx, (int8_t)cur_mode, a->sh->d.ds402_timeout_ms);
-          enabled = 0;
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
+            (void)pd4c_ds402_fault_reset(&pd_ctx[axis], (int8_t)axis_mode[axis], a->sh->d.ds402_timeout_ms);
+            (void)pd4c_nmt_start(&pd_ctx[axis]);
+            axis_enabled[axis] = 0;
+          }
           break;
         case ACTION_FACTORY:
-          (void)pd4c_sdo_write_u32(&ctx, 0x1011, 0x01, 0x64616F6CUL);
-          (void)pd4c_nmt_reset_node(&ctx);
-          enabled = 0;
-          cur_mode = MTR_MODE_NONE;
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            (void)pd4c_nmt_stop(&pd_ctx[axis]);
+            axis_enabled[axis] = 0;
+            axis_mode[axis] = MTR_MODE_NONE;
+          }
           break;
         case ACTION_SHUTDOWN:
-          pthread_mutex_lock(&a->sh->mtx);
-          a->sh->d.stream[0].enabled = 0;
-          pthread_mutex_unlock(&a->sh->mtx);
-          motor_stop_and_disable(&ctx, cur_mode);
-          enabled = 0;
-          cur_mode = MTR_MODE_NONE;
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            pthread_mutex_lock(&a->sh->mtx);
+            a->sh->d.stream[axis].enabled = 0;
+            pthread_mutex_unlock(&a->sh->mtx);
+            motor_stop_and_disable(&pd_ctx[axis], axis_mode[axis]);
+            (void)pd4c_nmt_stop(&pd_ctx[axis]);
+            axis_enabled[axis] = 0;
+            axis_mode[axis] = MTR_MODE_NONE;
+          }
           break;
         default:
           break;
@@ -615,65 +632,61 @@ static void* can_worker_thread(void* arg) {
       (void)actionq_drop_head(a->q);
     }
 
-    // --- enforce CU state gating from shared state
     uint8_t cu_state = 0;
-    int speed_on = 0;
-    double desired_deg_s = 0.0;
-    uint64_t last_cmd_ms = 0;
     int watchdog_ms = 0;
     pthread_mutex_lock(&a->sh->mtx);
     cu_state = a->sh->d.cu_state;
-    speed_on = a->sh->d.stream[0].enabled;
-    desired_deg_s = a->sh->d.stream[0].desired_speed_deg_s;
-    last_cmd_ms = a->sh->d.stream[0].last_cmd_ms;
     watchdog_ms = a->sh->d.speed_watchdog_ms;
     pthread_mutex_unlock(&a->sh->mtx);
 
     if (cu_state != 3) {
-      // Not operational: stop motion and disable streaming.
-      if (speed_on && can_connected) {
+      for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+        if (!axis_connected[axis]) continue;
         pthread_mutex_lock(&a->sh->mtx);
-        a->sh->d.stream[0].enabled = 0;
+        int speed_on = a->sh->d.stream[axis].enabled;
+        a->sh->d.stream[axis].enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
-        motor_stop_and_disable(&ctx, cur_mode);
-        enabled = 0;
+        if (speed_on) {
+          motor_stop_and_disable(&pd_ctx[axis], axis_mode[axis]);
+          axis_enabled[axis] = 0;
+        }
       }
     }
 
-    // --- speed watchdog + velocity streaming
-    if (can_connected && cu_state == 3) {
-      if (speed_on) {
-        if (watchdog_ms > 0 && (int)(now - last_cmd_ms) > watchdog_ms) {
-          // Watchdog: no new speed cmd.
-          pthread_mutex_lock(&a->sh->mtx);
-          a->sh->d.stream[0].enabled = 0;
-          pthread_mutex_unlock(&a->sh->mtx);
-          (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
-        } else {
-          // Ensure PV mode enabled once.
-          (void)motor_ensure_enabled(&ctx, a->sh, MTR_MODE_PV, &cur_mode, &enabled);
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!axis_connected[axis] || cu_state != 3) continue;
 
-          // Send velocity at ~100Hz.
-          if (last_vel_send_ms == 0 || (now - last_vel_send_ms) >= 10) {
-            int clipped = 0;
-            int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[0], desired_deg_s, &clipped);
-            if (tv_raw > INT16_MAX) {
-              clipped = 1;
-              tv_raw = INT16_MAX;
-            } else if (tv_raw < INT16_MIN) {
-              clipped = 1;
-              tv_raw = INT16_MIN;
-            }
-            int16_t tv = (int16_t)tv_raw;
-            (void)pd4c_rpdo3_send_target_velocity(&ctx, tv);
-            last_vel_send_ms = now;
-          }
-        }
+      int speed_on = 0;
+      double desired_deg_s = 0.0;
+      uint64_t last_cmd_ms = 0;
+      pthread_mutex_lock(&a->sh->mtx);
+      speed_on = a->sh->d.stream[axis].enabled;
+      desired_deg_s = a->sh->d.stream[axis].desired_speed_deg_s;
+      last_cmd_ms = a->sh->d.stream[axis].last_cmd_ms;
+      pthread_mutex_unlock(&a->sh->mtx);
+
+      if (!speed_on) continue;
+
+      if (watchdog_ms > 0 && (int)(now - last_cmd_ms) > watchdog_ms) {
+        pthread_mutex_lock(&a->sh->mtx);
+        a->sh->d.stream[axis].enabled = 0;
+        pthread_mutex_unlock(&a->sh->mtx);
+        (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
+        axis_enabled[axis] = 0;
+      } else {
+        (void)motor_ensure_enabled(&pd_ctx[axis], a->sh, MTR_MODE_PV, &axis_mode[axis], &axis_enabled[axis]);
+        int clipped = 0;
+        int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[axis], desired_deg_s, &clipped);
+        if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
+        if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
+        (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
       }
     }
   }
 
-  if (can_connected) pd4c_close(&ctx);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (axis_connected[axis]) pd4c_close(&pd_ctx[axis]);
+  }
   return NULL;
 }
 
@@ -833,6 +846,7 @@ typedef struct {
 
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   for (int i = 0; i < cfg->num_axes && i < (int)STC_AXIS_COUNT; i++) {
+    sh->d.axis_node_id[i] = (uint8_t)cfg->axis_node_id[i];
     sh->d.cfg[i].counts_per_rev = cfg->axis_counts_per_rev[i];
     sh->d.cfg[i].gear_ratio = cfg->axis_gear_ratio[i];
     sh->d.cfg[i].vel_raw_units = cfg->axis_vel_is_rpm[i] ? AXIS_VEL_RAW_RPM : AXIS_VEL_RAW_DEG_PER_SEC;
@@ -1027,7 +1041,7 @@ int main(int argc, char** argv) {
 
   // CAN worker thread
   pthread_t th_can;
-  can_worker_arg_t carg = { .can_if = net.can_if, .node_id = net.node_id, .sh = &sh, .q = &q };
+  can_worker_arg_t carg = { .can_if = net.can_if, .sh = &sh, .q = &q };
   pthread_create(&th_can, NULL, can_worker_thread, &carg);
 
   // UDP telemetry threads
@@ -1067,7 +1081,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  printf("CAN worker on %s node=%d (TPDO1/2/3 + RPDO1/2/3)\n", net.can_if, net.node_id);
+  printf("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)\n", net.can_if);
   printf("STC server listening on TCP port %d\n", net.tcp_port);
   printf("UDP multicast: TLMH %s:%d @%dHz | TLML %s:%d @%dHz\n", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
 
