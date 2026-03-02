@@ -10,6 +10,7 @@ add_executable(stc_server
   dev/src/stc_server.c
   dev/src/stc_icd.c
   dev/src/stc_model.c
+  dev/src/stc_config.c
   dev/src/pd4c.c
 )
 
