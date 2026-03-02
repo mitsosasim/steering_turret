@@ -18,6 +18,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "stc_icd.h"
+#include "stc_config.h"
 #include "stc_model.h"
 #include "pd4c.h"
 #include "stc_version.h"
@@ -120,6 +121,17 @@ typedef struct {
   axis_cfg_t cfg[STC_AXIS_COUNT];
   axis_telem_t telem[STC_AXIS_COUNT];
   axis_stream_t stream[STC_AXIS_COUNT];
+  double storage_deg[STC_AXIS_COUNT];
+  uint16_t diag_cat[STC_AXIS_COUNT];
+  uint16_t diag_subcat[STC_AXIS_COUNT];
+
+  int turret_az_axis;
+  int turret_el_axis;
+  int sut_count;
+  int sut_az_axis[STC_MAX_SUT];
+  int sut_el_axis[STC_MAX_SUT];
+  int mirror_count;
+  int mirror_axis[STC_MAX_MIRROR];
 
   int speed_watchdog_ms;
   int ds402_timeout_ms;
@@ -841,6 +853,7 @@ static void* tlml_tx_thread(void* arg) {
 static void usage(const char* p) {
   fprintf(stderr,
           "Usage: %s [--tcp-port 7000] [--can can0] [--node 1]\n"
+          "          [--config config/stc_default.ini]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
@@ -850,18 +863,62 @@ static void usage(const char* p) {
           p);
 }
 
+typedef struct {
+  const char* can_if;
+  int node_id;
+  int tcp_port;
+  const char* tlmh_ip;
+  int tlmh_port;
+  int tlmh_hz;
+  const char* tlml_ip;
+  int tlml_port;
+  int tlml_hz;
+} runtime_net_t;
+
+static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
+  for (int i = 0; i < cfg->num_axes && i < (int)STC_AXIS_COUNT; i++) {
+    sh->d.cfg[i].counts_per_rev = cfg->axis_counts_per_rev[i];
+    sh->d.cfg[i].gear_ratio = cfg->axis_gear_ratio[i];
+    sh->d.cfg[i].vel_raw_units = cfg->axis_vel_is_rpm[i] ? AXIS_VEL_RAW_RPM : AXIS_VEL_RAW_DEG_PER_SEC;
+    sh->d.cfg[i].vel_scale = 1.0;
+    sh->d.cfg[i].az_min_deg = cfg->axis_min_deg[i];
+    sh->d.cfg[i].az_max_deg = cfg->axis_max_deg[i];
+    sh->d.cfg[i].max_speed_deg_s = cfg->axis_max_speed_deg_s[i];
+    sh->d.cfg[i].pp_profile_vel = cfg->axis_pp_profile_vel[i];
+
+    sh->d.storage_deg[i] = cfg->axis_storage_deg[i];
+    sh->d.diag_cat[i] = cfg->axis_diag_cat[i];
+    sh->d.diag_subcat[i] = cfg->axis_diag_subcat[i];
+  }
+
+  sh->d.turret_az_axis = cfg->turret_az_axis;
+  sh->d.turret_el_axis = cfg->turret_el_axis;
+
+  sh->d.sut_count = cfg->sut_count;
+  memcpy(sh->d.sut_az_axis, cfg->sut_az_axis, sizeof(sh->d.sut_az_axis));
+  memcpy(sh->d.sut_el_axis, cfg->sut_el_axis, sizeof(sh->d.sut_el_axis));
+
+  sh->d.mirror_count = cfg->mirror_count;
+  memcpy(sh->d.mirror_axis, cfg->mirror_axis, sizeof(sh->d.mirror_axis));
+}
+
 int main(int argc, char** argv) {
-  const char* can_if = "can0";
-  int node_id = 1;
-  int tcp_port = 7000;
+  runtime_net_t net = {
+    .can_if = "can0",
+    .node_id = 1,
+    .tcp_port = 7000,
+    .tlmh_ip = "239.255.10.2",
+    .tlmh_port = 6010,
+    .tlmh_hz = 100,
+    .tlml_ip = "239.255.10.3",
+    .tlml_port = 6020,
+    .tlml_hz = 10,
+  };
+  const char* config_path = NULL;
+  int legacy_cli_mode = 0;
 
-  const char* tlmh_ip = "239.255.10.2";
-  int tlmh_port = 6010;
-  int tlmh_hz = 100;
-
-  const char* tlml_ip = "239.255.10.3";
-  int tlml_port = 6020;
-  int tlml_hz = 10;
+  stc_config_t parsed_cfg;
+  stc_config_set_defaults(&parsed_cfg);
 
   shared_t sh;
   memset(&sh, 0, sizeof(sh));
@@ -885,29 +942,121 @@ int main(int argc, char** argv) {
   sh.d.pp_sdo_diag = 0;
 
   for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "--can") && i + 1 < argc) can_if = argv[++i];
-    else if (!strcmp(argv[i], "--node") && i + 1 < argc) node_id = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--tcp-port") && i + 1 < argc) tcp_port = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) sh.d.cfg[0].counts_per_rev = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--gear-ratio") && i + 1 < argc) sh.d.cfg[0].gear_ratio = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--vel-scale") && i + 1 < argc) sh.d.cfg[0].vel_scale = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--az-min") && i + 1 < argc) sh.d.cfg[0].az_min_deg = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--az-max") && i + 1 < argc) sh.d.cfg[0].az_max_deg = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--max-speed-deg-s") && i + 1 < argc) sh.d.cfg[0].max_speed_deg_s = atof(argv[++i]);
-    else if (!strcmp(argv[i], "--speed-watchdog-ms") && i + 1 < argc) sh.d.speed_watchdog_ms = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--pp-profile-vel") && i + 1 < argc) sh.d.cfg[0].pp_profile_vel = (uint16_t)atoi(argv[++i]);
+    if (!strcmp(argv[i], "--can") && i + 1 < argc) net.can_if = argv[++i];
+    else if (!strcmp(argv[i], "--node") && i + 1 < argc) {
+      net.node_id = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tcp-port") && i + 1 < argc) {
+      net.tcp_port = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--config") && i + 1 < argc) config_path = argv[++i];
+    else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) {
+      sh.d.cfg[0].counts_per_rev = atof(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--gear-ratio") && i + 1 < argc) {
+      sh.d.cfg[0].gear_ratio = atof(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--vel-scale") && i + 1 < argc) {
+      sh.d.cfg[0].vel_scale = atof(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--az-min") && i + 1 < argc) {
+      sh.d.cfg[0].az_min_deg = atof(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--az-max") && i + 1 < argc) {
+      sh.d.cfg[0].az_max_deg = atof(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--max-speed-deg-s") && i + 1 < argc) {
+      sh.d.cfg[0].max_speed_deg_s = atof(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--speed-watchdog-ms") && i + 1 < argc) {
+      sh.d.speed_watchdog_ms = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--pp-profile-vel") && i + 1 < argc) {
+      sh.d.cfg[0].pp_profile_vel = (uint16_t)atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
     else if (!strcmp(argv[i], "--ds402-timeout-ms") && i + 1 < argc) sh.d.ds402_timeout_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--pp-sdo-diag") && i + 1 < argc) sh.d.pp_sdo_diag = atoi(argv[++i]) ? 1 : 0;
-    else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) tlmh_ip = argv[++i];
-    else if (!strcmp(argv[i], "--tlmh-port") && i + 1 < argc) tlmh_port = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--tlmh-hz") && i + 1 < argc) tlmh_hz = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--tlml-ip") && i + 1 < argc) tlml_ip = argv[++i];
-    else if (!strcmp(argv[i], "--tlml-port") && i + 1 < argc) tlml_port = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--tlml-hz") && i + 1 < argc) tlml_hz = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) {
+      net.tlmh_ip = argv[++i];
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tlmh-port") && i + 1 < argc) {
+      net.tlmh_port = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tlmh-hz") && i + 1 < argc) {
+      net.tlmh_hz = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tlml-ip") && i + 1 < argc) {
+      net.tlml_ip = argv[++i];
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tlml-port") && i + 1 < argc) {
+      net.tlml_port = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tlml-hz") && i + 1 < argc) {
+      net.tlml_hz = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
     else {
       usage(argv[0]);
       return 2;
     }
+  }
+
+  if (!config_path && !legacy_cli_mode) {
+    FILE* f = fopen("config/stc_default.ini", "r");
+    if (f) {
+      fclose(f);
+      config_path = "config/stc_default.ini";
+    }
+  }
+
+  if (config_path) {
+    if (!load_config(config_path, &parsed_cfg)) {
+      fprintf(stderr, "Failed to load config file: %s\n", config_path);
+      return 1;
+    }
+
+    net.node_id = parsed_cfg.axis_node_id[0];
+    net.tcp_port = parsed_cfg.tcp_port;
+    net.tlmh_ip = parsed_cfg.mcast_ip;
+    net.tlml_ip = parsed_cfg.mcast_ip;
+    net.tlmh_port = parsed_cfg.mcast_tlmh_port;
+    net.tlml_port = parsed_cfg.mcast_tlml_port;
+    net.tlmh_hz = (parsed_cfg.tlmh_interval_ms > 0) ? (1000 / parsed_cfg.tlmh_interval_ms) : 100;
+    net.tlml_hz = (parsed_cfg.tlml_interval_ms > 0) ? (1000 / parsed_cfg.tlml_interval_ms) : 10;
+
+    apply_config_to_shared(&sh, &parsed_cfg);
+  } else {
+    parsed_cfg.num_axes = 1;
+    parsed_cfg.axis_node_id[0] = net.node_id;
+    parsed_cfg.axis_counts_per_rev[0] = sh.d.cfg[0].counts_per_rev;
+    parsed_cfg.axis_gear_ratio[0] = sh.d.cfg[0].gear_ratio;
+    parsed_cfg.axis_vel_is_rpm[0] = (sh.d.cfg[0].vel_raw_units == AXIS_VEL_RAW_RPM) ? 1 : 0;
+    parsed_cfg.axis_min_deg[0] = sh.d.cfg[0].az_min_deg;
+    parsed_cfg.axis_max_deg[0] = sh.d.cfg[0].az_max_deg;
+    parsed_cfg.axis_max_speed_deg_s[0] = sh.d.cfg[0].max_speed_deg_s;
+    parsed_cfg.axis_storage_deg[0] = 0.0;
+    parsed_cfg.axis_pp_profile_vel[0] = sh.d.cfg[0].pp_profile_vel;
+    parsed_cfg.axis_diag_cat[0] = 0;
+    parsed_cfg.axis_diag_subcat[0] = 0;
+    parsed_cfg.turret_az_axis = 0;
+    parsed_cfg.turret_el_axis = 0;
+
+    apply_config_to_shared(&sh, &parsed_cfg);
   }
 
   signal(SIGINT, on_sig);
@@ -922,7 +1071,7 @@ int main(int argc, char** argv) {
 
   // CAN worker thread
   pthread_t th_can;
-  can_worker_arg_t carg = { .can_if = can_if, .node_id = node_id, .sh = &sh, .q = &q };
+  can_worker_arg_t carg = { .can_if = net.can_if, .node_id = net.node_id, .sh = &sh, .q = &q };
   pthread_create(&th_can, NULL, can_worker_thread, &carg);
 
   // UDP telemetry threads
@@ -934,8 +1083,8 @@ int main(int argc, char** argv) {
   }
 
   pthread_t th_h, th_l;
-  tlm_tx_arg_t harg = { .udp_fd = udp_h, .ip = tlmh_ip, .port = tlmh_port, .rate_hz = tlmh_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
-  tlm_tx_arg_t larg = { .udp_fd = udp_l, .ip = tlml_ip, .port = tlml_port, .rate_hz = tlml_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  tlm_tx_arg_t harg = { .udp_fd = udp_h, .ip = net.tlmh_ip, .port = net.tlmh_port, .rate_hz = net.tlmh_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  tlm_tx_arg_t larg = { .udp_fd = udp_l, .ip = net.tlml_ip, .port = net.tlml_port, .rate_hz = net.tlml_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
   pthread_create(&th_h, NULL, tlmh_tx_thread, &harg);
   pthread_create(&th_l, NULL, tlml_tx_thread, &larg);
 
@@ -952,7 +1101,7 @@ int main(int argc, char** argv) {
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons((uint16_t)tcp_port);
+  addr.sin_port = htons((uint16_t)net.tcp_port);
   if (bind(srv, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     perror("bind");
     return 1;
@@ -962,9 +1111,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  printf("CAN worker on %s node=%d (TPDO1/2/3 + RPDO1/2/3)\n", can_if, node_id);
-  printf("STC server listening on TCP port %d\n", tcp_port);
-  printf("UDP multicast: TLMH %s:%d @%dHz | TLML %s:%d @%dHz\n", tlmh_ip, tlmh_port, tlmh_hz, tlml_ip, tlml_port, tlml_hz);
+  printf("CAN worker on %s node=%d (TPDO1/2/3 + RPDO1/2/3)\n", net.can_if, net.node_id);
+  printf("STC server listening on TCP port %d\n", net.tcp_port);
+  printf("UDP multicast: TLMH %s:%d @%dHz | TLML %s:%d @%dHz\n", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
 
   while (!g_stop) {
     struct sockaddr_in cli;
