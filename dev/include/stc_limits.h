@@ -1,0 +1,16 @@
+#ifndef STC_LIMITS_H
+#define STC_LIMITS_H
+
+#include "stc_model.h"
+
+#include <stdbool.h>
+
+double stc_clamp(double val, double min, double max);
+
+bool stc_clamp_axis_cmd(const axis_cfg_t* cfg,
+                        double* target_deg,
+                        double* speed_deg_s,
+                        bool* target_limited,
+                        bool* speed_limited);
+
+#endif
