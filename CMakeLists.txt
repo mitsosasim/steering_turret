@@ -12,6 +12,7 @@ add_executable(stc_server
   dev/src/stc_model.c
   dev/src/stc_config.c
   dev/src/pd4c.c
+  dev/src/stc_actions.c
 )
 
 add_executable(icd_tx_tcp
@@ -33,3 +34,11 @@ target_compile_options(icd_tx_tcp PRIVATE -Wall -Wextra)
 target_compile_options(tlm_rx_udp PRIVATE -Wall -Wextra)
 
 target_link_libraries(stc_server PRIVATE pthread m)
+
+add_executable(test_actions
+  test/test_actions.c
+  dev/src/stc_actions.c
+)
+
+target_include_directories(test_actions PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_actions PRIVATE -Wall -Wextra)
