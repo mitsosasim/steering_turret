@@ -21,6 +21,7 @@
 #include "stc_config.h"
 #include "stc_model.h"
 #include "pd4c.h"
+#include "stc_actions.h"
 #include "stc_version.h"
 
 #include <arpa/inet.h>
@@ -28,7 +29,6 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -171,60 +171,6 @@ typedef struct {
   pthread_mutex_t mtx;
   shared_data_t d;
 } shared_t;
-
-/* ----------------------------- command queue ----------------------------- */
-
-typedef struct {
-  stc_icd_cmd_t items[128];
-  size_t head;
-  size_t tail;
-  size_t count;
-  pthread_mutex_t mtx;
-  pthread_cond_t cv;
-} cmdq_t;
-
-static void cmdq_init(cmdq_t* q) {
-  memset(q, 0, sizeof(*q));
-  pthread_mutex_init(&q->mtx, NULL);
-  pthread_cond_init(&q->cv, NULL);
-}
-
-static int cmdq_push(cmdq_t* q, const stc_icd_cmd_t* cmd) {
-  pthread_mutex_lock(&q->mtx);
-  if (q->count >= (sizeof(q->items) / sizeof(q->items[0]))) {
-    pthread_mutex_unlock(&q->mtx);
-    return -1;
-  }
-  q->items[q->tail] = *cmd;
-  q->tail = (q->tail + 1) % (sizeof(q->items) / sizeof(q->items[0]));
-  q->count++;
-  pthread_cond_signal(&q->cv);
-  pthread_mutex_unlock(&q->mtx);
-  return 0;
-}
-
-static int cmdq_try_peek(cmdq_t* q, stc_icd_cmd_t* out) {
-  int ok = 0;
-  pthread_mutex_lock(&q->mtx);
-  if (q->count > 0) {
-    *out = q->items[q->head];
-    ok = 1;
-  }
-  pthread_mutex_unlock(&q->mtx);
-  return ok;
-}
-
-static int cmdq_drop_head(cmdq_t* q) {
-  int ok = 0;
-  pthread_mutex_lock(&q->mtx);
-  if (q->count > 0) {
-    q->head = (q->head + 1) % (sizeof(q->items) / sizeof(q->items[0]));
-    q->count--;
-    ok = 1;
-  }
-  pthread_mutex_unlock(&q->mtx);
-  return ok;
-}
 
 /* ----------------------------- signal handling ----------------------------- */
 
@@ -388,7 +334,7 @@ typedef struct {
   const char* can_if;
   int node_id;
   shared_t* sh;
-  cmdq_t* q;
+  actionq_t* q;
 } can_worker_arg_t;
 
 static void copy_pd4c_telem_into_shared(shared_t* sh, const pd4c_telemetry_t* t, uint64_t now_ms) {
@@ -594,69 +540,79 @@ static void* can_worker_thread(void* arg) {
       }
     }
 
-    // --- process discrete command queue
-    stc_icd_cmd_t cmd;
-    while (cmdq_try_peek(a->q, &cmd)) {
+    // --- process discrete action queue
+    stc_action_t act;
+    while (actionq_try_peek(a->q, &act)) {
       if (!can_connected) {
-        // CAN not available yet. Keep command queued for reconnect.
+        // CAN not available yet. Keep action queued for reconnect.
         break;
       }
 
-      if (cmd.cmd_id == STC_CMD_RESET) {
-        (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
-        (void)pd4c_ds402_fault_reset(&ctx, (int8_t)cur_mode, a->sh->d.ds402_timeout_ms);
-        enabled = 0;  // force re-enable next command
-      } else if (cmd.cmd_id == STC_CMD_SHUTDOWN) {
-        pthread_mutex_lock(&a->sh->mtx);
-        a->sh->d.stream[0].enabled = 0;
-        pthread_mutex_unlock(&a->sh->mtx);
-        motor_stop_and_disable(&ctx, cur_mode);
-        enabled = 0;
-        cur_mode = MTR_MODE_NONE;
-      } else if (cmd.cmd_id == STC_CMD_FACTORY) {
-        // Restore defaults (0x1011:1 = "load") then reset node.
-        (void)pd4c_sdo_write_u32(&ctx, 0x1011, 0x01, 0x64616F6CUL);
-        (void)pd4c_nmt_reset_node(&ctx);
-        enabled = 0;
-        cur_mode = MTR_MODE_NONE;
-      } else if (cmd.cmd_id == STC_CMD_STORAGE) {
-        // Store params (0x1010:1 = "save")
-        (void)pd4c_sdo_write_u32(&ctx, 0x1010, 0x01, 0x65766173UL);
-      } else if (cmd.cmd_id == STC_CMD_TURRET && cmd.payload_decoded) {
-        // ABS/REL are discrete PP actions. SPEED is handled by streaming below.
-        if (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE || cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
-          const double cmd_az_deg = (double)cmd.u.turret.az;
-          double target_deg = cmd_az_deg;
-          if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
-            pthread_mutex_lock(&a->sh->mtx);
-            double cur_deg = axis_counts_to_deg(&a->sh->d.cfg[0], a->sh->d.telem[0].pos_raw);
-            pthread_mutex_unlock(&a->sh->mtx);
-            target_deg = cur_deg + target_deg;
+      switch (act.type) {
+        case ACTION_SET_STATE:
+          if (act.u.new_state != 3) {
+            (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
+            enabled = 0;
           }
+          break;
+        case ACTION_PP_MOVE:
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if ((act.axes_mask & (1u << axis)) == 0) continue;
+            pthread_mutex_lock(&a->sh->mtx);
+            a->sh->d.stream[axis].enabled = 0;
+            pthread_mutex_unlock(&a->sh->mtx);
 
-          const int32_t target_counts = axis_deg_to_counts(&a->sh->d.cfg[0], target_deg);
-          fprintf(stderr,
-                  "TURRET %s seq=%u az_deg=%.6f target_counts=%" PRId32 "\n",
-                  (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE) ? "ABS" : "REL",
-                  cmd.seq,
-                  cmd_az_deg,
-                  target_counts);
-
-          // PP move should stop any active speed streaming.
+            rc = motor_do_pp_move(&ctx, a->sh, act.u.target_deg[axis], &cur_mode, &enabled);
+            fprintf(stderr,
+                    "PP_MOVE axis=%zu pd4c_pp_move=%d latest_statusword=0x%04X\n",
+                    axis,
+                    rc,
+                    pd4c_telem(&ctx)->statusword);
+          }
+          break;
+        case ACTION_STREAM_SPEED:
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if ((act.axes_mask & (1u << axis)) == 0) continue;
+            (void)motor_ensure_enabled(&ctx, a->sh, MTR_MODE_PV, &cur_mode, &enabled);
+            int clipped = 0;
+            int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[axis], act.u.speed_deg_s[axis], &clipped);
+            if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
+            if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
+            (void)pd4c_rpdo3_send_target_velocity(&ctx, (int16_t)tv_raw);
+            last_vel_send_ms = now;
+          }
+          break;
+        case ACTION_STOP:
+        case ACTION_QUICK_STOP:
+          (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
+          break;
+        case ACTION_ENTER_STORE:
+          (void)pd4c_sdo_write_u32(&ctx, 0x1010, 0x01, 0x65766173UL);
+          break;
+        case ACTION_RESET:
+          (void)pd4c_ds402_quick_stop(&ctx, (int8_t)cur_mode);
+          (void)pd4c_ds402_fault_reset(&ctx, (int8_t)cur_mode, a->sh->d.ds402_timeout_ms);
+          enabled = 0;
+          break;
+        case ACTION_FACTORY:
+          (void)pd4c_sdo_write_u32(&ctx, 0x1011, 0x01, 0x64616F6CUL);
+          (void)pd4c_nmt_reset_node(&ctx);
+          enabled = 0;
+          cur_mode = MTR_MODE_NONE;
+          break;
+        case ACTION_SHUTDOWN:
           pthread_mutex_lock(&a->sh->mtx);
           a->sh->d.stream[0].enabled = 0;
           pthread_mutex_unlock(&a->sh->mtx);
-
-          rc = motor_do_pp_move(&ctx, a->sh, target_deg, &cur_mode, &enabled);
-          fprintf(stderr,
-                  "TURRET seq=%u pd4c_pp_move=%d latest_statusword=0x%04X\n",
-                  cmd.seq,
-                  rc,
-                  pd4c_telem(&ctx)->statusword);
-        }
+          motor_stop_and_disable(&ctx, cur_mode);
+          enabled = 0;
+          cur_mode = MTR_MODE_NONE;
+          break;
+        default:
+          break;
       }
 
-      (void)cmdq_drop_head(a->q);
+      (void)actionq_drop_head(a->q);
     }
 
     // --- enforce CU state gating from shared state
@@ -1066,8 +1022,8 @@ int main(int argc, char** argv) {
   cfg.strict_magic = 0;    // allow us to return NACK even when magic is wrong
   cfg.strict_version = 0;
 
-  cmdq_t q;
-  cmdq_init(&q);
+  actionq_t q;
+  actionq_init(&q);
 
   // CAN worker thread
   pthread_t th_can;
@@ -1222,10 +1178,14 @@ int main(int argc, char** argv) {
       stc_nack_err_t v = validate_cmd_fast(&cfg, &snap, &cmd);
 
       // Fast side-effects that should be reflected in TLML immediately
+      stc_action_t act;
+      int has_action = 0;
       if (v == STC_ERR_NO_ERROR && cmd.payload_decoded) {
         pthread_mutex_lock(&sh.mtx);
         if (cmd.cmd_id == STC_CMD_CU_STATE) {
           sh.d.cu_state = cmd.u.cu_state.state;
+          stc_action_make_set_state(&act, (int8_t)cmd.u.cu_state.state);
+          has_action = 1;
         } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
           sh.d.lat = cmd.u.manualpos.lat;
           sh.d.lon = cmd.u.manualpos.lon;
@@ -1234,40 +1194,49 @@ int main(int argc, char** argv) {
           sh.d.has_manualpos = 1;
         } else if (cmd.cmd_id == STC_CMD_POSMODE) {
           sh.d.posmode = cmd.u.posmode.v;
-        } else if (cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_SPEED) {
-          // SPEED is handled via streaming: update desired speed + watchdog timestamp
-          sh.d.stream[0].desired_speed_deg_s = (double)cmd.u.turret.az;
-          sh.d.stream[0].last_cmd_ms = mono_ms();
-          sh.d.stream[0].enabled = 1;
+        } else if (cmd.cmd_id == STC_CMD_TURRET) {
+          const int axis = sh.d.turret_az_axis;
+          if (axis >= 0 && axis < (int)STC_AXIS_COUNT) {
+            if (cmd.u.turret.motion_type == STC_MOTION_SPEED) {
+              double speeds[STC_AXIS_COUNT] = {0};
+              speeds[axis] = (double)cmd.u.turret.az;
+              sh.d.stream[axis].desired_speed_deg_s = speeds[axis];
+              sh.d.stream[axis].last_cmd_ms = mono_ms();
+              sh.d.stream[axis].enabled = 1;
+              stc_action_make_stream_speed(&act, (1u << axis), speeds);
+              has_action = 1;
+            } else if (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE || cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
+              double targets[STC_AXIS_COUNT] = {0};
+              double target = (double)cmd.u.turret.az;
+              if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
+                double cur_deg = axis_counts_to_deg(&sh.d.cfg[axis], sh.d.telem[axis].pos_raw);
+                target = cur_deg + target;
+              }
+              targets[axis] = target;
+              stc_action_make_pp_move(&act, (1u << axis), targets);
+              has_action = 1;
+            }
+          }
         }
         pthread_mutex_unlock(&sh.mtx);
+      } else if (v == STC_ERR_NO_ERROR) {
+        if (cmd.cmd_id == STC_CMD_RESET) {
+          stc_action_make_simple(&act, ACTION_RESET, 0u);
+          has_action = 1;
+        } else if (cmd.cmd_id == STC_CMD_FACTORY) {
+          stc_action_make_simple(&act, ACTION_FACTORY, 0u);
+          has_action = 1;
+        } else if (cmd.cmd_id == STC_CMD_SHUTDOWN) {
+          stc_action_make_simple(&act, ACTION_SHUTDOWN, 0u);
+          has_action = 1;
+        } else if (cmd.cmd_id == STC_CMD_STORAGE) {
+          stc_action_make_simple(&act, ACTION_ENTER_STORE, 0u);
+          has_action = 1;
+        }
       }
 
-      // Enqueue discrete actions for worker
-      if (v == STC_ERR_NO_ERROR) {
-        int need_can = 0;
-        int enq = 0;
-
-        if (cmd.cmd_id == STC_CMD_RESET || cmd.cmd_id == STC_CMD_FACTORY || cmd.cmd_id == STC_CMD_SHUTDOWN || cmd.cmd_id == STC_CMD_STORAGE) {
-          need_can = 1;
-          enq = 1;
-        } else if (cmd.cmd_id == STC_CMD_TURRET && cmd.payload_decoded) {
-          if (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE || cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
-            need_can = 1;
-            enq = 1;
-          }
-        }
-
-        if (enq) {
-          pthread_mutex_lock(&sh.mtx);
-          int can_ok = sh.d.can_ok;
-          pthread_mutex_unlock(&sh.mtx);
-          if (!can_ok && need_can) {
-            v = STC_ERR_INSUFFICIENT_RES;
-          } else if (cmdq_push(&q, &cmd) != 0) {
-            v = STC_ERR_INSUFFICIENT_RES;
-          }
-        }
+      if (v == STC_ERR_NO_ERROR && has_action) {
+        if (actionq_push(&q, &act) != 0) v = STC_ERR_INSUFFICIENT_RES;
       }
 
       // Build response
