@@ -23,6 +23,7 @@
 #include "pd4c.h"
 #include "stc_actions.h"
 #include "stc_version.h"
+#include "stc_limits.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -123,6 +124,7 @@ typedef struct {
   uint8_t axis_node_id[STC_AXIS_COUNT];
   axis_telem_t telem[STC_AXIS_COUNT];
   axis_stream_t stream[STC_AXIS_COUNT];
+  bool saturated[STC_AXIS_COUNT];
   double storage_deg[STC_AXIS_COUNT];
   uint16_t diag_cat[STC_AXIS_COUNT];
   uint16_t diag_subcat[STC_AXIS_COUNT];
@@ -193,6 +195,7 @@ static int is_allowed_controller(uint8_t cid) {
 static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
                                        const shared_data_t* sh,
                                        const stc_icd_cmd_t* c) {
+  (void)sh;
   // magic
   if (!(c->magic[0] == cfg->cmd_magic[0] && c->magic[1] == cfg->cmd_magic[1] &&
         c->magic[2] == cfg->cmd_magic[2] && c->magic[3] == cfg->cmd_magic[3])) {
@@ -214,6 +217,7 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
     case STC_CMD_RESET:
     case STC_CMD_FACTORY:
     case STC_CMD_SHUTDOWN:
+    case STC_CMD_CONFIG:
     case STC_CMD_MANUALPOS:
     case STC_CMD_POSMODE:
     case STC_CMD_REQ_SW_VERSION:
@@ -221,47 +225,82 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
     case STC_CMD_REQ_WORK_TIME:
       break;
     default:
-        return STC_ERR_SYNTAX_ERROR;
+      return STC_ERR_SYNTAX_ERROR;
   }
 
+  if (c->cmd_id == STC_CMD_CONFIG) return STC_ERR_SYNTAX_ERROR;
+
   // payload decoding must be consistent (for known payload-bearing commands)
-  if (c->cmd_id != STC_CMD_CONFIG && c->payload_size > 0 && c->payload_decoded == 0) {
+  if (c->payload_size > 0 && c->payload_decoded == 0) {
     return STC_ERR_SYNTAX_ERROR;
   }
 
-  // basic value checks
   if (c->cmd_id == STC_CMD_TURRET) {
     if (c->u.turret.motion_type > STC_MOTION_SPEED) return STC_ERR_VALUE_OUT_OF_RANGE;
   }
   if (c->cmd_id == STC_CMD_SUT) {
     if (c->u.sut.motion_type > STC_MOTION_SPEED) return STC_ERR_VALUE_OUT_OF_RANGE;
+    if (c->u.sut.id != 0xFF && c->u.sut.id < 1) return STC_ERR_VALUE_OUT_OF_RANGE;
   }
   if (c->cmd_id == STC_CMD_MIRROR) {
     if (c->u.mirror.motion_type > STC_MOTION_SPEED) return STC_ERR_VALUE_OUT_OF_RANGE;
+    if (c->u.mirror.mirror_id != 0xFF && c->u.mirror.mirror_id < 1) return STC_ERR_VALUE_OUT_OF_RANGE;
   }
   if (c->cmd_id == STC_CMD_LASER) {
     if (c->u.laser.id < 1 || c->u.laser.id > 8) return STC_ERR_VALUE_OUT_OF_RANGE;
     if (c->u.laser.on_off > 1) return STC_ERR_VALUE_OUT_OF_RANGE;
   }
 
-  // state gating + limits for turret axis0 (single motor)
-  if (c->cmd_id == STC_CMD_TURRET && c->payload_decoded) {
-    // Only allow motion when CU state is OPER (3). This matches the integration requirement.
-    if (sh->cu_state != 3) return STC_ERR_NOT_ALLOWED_STATE;
+  return STC_ERR_NO_ERROR;
+}
 
-    double az = (double)c->u.turret.az;
-    if (c->u.turret.motion_type == STC_MOTION_ABSOLUTE) {
-      if (az < sh->cfg[0].az_min_deg || az > sh->cfg[0].az_max_deg) return STC_ERR_VALUE_OUT_OF_RANGE;
-    } else if (c->u.turret.motion_type == STC_MOTION_RELATIVE) {
-      double cur_deg = axis_counts_to_deg(&sh->cfg[0], sh->telem[0].pos_raw);
-      double tgt = cur_deg + az;
-      if (tgt < sh->cfg[0].az_min_deg || tgt > sh->cfg[0].az_max_deg) return STC_ERR_VALUE_OUT_OF_RANGE;
-    } else if (c->u.turret.motion_type == STC_MOTION_SPEED) {
-      if (az > sh->cfg[0].max_speed_deg_s || az < -sh->cfg[0].max_speed_deg_s) return STC_ERR_VALUE_OUT_OF_RANGE;
+
+static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
+  if (!limited) return;
+  if (axis < 0 || axis >= (int)STC_AXIS_COUNT) return;
+  sh->saturated[axis] = true;
+}
+
+static uint32_t turret_axes_mask(const shared_data_t* sh) {
+  uint32_t mask = 0;
+  if (sh->turret_az_axis >= 0 && sh->turret_az_axis < (int)STC_AXIS_COUNT) mask |= (1u << sh->turret_az_axis);
+  if (sh->turret_el_axis >= 0 && sh->turret_el_axis < (int)STC_AXIS_COUNT) mask |= (1u << sh->turret_el_axis);
+  return mask;
+}
+
+static uint32_t sut_axes_mask(const shared_data_t* sh, uint8_t id) {
+  uint32_t mask = 0;
+  if (id == 0xFF) {
+    for (int i = 0; i < sh->sut_count; i++) {
+      int az = sh->sut_az_axis[i];
+      int el = sh->sut_el_axis[i];
+      if (az >= 0 && az < (int)STC_AXIS_COUNT) mask |= (1u << az);
+      if (el >= 0 && el < (int)STC_AXIS_COUNT) mask |= (1u << el);
     }
+    return mask;
   }
 
-  return STC_ERR_NO_ERROR;
+  int idx = (int)id - 1;
+  if (idx < 0 || idx >= sh->sut_count) return 0;
+  if (sh->sut_az_axis[idx] >= 0 && sh->sut_az_axis[idx] < (int)STC_AXIS_COUNT) mask |= (1u << sh->sut_az_axis[idx]);
+  if (sh->sut_el_axis[idx] >= 0 && sh->sut_el_axis[idx] < (int)STC_AXIS_COUNT) mask |= (1u << sh->sut_el_axis[idx]);
+  return mask;
+}
+
+static uint32_t mirror_axes_mask(const shared_data_t* sh, uint8_t id) {
+  uint32_t mask = 0;
+  if (id == 0xFF) {
+    for (int i = 0; i < sh->mirror_count; i++) {
+      int axis = sh->mirror_axis[i];
+      if (axis >= 0 && axis < (int)STC_AXIS_COUNT) mask |= (1u << axis);
+    }
+    return mask;
+  }
+
+  int idx = (int)id - 1;
+  if (idx < 0 || idx >= sh->mirror_count) return 0;
+  if (sh->mirror_axis[idx] >= 0 && sh->mirror_axis[idx] < (int)STC_AXIS_COUNT) mask |= (1u << sh->mirror_axis[idx]);
+  return mask;
 }
 
 static void print_cmd(const stc_icd_cmd_t* c) {
@@ -771,6 +810,12 @@ static void* tlml_tx_thread(void* arg) {
     uint16_t emcy_code = a->sh->d.emcy_code;
     uint8_t emcy_reg = a->sh->d.emcy_reg;
 
+    bool saturated[STC_AXIS_COUNT] = {false};
+    for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
+      saturated[i] = a->sh->d.saturated[i];
+      a->sh->d.saturated[i] = false;
+    }
+
     uint64_t t1 = a->sh->d.ts_tpdo1_ms;
     uint64_t t2 = a->sh->d.ts_tpdo2_ms;
     uint64_t t3 = a->sh->d.ts_tpdo3_ms;
@@ -804,6 +849,9 @@ static void* tlml_tx_thread(void* arg) {
     if (have_emcy) {
       m.errors[m.error_count++] = 0xE0030000u | (uint32_t)emcy_code;
       m.errors[m.error_count++] = 0xE0040000u | (uint32_t)emcy_reg;
+    }
+    for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
+      if (saturated[i]) m.errors[m.error_count++] = 0xE1000000u | (uint32_t)i;
     }
     if (m.error_count > STC_ICD_MAX_ERRORS) m.error_count = STC_ICD_MAX_ERRORS;
 
@@ -1182,6 +1230,10 @@ int main(int argc, char** argv) {
         continue;
       }
 
+      pthread_mutex_lock(&sh.mtx);
+      memset(sh.d.saturated, 0, sizeof(sh.d.saturated));
+      pthread_mutex_unlock(&sh.mtx);
+
       // Fast snapshot for validation (single mutex lock)
       shared_data_t snap;
       pthread_mutex_lock(&sh.mtx);
@@ -1194,59 +1246,166 @@ int main(int argc, char** argv) {
       // Fast side-effects that should be reflected in TLML immediately
       stc_action_t act;
       int has_action = 0;
-      if (v == STC_ERR_NO_ERROR && cmd.payload_decoded) {
+      if (v == STC_ERR_NO_ERROR) {
         pthread_mutex_lock(&sh.mtx);
-        if (cmd.cmd_id == STC_CMD_CU_STATE) {
-          sh.d.cu_state = cmd.u.cu_state.state;
-          stc_action_make_set_state(&act, (int8_t)cmd.u.cu_state.state);
-          has_action = 1;
-        } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
-          sh.d.lat = cmd.u.manualpos.lat;
-          sh.d.lon = cmd.u.manualpos.lon;
-          sh.d.alt = cmd.u.manualpos.alt;
-          sh.d.heading = cmd.u.manualpos.heading;
-          sh.d.has_manualpos = 1;
-        } else if (cmd.cmd_id == STC_CMD_POSMODE) {
-          sh.d.posmode = cmd.u.posmode.v;
-        } else if (cmd.cmd_id == STC_CMD_TURRET) {
-          const int axis = sh.d.turret_az_axis;
-          if (axis >= 0 && axis < (int)STC_AXIS_COUNT) {
-            if (cmd.u.turret.motion_type == STC_MOTION_SPEED) {
-              double speeds[STC_AXIS_COUNT] = {0};
-              speeds[axis] = (double)cmd.u.turret.az;
-              sh.d.stream[axis].desired_speed_deg_s = speeds[axis];
-              sh.d.stream[axis].last_cmd_ms = mono_ms();
-              sh.d.stream[axis].enabled = 1;
-              stc_action_make_stream_speed(&act, (1u << axis), speeds);
-              has_action = 1;
-            } else if (cmd.u.turret.motion_type == STC_MOTION_ABSOLUTE || cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
+        if (cmd.payload_decoded) {
+          if (cmd.cmd_id == STC_CMD_CU_STATE) {
+            sh.d.cu_state = cmd.u.cu_state.state;
+            stc_action_make_set_state(&act, (int8_t)cmd.u.cu_state.state);
+            has_action = 1;
+          } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
+            sh.d.lat = cmd.u.manualpos.lat;
+            sh.d.lon = cmd.u.manualpos.lon;
+            sh.d.alt = cmd.u.manualpos.alt;
+            sh.d.heading = cmd.u.manualpos.heading;
+            sh.d.has_manualpos = 1;
+          } else if (cmd.cmd_id == STC_CMD_POSMODE) {
+            sh.d.posmode = cmd.u.posmode.v;
+          } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
+            if (sh.d.cu_state != 3) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            } else {
+              uint32_t axes_mask = 0;
               double targets[STC_AXIS_COUNT] = {0};
-              double target = (double)cmd.u.turret.az;
-              if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
-                double cur_deg = axis_counts_to_deg(&sh.d.cfg[axis], sh.d.telem[axis].pos_raw);
-                target = cur_deg + target;
+              double speeds[STC_AXIS_COUNT] = {0};
+              const uint64_t now_cmd = mono_ms();
+
+              if (cmd.cmd_id == STC_CMD_TURRET) {
+                const int az = sh.d.turret_az_axis;
+                const int el = sh.d.turret_el_axis;
+                axes_mask = turret_axes_mask(&sh.d);
+
+                if (cmd.u.turret.motion_type == STC_MOTION_SPEED) {
+                  if (az >= 0 && az < (int)STC_AXIS_COUNT) {
+                    speeds[az] = (double)cmd.u.turret.az;
+                    bool target_limited = false, speed_limited = false;
+                    stc_clamp_axis_cmd(&sh.d.cfg[az], NULL, &speeds[az], &target_limited, &speed_limited);
+                    mark_axis_saturated(&sh.d, az, speed_limited);
+                  }
+                  if (el >= 0 && el < (int)STC_AXIS_COUNT) {
+                    speeds[el] = (double)cmd.u.turret.el;
+                    bool target_limited = false, speed_limited = false;
+                    stc_clamp_axis_cmd(&sh.d.cfg[el], NULL, &speeds[el], &target_limited, &speed_limited);
+                    mark_axis_saturated(&sh.d, el, speed_limited);
+                  }
+                } else {
+                  if (az >= 0 && az < (int)STC_AXIS_COUNT) {
+                    targets[az] = (double)cmd.u.turret.az;
+                    if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
+                      targets[az] += axis_counts_to_deg(&sh.d.cfg[az], sh.d.telem[az].pos_raw);
+                    }
+                    bool target_limited = false, speed_limited = false;
+                    stc_clamp_axis_cmd(&sh.d.cfg[az], &targets[az], NULL, &target_limited, &speed_limited);
+                    mark_axis_saturated(&sh.d, az, target_limited);
+                  }
+                  if (el >= 0 && el < (int)STC_AXIS_COUNT) {
+                    targets[el] = (double)cmd.u.turret.el;
+                    if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
+                      targets[el] += axis_counts_to_deg(&sh.d.cfg[el], sh.d.telem[el].pos_raw);
+                    }
+                    bool target_limited = false, speed_limited = false;
+                    stc_clamp_axis_cmd(&sh.d.cfg[el], &targets[el], NULL, &target_limited, &speed_limited);
+                    mark_axis_saturated(&sh.d, el, target_limited);
+                  }
+                }
+              } else if (cmd.cmd_id == STC_CMD_SUT) {
+                axes_mask = sut_axes_mask(&sh.d, cmd.u.sut.id);
+                for (int i = 0; i < sh.d.sut_count; i++) {
+                  if (cmd.u.sut.id != 0xFF && cmd.u.sut.id != (uint8_t)(i + 1)) continue;
+                  int az = sh.d.sut_az_axis[i];
+                  int el = sh.d.sut_el_axis[i];
+                  if (az >= 0 && az < (int)STC_AXIS_COUNT) {
+                    if (cmd.u.sut.motion_type == STC_MOTION_SPEED) {
+                      speeds[az] = (double)cmd.u.sut.az;
+                      bool target_limited = false, speed_limited = false;
+                      stc_clamp_axis_cmd(&sh.d.cfg[az], NULL, &speeds[az], &target_limited, &speed_limited);
+                      mark_axis_saturated(&sh.d, az, speed_limited);
+                    } else {
+                      targets[az] = (double)cmd.u.sut.az;
+                      if (cmd.u.sut.motion_type == STC_MOTION_RELATIVE) {
+                        targets[az] += axis_counts_to_deg(&sh.d.cfg[az], sh.d.telem[az].pos_raw);
+                      }
+                      bool target_limited = false, speed_limited = false;
+                      stc_clamp_axis_cmd(&sh.d.cfg[az], &targets[az], NULL, &target_limited, &speed_limited);
+                      mark_axis_saturated(&sh.d, az, target_limited);
+                    }
+                  }
+                  if (el >= 0 && el < (int)STC_AXIS_COUNT) {
+                    if (cmd.u.sut.motion_type == STC_MOTION_SPEED) {
+                      speeds[el] = (double)cmd.u.sut.el;
+                      bool target_limited = false, speed_limited = false;
+                      stc_clamp_axis_cmd(&sh.d.cfg[el], NULL, &speeds[el], &target_limited, &speed_limited);
+                      mark_axis_saturated(&sh.d, el, speed_limited);
+                    } else {
+                      targets[el] = (double)cmd.u.sut.el;
+                      if (cmd.u.sut.motion_type == STC_MOTION_RELATIVE) {
+                        targets[el] += axis_counts_to_deg(&sh.d.cfg[el], sh.d.telem[el].pos_raw);
+                      }
+                      bool target_limited = false, speed_limited = false;
+                      stc_clamp_axis_cmd(&sh.d.cfg[el], &targets[el], NULL, &target_limited, &speed_limited);
+                      mark_axis_saturated(&sh.d, el, target_limited);
+                    }
+                  }
+                }
+              } else if (cmd.cmd_id == STC_CMD_MIRROR) {
+                axes_mask = mirror_axes_mask(&sh.d, cmd.u.mirror.mirror_id);
+                for (int i = 0; i < sh.d.mirror_count; i++) {
+                  if (cmd.u.mirror.mirror_id != 0xFF && cmd.u.mirror.mirror_id != (uint8_t)(i + 1)) continue;
+                  int axis = sh.d.mirror_axis[i];
+                  if (axis < 0 || axis >= (int)STC_AXIS_COUNT) continue;
+                  if (cmd.u.mirror.motion_type == STC_MOTION_SPEED) {
+                    speeds[axis] = (double)cmd.u.mirror.elevation;
+                    bool target_limited = false, speed_limited = false;
+                    stc_clamp_axis_cmd(&sh.d.cfg[axis], NULL, &speeds[axis], &target_limited, &speed_limited);
+                    mark_axis_saturated(&sh.d, axis, speed_limited);
+                  } else {
+                    targets[axis] = (double)cmd.u.mirror.elevation;
+                    if (cmd.u.mirror.motion_type == STC_MOTION_RELATIVE) {
+                      targets[axis] += axis_counts_to_deg(&sh.d.cfg[axis], sh.d.telem[axis].pos_raw);
+                    }
+                    bool target_limited = false, speed_limited = false;
+                    stc_clamp_axis_cmd(&sh.d.cfg[axis], &targets[axis], NULL, &target_limited, &speed_limited);
+                    mark_axis_saturated(&sh.d, axis, target_limited);
+                  }
+                }
               }
-              targets[axis] = target;
-              stc_action_make_pp_move(&act, (1u << axis), targets);
-              has_action = 1;
+
+              if (axes_mask == 0) {
+                v = STC_ERR_VALUE_OUT_OF_RANGE;
+              } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
+                if ((cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_SPEED) ||
+                    (cmd.cmd_id == STC_CMD_SUT && cmd.u.sut.motion_type == STC_MOTION_SPEED) ||
+                    (cmd.cmd_id == STC_CMD_MIRROR && cmd.u.mirror.motion_type == STC_MOTION_SPEED)) {
+                  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+                    if ((axes_mask & (1u << axis)) == 0) continue;
+                    sh.d.stream[axis].desired_speed_deg_s = speeds[axis];
+                    sh.d.stream[axis].last_cmd_ms = now_cmd;
+                    sh.d.stream[axis].enabled = 1;
+                  }
+                  stc_action_make_stream_speed(&act, axes_mask, speeds);
+                } else {
+                  stc_action_make_pp_move(&act, axes_mask, targets);
+                }
+                has_action = 1;
+              }
             }
+          }
+        } else {
+          if (cmd.cmd_id == STC_CMD_RESET) {
+            stc_action_make_simple(&act, ACTION_RESET, 0u);
+            has_action = 1;
+          } else if (cmd.cmd_id == STC_CMD_FACTORY) {
+            stc_action_make_simple(&act, ACTION_FACTORY, 0u);
+            has_action = 1;
+          } else if (cmd.cmd_id == STC_CMD_SHUTDOWN) {
+            stc_action_make_simple(&act, ACTION_SHUTDOWN, 0u);
+            has_action = 1;
+          } else if (cmd.cmd_id == STC_CMD_STORAGE) {
+            stc_action_make_simple(&act, ACTION_ENTER_STORE, 0u);
+            has_action = 1;
           }
         }
         pthread_mutex_unlock(&sh.mtx);
-      } else if (v == STC_ERR_NO_ERROR) {
-        if (cmd.cmd_id == STC_CMD_RESET) {
-          stc_action_make_simple(&act, ACTION_RESET, 0u);
-          has_action = 1;
-        } else if (cmd.cmd_id == STC_CMD_FACTORY) {
-          stc_action_make_simple(&act, ACTION_FACTORY, 0u);
-          has_action = 1;
-        } else if (cmd.cmd_id == STC_CMD_SHUTDOWN) {
-          stc_action_make_simple(&act, ACTION_SHUTDOWN, 0u);
-          has_action = 1;
-        } else if (cmd.cmd_id == STC_CMD_STORAGE) {
-          stc_action_make_simple(&act, ACTION_ENTER_STORE, 0u);
-          has_action = 1;
-        }
       }
 
       if (v == STC_ERR_NO_ERROR && has_action) {
@@ -1271,6 +1430,19 @@ int main(int argc, char** argv) {
       if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_SW_VERSION) {
         rsp.payload_size = (uint16_t)strlen(STC_SW_VERSION);
         memcpy(rsp.payload, STC_SW_VERSION, rsp.payload_size);
+      } else if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_WORK_TIME) {
+        uint32_t uptime = 0;
+        pthread_mutex_lock(&sh.mtx);
+        uptime = (uint32_t)((mono_ms() - sh.d.boot_ms) / 1000ULL);
+        pthread_mutex_unlock(&sh.mtx);
+        memcpy(rsp.payload, &uptime, sizeof(uptime));
+        rsp.payload_size = (uint16_t)sizeof(uptime);
+      } else if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_HW_INFO) {
+        char hw_info[96];
+        snprintf(hw_info, sizeof(hw_info), "Steering Turret Controller v%s", STC_SW_VERSION);
+        size_t n = strnlen(hw_info, sizeof(hw_info) - 1);
+        memcpy(rsp.payload, hw_info, n + 1);
+        rsp.payload_size = (uint16_t)(n + 1);
       } else {
         rsp.payload_size = 0;
       }

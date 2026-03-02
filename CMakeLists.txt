@@ -13,6 +13,7 @@ add_executable(stc_server
   dev/src/stc_config.c
   dev/src/pd4c.c
   dev/src/stc_actions.c
+  dev/src/stc_limits.c
 )
 
 add_executable(icd_tx_tcp
@@ -38,6 +39,7 @@ target_link_libraries(stc_server PRIVATE pthread m)
 add_executable(test_actions
   test/test_actions.c
   dev/src/stc_actions.c
+  dev/src/stc_limits.c
 )
 
 target_include_directories(test_actions PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
