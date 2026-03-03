@@ -75,6 +75,15 @@ target_compile_options(test_icd_codec PRIVATE -Wall -Wextra)
 target_include_directories(stc_diag_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_diag_test PRIVATE -Wall -Wextra)
 
+
+add_executable(stc_config_test
+  dev/tests/stc_config_test.c
+  dev/src/stc_config.c
+  dev/src/stc_log.c
+)
+
+target_include_directories(stc_config_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(stc_config_test PRIVATE -Wall -Wextra)
 add_executable(test_can_worker_concurrency
   dev/tests/test_can_worker_concurrency.c
   dev/src/stc_log.c

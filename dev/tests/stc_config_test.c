@@ -1,0 +1,150 @@
+#include "stc_config.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static void die(const char* msg) {
+  fprintf(stderr, "FAIL: %s\n", msg);
+  exit(1);
+}
+
+static void expect_true(int cond, const char* msg) {
+  if (!cond) die(msg);
+}
+
+static void write_tmp_config(const char* contents, char out_path[], size_t out_path_size) {
+  static unsigned counter = 0;
+  snprintf(out_path, out_path_size, "/tmp/stc_cfg_test_%ld_%u.ini", (long)getpid(), counter++);
+
+  FILE* f = fopen(out_path, "w");
+  if (!f) die("fopen failed");
+
+  if (fputs(contents, f) == EOF) {
+    fclose(f);
+    die("fputs failed");
+  }
+
+  if (fclose(f) != 0) die("fclose failed");
+}
+
+static void test_reject_typoed_network_key(void) {
+  const char* cfg_text =
+      "[Network]\n"
+      "tcp_prt = 7000\n"
+      "mcast_ip = 239.255.10.2\n"
+      "mcast_tlmh_port = 6010\n"
+      "mcast_tlml_port = 6020\n"
+      "tlmh_interval_ms = 10\n"
+      "tlml_interval_ms = 100\n"
+      "\n"
+      "[Axis0]\n"
+      "node_id = 1\n"
+      "counts_per_rev = 4096\n"
+      "gear_ratio = 1\n"
+      "vel_is_rpm = 0\n"
+      "min_deg = -180\n"
+      "max_deg = 180\n"
+      "max_speed_deg_s = 90\n"
+      "storage_deg = 0\n"
+      "pp_profile_vel = 500\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
+      "[Turret]\n"
+      "az_axis = 0\n"
+      "el_axis = 0\n"
+      "\n"
+      "[diagnostics]\n"
+      "axis[0].category = 0x06\n"
+      "axis[0].subcategory = 0x3F\n"
+      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+
+  char path[64];
+  stc_config_t cfg;
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(!load_config(path, &cfg), "expected typoed [Network] key to fail");
+  unlink(path);
+}
+
+static void test_reject_typoed_section_name(void) {
+  const char* cfg_text =
+      "[Netwrok]\n"
+      "tcp_port = 7000\n"
+      "\n"
+      "[Axis0]\n"
+      "node_id = 1\n"
+      "counts_per_rev = 4096\n"
+      "gear_ratio = 1\n"
+      "vel_is_rpm = 0\n"
+      "min_deg = -180\n"
+      "max_deg = 180\n"
+      "max_speed_deg_s = 90\n"
+      "storage_deg = 0\n"
+      "pp_profile_vel = 500\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
+      "[Turret]\n"
+      "az_axis = 0\n"
+      "el_axis = 0\n"
+      "\n"
+      "[diagnostics]\n"
+      "axis[0].category = 0x06\n"
+      "axis[0].subcategory = 0x3F\n"
+      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+
+  char path[64];
+  stc_config_t cfg;
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(!load_config(path, &cfg), "expected typoed section name to fail");
+  unlink(path);
+}
+
+static void test_accept_valid_config(void) {
+  const char* cfg_text =
+      "[Network]\n"
+      "tcp_port = 7000\n"
+      "mcast_ip = 239.255.10.2\n"
+      "mcast_tlmh_port = 6010\n"
+      "mcast_tlml_port = 6020\n"
+      "tlmh_interval_ms = 10\n"
+      "tlml_interval_ms = 100\n"
+      "\n"
+      "[Axis0]\n"
+      "node_id = 1\n"
+      "counts_per_rev = 4096\n"
+      "gear_ratio = 1\n"
+      "vel_is_rpm = 0\n"
+      "min_deg = -180\n"
+      "max_deg = 180\n"
+      "max_speed_deg_s = 90\n"
+      "storage_deg = 0\n"
+      "pp_profile_vel = 500\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
+      "[Turret]\n"
+      "az_axis = 0\n"
+      "el_axis = 0\n"
+      "\n"
+      "[diagnostics]\n"
+      "axis[0].category = 0x06\n"
+      "axis[0].subcategory = 0x3F\n"
+      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+
+  char path[64];
+  stc_config_t cfg;
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(load_config(path, &cfg), "expected valid config to pass");
+  unlink(path);
+}
+
+int main(void) {
+  test_reject_typoed_network_key();
+  test_reject_typoed_section_name();
+  test_accept_valid_config();
+  fprintf(stderr, "PASS: stc_config_test\n");
+  return 0;
+}
