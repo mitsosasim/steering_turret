@@ -27,6 +27,7 @@
 #include "stc_limits.h"
 #include "stc_state.h"
 #include "stc_faults.h"
+#include "stc_log.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -324,61 +325,61 @@ static uint32_t mirror_axes_mask(const shared_data_t* sh, uint8_t id) {
 }
 
 static void print_cmd(const stc_icd_cmd_t* c) {
-  printf("CMD: ver=%u ctrl=%u cmd_id=0x%04X seq=%u ts=%llu payload=%u\n",
+  STC_LOG_DEBUG("CMD: ver=%u ctrl=%u cmd_id=0x%04X seq=%u ts=%llu payload=%u",
          c->version, c->controller_id, c->cmd_id, c->seq,
          (unsigned long long)c->timestamp_ms, c->payload_size);
 
   if (!c->payload_decoded) {
-    if (c->payload_size) printf("  payload: (raw %u bytes)\n", c->payload_size);
+    if (c->payload_size) STC_LOG_DEBUG("  payload: (raw %u bytes)", c->payload_size);
     return;
   }
   switch (c->cmd_id) {
     case STC_CMD_CU_STATE:
-      printf("  CU_STATE=%u\n", c->u.cu_state.state);
+      STC_LOG_DEBUG("  CU_STATE=%u", c->u.cu_state.state);
       break;
     case STC_CMD_SELFLEV:
-      printf("  SELFLEV start_stop=%u\n", c->u.selflev.v);
+      STC_LOG_DEBUG("  SELFLEV start_stop=%u", c->u.selflev.v);
       break;
     case STC_CMD_IBIT:
-      printf("  IBIT start_stop=%u\n", c->u.ibit.v);
+      STC_LOG_DEBUG("  IBIT start_stop=%u", c->u.ibit.v);
       break;
     case STC_CMD_STORAGE:
-      printf("  STORAGE\n");
+      STC_LOG_DEBUG("  STORAGE");
       break;
     case STC_CMD_LASER:
-      printf("  LASER id=%u on_off=%u\n", c->u.laser.id, c->u.laser.on_off);
+      STC_LOG_DEBUG("  LASER id=%u on_off=%u", c->u.laser.id, c->u.laser.on_off);
       break;
     case STC_CMD_TURRET:
-      printf("  TURRET motion=%u az=%f el=%f\n", c->u.turret.motion_type, c->u.turret.az, c->u.turret.el);
+      STC_LOG_DEBUG("  TURRET motion=%u az=%f el=%f", c->u.turret.motion_type, c->u.turret.az, c->u.turret.el);
       break;
     case STC_CMD_MIRROR:
-      printf("  MIRROR id=%u motion=%u elev=%f\n", c->u.mirror.mirror_id, c->u.mirror.motion_type, c->u.mirror.elevation);
+      STC_LOG_DEBUG("  MIRROR id=%u motion=%u elev=%f", c->u.mirror.mirror_id, c->u.mirror.motion_type, c->u.mirror.elevation);
       break;
     case STC_CMD_SUT:
-      printf("  SUT id=%u motion=%u az=%f el=%f\n", c->u.sut.id, c->u.sut.motion_type, c->u.sut.az, c->u.sut.el);
+      STC_LOG_DEBUG("  SUT id=%u motion=%u az=%f el=%f", c->u.sut.id, c->u.sut.motion_type, c->u.sut.az, c->u.sut.el);
       break;
     case STC_CMD_MANUALPOS:
-      printf("  MANUALPOS lat=%lf lon=%lf alt=%lf heading=%lf (encoded_as_double=%d)\n",
+      STC_LOG_DEBUG("  MANUALPOS lat=%lf lon=%lf alt=%lf heading=%lf (encoded_as_double=%d)",
              c->u.manualpos.lat, c->u.manualpos.lon, c->u.manualpos.alt, c->u.manualpos.heading,
              c->u.manualpos.encoded_as_double);
       break;
     case STC_CMD_POSMODE:
-      printf("  POSMODE mode=%u\n", c->u.posmode.v);
+      STC_LOG_DEBUG("  POSMODE mode=%u", c->u.posmode.v);
       break;
     case STC_CMD_REQ_SW_VERSION:
-      printf("  REQ_SW_VERSION\n");
+      STC_LOG_DEBUG("  REQ_SW_VERSION");
       break;
     case STC_CMD_RESET:
-      printf("  RESET\n");
+      STC_LOG_DEBUG("  RESET");
       break;
     case STC_CMD_FACTORY:
-      printf("  FACTORY\n");
+      STC_LOG_DEBUG("  FACTORY");
       break;
     case STC_CMD_SHUTDOWN:
-      printf("  SHUTDOWN\n");
+      STC_LOG_DEBUG("  SHUTDOWN");
       break;
     default:
-      printf("  (decoded)\n");
+      STC_LOG_DEBUG("  (decoded)");
       break;
   }
 }
@@ -470,9 +471,7 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   const uint16_t pv = pp_profile_vel;
   const double cur_deg = axis_counts_to_deg(&sh->d.cfg[axis], cur_pos_raw);
 
-  fprintf(stderr,
-          "PP move request: axis=%zu requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f "
-          "counts_per_rev=%.3f gear_ratio=%.3f pp_profile_vel=%u\n",
+  STC_LOG_DEBUG("PP move request: axis=%zu requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f counts_per_rev=%.3f gear_ratio=%.3f pp_profile_vel=%u",
           axis,
           target_deg,
           target_counts,
@@ -499,11 +498,10 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
     int rc_home_fast = pd4c_sdo_read_i32(ctx, 0x6099, 0x01, &home_speed_fast);
     int rc_home_slow = pd4c_sdo_read_i32(ctx, 0x6099, 0x02, &home_speed_slow);
 
-    fprintf(stderr,
-            "PP pre-move SDO diag: 6061:0 mode_display rc=%d val=%u | "
-            "607D:1 min_pos_limit rc=%d val=%d | 607D:2 max_pos_limit rc=%d val=%d | "
-            "6098:0 homing_method rc=%d val=%u | 607C:0 home_offset rc=%d val=%d | "
-            "6099:1 home_speed_fast rc=%d val=%d | 6099:2 home_speed_slow rc=%d val=%d\n",
+    STC_LOG_DEBUG("PP pre-move SDO diag: 6061:0 mode_display rc=%d val=%u | "
+                  "607D:1 min_pos_limit rc=%d val=%d | 607D:2 max_pos_limit rc=%d val=%d | "
+                  "6098:0 homing_method rc=%d val=%u | 607C:0 home_offset rc=%d val=%d | "
+                  "6099:1 home_speed_fast rc=%d val=%d | 6099:2 home_speed_slow rc=%d val=%d",
             rc_mode,
             (unsigned)mode_disp,
             rc_min_lim,
@@ -555,9 +553,9 @@ static void* can_worker_thread(void* arg) {
       (void)pd4c_nmt_start(&pd_ctx[axis]);
       axis_connected[axis] = 1;
       any_connected = 1;
-      fprintf(stderr, "CAN axis %zu connected on %s (node=%u)\n", axis, a->can_if, (unsigned)node_id);
+      STC_LOG_INFO("CAN axis %zu connected on %s (node=%u)", axis, a->can_if, (unsigned)node_id);
     } else {
-      fprintf(stderr, "pd4c_open(%s,node=%u) axis=%zu failed: %s\n",
+      STC_LOG_WARN("pd4c_open(%s,node=%u) axis=%zu failed: %s",
               a->can_if,
               (unsigned)node_id,
               axis,
@@ -653,8 +651,7 @@ static void* can_worker_thread(void* arg) {
             pthread_mutex_unlock(&a->sh->mtx);
 
             int rc = motor_do_pp_move(&pd_ctx[axis], a->sh, axis, act.u.target_deg[axis], &axis_mode[axis], &axis_enabled[axis]);
-            fprintf(stderr,
-                    "PP_MOVE axis=%zu pd4c_pp_move=%d latest_statusword=0x%04X\n",
+            STC_LOG_DEBUG("PP_MOVE axis=%zu pd4c_pp_move=%d latest_statusword=0x%04X",
                     axis,
                     rc,
                     pd4c_telem(&pd_ctx[axis])->statusword);
@@ -953,8 +950,7 @@ static void* tlml_tx_thread(void* arg) {
 /* ----------------------------- TCP server loop ----------------------------- */
 
 static void usage(const char* p) {
-  fprintf(stderr,
-          "Usage: %s [--tcp-port 7000] [--can can0] [--node 1]\n"
+  STC_LOG_ERROR("Usage: %s [--tcp-port 7000] [--can can0] [--node 1]\n"
           "          [--config dev/config/stc_default.ini]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
@@ -1007,6 +1003,8 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
 }
 
 int main(int argc, char** argv) {
+  stc_log_init("stc.log", STC_LOG_LEVEL_DEBUG);
+
   runtime_net_t net = {
     .can_if = "can0",
     .node_id = 1,
@@ -1138,7 +1136,7 @@ int main(int argc, char** argv) {
 
   if (config_path) {
     if (!load_config(config_path, &parsed_cfg)) {
-      fprintf(stderr, "Failed to load config file: %s\n", config_path);
+      STC_LOG_ERROR("Failed to load config file: %s", config_path);
       return 1;
     }
 
@@ -1194,7 +1192,7 @@ int main(int argc, char** argv) {
   int udp_h = open_udp_tx();
   int udp_l = open_udp_tx();
   if (udp_h < 0 || udp_l < 0) {
-    perror("udp socket");
+    STC_LOG_ERROR("udp socket error: %s", strerror(errno));
     return 1;
   }
 
@@ -1207,7 +1205,7 @@ int main(int argc, char** argv) {
   // TCP server
   int srv = socket(AF_INET, SOCK_STREAM, 0);
   if (srv < 0) {
-    perror("socket");
+    STC_LOG_ERROR("socket error: %s", strerror(errno));
     return 1;
   }
   int yes = 1;
@@ -1219,17 +1217,17 @@ int main(int argc, char** argv) {
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_port = htons((uint16_t)net.tcp_port);
   if (bind(srv, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    perror("bind");
+    STC_LOG_ERROR("bind error: %s", strerror(errno));
     return 1;
   }
   if (listen(srv, 4) < 0) {
-    perror("listen");
+    STC_LOG_ERROR("listen error: %s", strerror(errno));
     return 1;
   }
 
-  printf("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)\n", net.can_if);
-  printf("STC server listening on TCP port %d\n", net.tcp_port);
-  printf("UDP multicast: TLMH %s:%d @%dHz | TLML %s:%d @%dHz\n", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
+  STC_LOG_INFO("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)", net.can_if);
+  STC_LOG_INFO("STC server listening on TCP port %d", net.tcp_port);
+  STC_LOG_INFO("UDP multicast: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
 
   while (!g_stop) {
     struct sockaddr_in cli;
@@ -1237,23 +1235,23 @@ int main(int argc, char** argv) {
     int cfd = accept(srv, (struct sockaddr*)&cli, &clen);
     if (cfd < 0) {
       if (errno == EINTR) continue;
-      perror("accept");
+      STC_LOG_WARN("accept error: %s", strerror(errno));
       break;
     }
 
     char ipbuf[64];
     inet_ntop(AF_INET, &cli.sin_addr, ipbuf, sizeof(ipbuf));
-    printf("Client connected: %s:%d\n", ipbuf, ntohs(cli.sin_port));
+    STC_LOG_INFO("Client connected: %s:%d", ipbuf, ntohs(cli.sin_port));
 
     while (!g_stop) {
       uint8_t hdr[20];
       int rr = recv_exact(cfd, hdr, sizeof(hdr));
       if (rr == 0) {
-        printf("Client closed\n");
+        STC_LOG_INFO("Client closed");
         break;
       }
       if (rr < 0) {
-        perror("recv header");
+        STC_LOG_WARN("recv header error: %s", strerror(errno));
         break;
       }
 
@@ -1290,7 +1288,7 @@ int main(int argc, char** argv) {
       if (payload_size > 0) {
         rr = recv_exact(cfd, buf + 20, payload_size);
         if (rr <= 0) {
-          perror("recv payload");
+          STC_LOG_WARN("recv payload error: %s", strerror(errno));
           break;
         }
       }
@@ -1575,11 +1573,11 @@ int main(int argc, char** argv) {
       uint8_t out[1024];
       size_t out_len = 0;
       if (stc_icd_rsp_pack(&cfg, &rsp, out, sizeof(out), &out_len) != STC_ICD_OK) {
-        fprintf(stderr, "rsp_pack failed\n");
+        STC_LOG_ERROR("rsp_pack failed");
         break;
       }
       if (send_all(cfd, out, out_len) != 0) {
-        perror("send rsp");
+        STC_LOG_WARN("send rsp error: %s", strerror(errno));
         break;
       }
     }
@@ -1596,5 +1594,6 @@ int main(int argc, char** argv) {
 
   close(udp_h);
   close(udp_l);
+  stc_log_close();
   return 0;
 }

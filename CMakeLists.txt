@@ -8,6 +8,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 add_executable(stc_server
   dev/src/stc_server.c
+  dev/src/stc_log.c
   dev/src/stc_icd.c
   dev/src/stc_model.c
   dev/src/stc_config.c
@@ -40,7 +41,7 @@ target_compile_options(tlm_rx_udp PRIVATE -Wall -Wextra)
 target_link_libraries(stc_server PRIVATE pthread m)
 
 add_executable(test_actions
-  test/test_actions.c
+  dev/tests/test_actions.c
   dev/src/stc_actions.c
   dev/src/stc_limits.c
 )
@@ -49,7 +50,7 @@ target_include_directories(test_actions PRIVATE ${PROJECT_SOURCE_DIR}/dev/includ
 target_compile_options(test_actions PRIVATE -Wall -Wextra)
 
 add_executable(stc_state_test
-  test/stc_state_test.c
+  dev/tests/stc_state_test.c
   dev/src/stc_state.c
   dev/src/stc_faults.c
   dev/src/stc_diag.c
@@ -59,9 +60,17 @@ target_include_directories(stc_state_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/incl
 target_compile_options(stc_state_test PRIVATE -Wall -Wextra)
 
 add_executable(stc_diag_test
-  test/stc_diag_test.c
+  dev/tests/test_diag_codes.c
   dev/src/stc_diag.c
 )
+
+add_executable(test_icd_codec
+  dev/tests/test_icd_codec.c
+  dev/src/stc_icd.c
+)
+
+target_include_directories(test_icd_codec PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_icd_codec PRIVATE -Wall -Wextra)
 
 target_include_directories(stc_diag_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_diag_test PRIVATE -Wall -Wextra)

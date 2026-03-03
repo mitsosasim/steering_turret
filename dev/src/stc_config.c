@@ -1,8 +1,10 @@
 #include "stc_config.h"
+#include "stc_log.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 
 static void trim_inplace(char* s) {
@@ -118,7 +120,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
   FILE* f = fopen(path, "r");
   if (!f) {
-    perror(path);
+    STC_LOG_ERROR("%s: %s", path, strerror(errno));
     return false;
   }
 
@@ -147,7 +149,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
     if (line[0] == '[') {
       char* close = strchr(line, ']');
       if (!close) {
-        fprintf(stderr, "%s:%d: malformed section header\n", path, line_no);
+        STC_LOG_ERROR("%s:%d: malformed section header", path, line_no);
         fclose(f);
         return false;
       }
@@ -159,7 +161,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
     char* eq = strchr(line, '=');
     if (!eq) {
-      fprintf(stderr, "%s:%d: expected key=value\n", path, line_no);
+      STC_LOG_ERROR("%s:%d: expected key=value", path, line_no);
       fclose(f);
       return false;
     }
@@ -275,26 +277,26 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
   cfg->num_axes = max_axis_seen + 1;
   if (cfg->num_axes <= 0) {
-    fprintf(stderr, "%s: no [AxisN] sections were defined\n", path);
+    STC_LOG_ERROR("%s: no [AxisN] sections were defined", path);
     return false;
   }
 
   if (cfg->turret_az_axis < 0 || cfg->turret_az_axis >= cfg->num_axes) {
-    fprintf(stderr, "%s: [Turret].az_axis is missing or out of range\n", path);
+    STC_LOG_ERROR("%s: [Turret].az_axis is missing or out of range", path);
     return false;
   }
   if (cfg->turret_el_axis >= cfg->num_axes) {
-    fprintf(stderr, "%s: [Turret].el_axis out of range\n", path);
+    STC_LOG_ERROR("%s: [Turret].el_axis out of range", path);
     return false;
   }
 
   if (!seen_motor_status_map) {
-    fprintf(stderr, "%s: missing [diagnostics].motor_status_map\n", path);
+    STC_LOG_ERROR("%s: missing [diagnostics].motor_status_map", path);
     return false;
   }
   for (int i = 0; i < cfg->num_axes; i++) {
     if (!seen_diag_cat[i] || !seen_diag_subcat[i]) {
-      fprintf(stderr, "%s: missing diagnostic category/subcategory for axis %d\n", path, i);
+      STC_LOG_ERROR("%s: missing diagnostic category/subcategory for axis %d", path, i);
       return false;
     }
   }
@@ -302,7 +304,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
   return true;
 
 parse_error:
-  fprintf(stderr, "%s:%d: invalid value for %s\n", path, line_no, parse_key);
+  STC_LOG_ERROR("%s:%d: invalid value for %s", path, line_no, parse_key);
   fclose(f);
   return false;
 }
