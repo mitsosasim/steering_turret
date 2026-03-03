@@ -811,17 +811,37 @@ typedef struct {
   int udp_fd;
   const char* ip;
   int port;
-  int rate_hz;
+  long period_ns;
   shared_t* sh;
   stc_icd_cfg_t cfg;
   uint8_t sender_id;
 } tlm_tx_arg_t;
 
+static long telemetry_interval_ms_to_period_ns(int interval_ms, long default_period_ns) {
+  if (interval_ms <= 0) return default_period_ns;
+
+  long period_ns = (long)interval_ms * 1000000L;
+  if (period_ns <= 0) return default_period_ns;
+  return period_ns;
+}
+
+static int telemetry_interval_ms_to_rate_hz(int interval_ms, int default_hz) {
+  if (interval_ms <= 0) return default_hz;
+
+  int hz = (int)lround(1000.0 / (double)interval_ms);
+  return (hz < 1) ? 1 : hz;
+}
+
+static long telemetry_rate_hz_to_period_ns(int rate_hz, long default_period_ns) {
+  if (rate_hz <= 0) return default_period_ns;
+  return 1000000000L / rate_hz;
+}
+
 static void* tlmh_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
-  const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 10000000L;
+  const long period_ns = a->period_ns;
 
   while (!atomic_load(&g_stop)) {
     stc_tlmh_t m;
@@ -857,7 +877,7 @@ static void* tlml_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
-  const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 100000000L;
+  const long period_ns = a->period_ns;
 
   while (!atomic_load(&g_stop)) {
     stc_tlml_t m;
@@ -978,9 +998,11 @@ typedef struct {
   const char* tlmh_ip;
   int tlmh_port;
   int tlmh_hz;
+  long tlmh_period_ns;
   const char* tlml_ip;
   int tlml_port;
   int tlml_hz;
+  long tlml_period_ns;
 } runtime_net_t;
 
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
@@ -1038,9 +1060,11 @@ int main(int argc, char** argv) {
     .tlmh_ip = "239.255.10.2",
     .tlmh_port = 6010,
     .tlmh_hz = 100,
+    .tlmh_period_ns = 10000000L,
     .tlml_ip = "239.255.10.3",
     .tlml_port = 6020,
     .tlml_hz = 10,
+    .tlml_period_ns = 100000000L,
   };
   const char* config_path = NULL;
   int legacy_cli_mode = 0;
@@ -1132,6 +1156,8 @@ int main(int argc, char** argv) {
     }
     else if (!strcmp(argv[i], "--tlmh-hz") && i + 1 < argc) {
       net.tlmh_hz = atoi(argv[++i]);
+      if (net.tlmh_hz < 1) net.tlmh_hz = 1;
+      net.tlmh_period_ns = telemetry_rate_hz_to_period_ns(net.tlmh_hz, 10000000L);
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--tlml-ip") && i + 1 < argc) {
@@ -1144,6 +1170,8 @@ int main(int argc, char** argv) {
     }
     else if (!strcmp(argv[i], "--tlml-hz") && i + 1 < argc) {
       net.tlml_hz = atoi(argv[++i]);
+      if (net.tlml_hz < 1) net.tlml_hz = 1;
+      net.tlml_period_ns = telemetry_rate_hz_to_period_ns(net.tlml_hz, 100000000L);
       legacy_cli_mode = 1;
     }
     else {
@@ -1174,8 +1202,10 @@ int main(int argc, char** argv) {
     net.tlml_ip = parsed_cfg.mcast_ip;
     net.tlmh_port = parsed_cfg.mcast_tlmh_port;
     net.tlml_port = parsed_cfg.mcast_tlml_port;
-    net.tlmh_hz = (parsed_cfg.tlmh_interval_ms > 0) ? (1000 / parsed_cfg.tlmh_interval_ms) : 100;
-    net.tlml_hz = (parsed_cfg.tlml_interval_ms > 0) ? (1000 / parsed_cfg.tlml_interval_ms) : 10;
+    net.tlmh_period_ns = telemetry_interval_ms_to_period_ns(parsed_cfg.tlmh_interval_ms, 10000000L);
+    net.tlml_period_ns = telemetry_interval_ms_to_period_ns(parsed_cfg.tlml_interval_ms, 100000000L);
+    net.tlmh_hz = telemetry_interval_ms_to_rate_hz(parsed_cfg.tlmh_interval_ms, 100);
+    net.tlml_hz = telemetry_interval_ms_to_rate_hz(parsed_cfg.tlml_interval_ms, 10);
 
     apply_config_to_shared(&sh, &parsed_cfg);
   } else {
@@ -1232,8 +1262,8 @@ int main(int argc, char** argv) {
     goto cleanup;
   }
 
-  tlm_tx_arg_t harg = { .udp_fd = udp_h, .ip = net.tlmh_ip, .port = net.tlmh_port, .rate_hz = net.tlmh_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
-  tlm_tx_arg_t larg = { .udp_fd = udp_l, .ip = net.tlml_ip, .port = net.tlml_port, .rate_hz = net.tlml_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  tlm_tx_arg_t harg = { .udp_fd = udp_h, .ip = net.tlmh_ip, .port = net.tlmh_port, .period_ns = net.tlmh_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  tlm_tx_arg_t larg = { .udp_fd = udp_l, .ip = net.tlml_ip, .port = net.tlml_port, .period_ns = net.tlml_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
   if (pthread_create(&th_h, NULL, tlmh_tx_thread, &harg) != 0) {
     STC_LOG_ERROR("failed to create TLMH thread");
     exit_code = 1;
