@@ -1013,6 +1013,22 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
 }
 
 int main(int argc, char** argv) {
+  int exit_code = 0;
+  int threads_started = 0;
+  int can_thread_started = 0;
+  int tlmh_thread_started = 0;
+  int tlml_thread_started = 0;
+  int udp_h_open = 0;
+  int udp_l_open = 0;
+  int srv_open = 0;
+
+  pthread_t th_can = 0;
+  pthread_t th_h = 0;
+  pthread_t th_l = 0;
+  int udp_h = -1;
+  int udp_l = -1;
+  int srv = -1;
+
   stc_log_init("stc.log", STC_LOG_LEVEL_DEBUG);
 
   runtime_net_t net = {
@@ -1132,7 +1148,8 @@ int main(int argc, char** argv) {
     }
     else {
       usage(argv[0]);
-      return 2;
+      exit_code = 2;
+      goto cleanup;
     }
   }
 
@@ -1147,7 +1164,8 @@ int main(int argc, char** argv) {
   if (config_path) {
     if (!load_config(config_path, &parsed_cfg)) {
       STC_LOG_ERROR("Failed to load config file: %s", config_path);
-      return 1;
+      exit_code = 1;
+      goto cleanup;
     }
 
     net.node_id = parsed_cfg.axis_node_id[0];
@@ -1194,30 +1212,49 @@ int main(int argc, char** argv) {
   actionq_init(&q);
 
   // CAN worker thread
-  pthread_t th_can;
   can_worker_arg_t carg = { .can_if = net.can_if, .sh = &sh, .q = &q };
-  pthread_create(&th_can, NULL, can_worker_thread, &carg);
+  if (pthread_create(&th_can, NULL, can_worker_thread, &carg) != 0) {
+    STC_LOG_ERROR("failed to create CAN worker thread");
+    exit_code = 1;
+    goto cleanup;
+  }
+  can_thread_started = 1;
+  threads_started = 1;
 
   // UDP telemetry threads
-  int udp_h = open_udp_tx();
-  int udp_l = open_udp_tx();
+  udp_h = open_udp_tx();
+  if (udp_h >= 0) udp_h_open = 1;
+  udp_l = open_udp_tx();
+  if (udp_l >= 0) udp_l_open = 1;
   if (udp_h < 0 || udp_l < 0) {
     STC_LOG_ERROR("udp socket error: %s", strerror(errno));
-    return 1;
+    exit_code = 1;
+    goto cleanup;
   }
 
-  pthread_t th_h, th_l;
   tlm_tx_arg_t harg = { .udp_fd = udp_h, .ip = net.tlmh_ip, .port = net.tlmh_port, .rate_hz = net.tlmh_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
   tlm_tx_arg_t larg = { .udp_fd = udp_l, .ip = net.tlml_ip, .port = net.tlml_port, .rate_hz = net.tlml_hz, .sh = &sh, .cfg = cfg, .sender_id = 1 };
-  pthread_create(&th_h, NULL, tlmh_tx_thread, &harg);
-  pthread_create(&th_l, NULL, tlml_tx_thread, &larg);
+  if (pthread_create(&th_h, NULL, tlmh_tx_thread, &harg) != 0) {
+    STC_LOG_ERROR("failed to create TLMH thread");
+    exit_code = 1;
+    goto cleanup;
+  }
+  tlmh_thread_started = 1;
+  if (pthread_create(&th_l, NULL, tlml_tx_thread, &larg) != 0) {
+    STC_LOG_ERROR("failed to create TLML thread");
+    exit_code = 1;
+    goto cleanup;
+  }
+  tlml_thread_started = 1;
 
   // TCP server
-  int srv = socket(AF_INET, SOCK_STREAM, 0);
+  srv = socket(AF_INET, SOCK_STREAM, 0);
   if (srv < 0) {
     STC_LOG_ERROR("socket error: %s", strerror(errno));
-    return 1;
+    exit_code = 1;
+    goto cleanup;
   }
+  srv_open = 1;
   int yes = 1;
   setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
@@ -1228,11 +1265,13 @@ int main(int argc, char** argv) {
   addr.sin_port = htons((uint16_t)net.tcp_port);
   if (bind(srv, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     STC_LOG_ERROR("bind error: %s", strerror(errno));
-    return 1;
+    exit_code = 1;
+    goto cleanup;
   }
   if (listen(srv, 4) < 0) {
     STC_LOG_ERROR("listen error: %s", strerror(errno));
-    return 1;
+    exit_code = 1;
+    goto cleanup;
   }
 
   STC_LOG_INFO("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)", net.can_if);
@@ -1595,15 +1634,20 @@ int main(int argc, char** argv) {
     close(cfd);
   }
 
-  close(srv);
-  atomic_store(&g_stop, 1);
+cleanup:
+  if (threads_started) {
+    atomic_store(&g_stop, 1);
+  }
 
-  pthread_join(th_h, NULL);
-  pthread_join(th_l, NULL);
-  pthread_join(th_can, NULL);
+  if (srv_open) close(srv);
 
-  close(udp_h);
-  close(udp_l);
+  if (tlmh_thread_started) pthread_join(th_h, NULL);
+  if (tlml_thread_started) pthread_join(th_l, NULL);
+  if (can_thread_started) pthread_join(th_can, NULL);
+
+  if (udp_h_open) close(udp_h);
+  if (udp_l_open) close(udp_l);
+
   stc_log_close();
-  return 0;
+  return exit_code;
 }
