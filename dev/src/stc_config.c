@@ -126,6 +126,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
   char section[64] = "";
   char parse_key[128] = "";
+  const char* parse_error_reason = "invalid value";
   int max_axis_seen = -1;
   int seen_diag_cat[STC_AXIS_COUNT] = {0};
   int seen_diag_subcat[STC_AXIS_COUNT] = {0};
@@ -173,8 +174,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
     trim_inplace(value);
     strncpy(parse_key, key, sizeof(parse_key) - 1);
     parse_key[sizeof(parse_key) - 1] = '\0';
+    parse_error_reason = "invalid value";
 
     if (strcmp(section, "Network") == 0) {
+      bool recognized = true;
       if (strcmp(key, "tcp_port") == 0) {
         if (parse_int(value, &cfg->tcp_port) != 0) goto parse_error;
       } else if (strcmp(key, "mcast_ip") == 0) {
@@ -188,12 +191,19 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->tlmh_interval_ms) != 0) goto parse_error;
       } else if (strcmp(key, "tlml_interval_ms") == 0) {
         if (parse_int(value, &cfg->tlml_interval_ms) != 0) goto parse_error;
+      } else {
+        recognized = false;
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
       }
       continue;
     }
 
     const int axis_idx = parse_indexed_section(section, "Axis", (int)STC_AXIS_COUNT, 0);
     if (axis_idx >= 0) {
+      bool recognized = true;
       if (strcmp(key, "node_id") == 0) {
         if (parse_int(value, &cfg->axis_node_id[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "counts_per_rev") == 0) {
@@ -218,6 +228,13 @@ bool load_config(const char* path, stc_config_t* cfg) {
       } else if (strcmp(key, "diag_subcat") == 0) {
         if (parse_u8(value, &cfg->axis_diag_subcat[axis_idx]) != 0) goto parse_error;
         seen_diag_subcat[axis_idx] = 1;
+      } else {
+        recognized = false;
+      }
+
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
       }
 
       if (axis_idx > max_axis_seen) max_axis_seen = axis_idx;
@@ -225,6 +242,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
     }
 
     if (strcmp(section, "diagnostics") == 0) {
+      bool recognized = true;
       if (strcmp(key, "motor_status_map") == 0) {
         if (parse_motor_status_map(value, cfg->motor_status_map) != 0) goto parse_error;
         seen_motor_status_map = 1;
@@ -238,26 +256,46 @@ bool load_config(const char* path, stc_config_t* cfg) {
           if (axis < 0 || axis >= (int)STC_AXIS_COUNT) goto parse_error;
           if (parse_u8(value, &cfg->axis_diag_subcat[axis]) != 0) goto parse_error;
           seen_diag_subcat[axis] = 1;
+        } else {
+          recognized = false;
         }
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
       }
       continue;
     }
 
     if (strcmp(section, "Turret") == 0) {
+      bool recognized = true;
       if (strcmp(key, "az_axis") == 0) {
         if (parse_int(value, &cfg->turret_az_axis) != 0) goto parse_error;
       } else if (strcmp(key, "el_axis") == 0) {
         if (parse_int(value, &cfg->turret_el_axis) != 0) goto parse_error;
+      } else {
+        recognized = false;
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
       }
       continue;
     }
 
     const int sut_idx = parse_indexed_section(section, "SUT", STC_MAX_SUT, 1);
     if (sut_idx >= 0) {
+      bool recognized = true;
       if (strcmp(key, "az_axis") == 0) {
         if (parse_int(value, &cfg->sut_az_axis[sut_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "el_axis") == 0) {
         if (parse_int(value, &cfg->sut_el_axis[sut_idx]) != 0) goto parse_error;
+      } else {
+        recognized = false;
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
       }
       if (sut_idx + 1 > cfg->sut_count) cfg->sut_count = sut_idx + 1;
       continue;
@@ -265,12 +303,22 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
     const int mir_idx = parse_indexed_section(section, "Mirror", STC_MAX_MIRROR, 1);
     if (mir_idx >= 0) {
+      bool recognized = true;
       if (strcmp(key, "axis") == 0) {
         if (parse_int(value, &cfg->mirror_axis[mir_idx]) != 0) goto parse_error;
+      } else {
+        recognized = false;
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
       }
       if (mir_idx + 1 > cfg->mirror_count) cfg->mirror_count = mir_idx + 1;
       continue;
     }
+
+    parse_error_reason = "unknown section";
+    goto parse_error;
   }
 
   fclose(f);
@@ -304,7 +352,13 @@ bool load_config(const char* path, stc_config_t* cfg) {
   return true;
 
 parse_error:
-  STC_LOG_ERROR("%s:%d: invalid value for %s", path, line_no, parse_key);
+  if (strcmp(parse_error_reason, "unknown section") == 0) {
+    STC_LOG_ERROR("%s:%d: unknown section [%s]", path, line_no, section);
+  } else if (strcmp(parse_error_reason, "unknown key") == 0) {
+    STC_LOG_ERROR("%s:%d: unknown key '%s' in section [%s]", path, line_no, parse_key, section);
+  } else {
+    STC_LOG_ERROR("%s:%d: invalid value for %s", path, line_no, parse_key);
+  }
   fclose(f);
   return false;
 }
