@@ -16,6 +16,7 @@ add_executable(stc_server
   dev/src/stc_limits.c
   dev/src/stc_state.c
   dev/src/stc_faults.c
+  dev/src/stc_diag.c
 )
 
 add_executable(icd_tx_tcp
@@ -51,7 +52,16 @@ add_executable(stc_state_test
   test/stc_state_test.c
   dev/src/stc_state.c
   dev/src/stc_faults.c
+  dev/src/stc_diag.c
 )
 
 target_include_directories(stc_state_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_state_test PRIVATE -Wall -Wextra)
+
+add_executable(stc_diag_test
+  test/stc_diag_test.c
+  dev/src/stc_diag.c
+)
+
+target_include_directories(stc_diag_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(stc_diag_test PRIVATE -Wall -Wextra)

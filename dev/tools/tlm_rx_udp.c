@@ -227,11 +227,18 @@ int main(int argc, char** argv) {
         printf("\n");
 
         if (m.error_count > 0) {
-          printf("  errors:");
           for (unsigned i = 0; i < m.error_count; i++) {
-            printf(" 0x%08X", (unsigned)m.errors[i]);
+            uint32_t code = m.errors[i];
+            uint8_t cat = (uint8_t)((code >> 24) & 0xFFu);
+            uint8_t sub = (uint8_t)((code >> 16) & 0xFFu);
+            uint16_t err = (uint16_t)(code & 0xFFFFu);
+            printf("  Diag[%u]: Cat=%u Sub=%u Err=%u (0x%08X)\n",
+                   i,
+                   (unsigned)cat,
+                   (unsigned)sub,
+                   (unsigned)err,
+                   (unsigned)code);
           }
-          printf("\n");
         }
       }
     }

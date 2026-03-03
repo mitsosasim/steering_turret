@@ -31,8 +31,9 @@ typedef struct stc_config_s {
   double axis_max_speed_deg_s[STC_AXIS_COUNT];
   double axis_storage_deg[STC_AXIS_COUNT];
   uint16_t axis_pp_profile_vel[STC_AXIS_COUNT];
-  uint16_t axis_diag_cat[STC_AXIS_COUNT];
-  uint16_t axis_diag_subcat[STC_AXIS_COUNT];
+  uint8_t axis_diag_cat[STC_AXIS_COUNT];
+  uint8_t axis_diag_subcat[STC_AXIS_COUNT];
+  int8_t motor_status_map[8];
 
   int turret_az_axis;
   int turret_el_axis;
