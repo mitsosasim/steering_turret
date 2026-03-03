@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "pd4c.h"
+#include "stc_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -25,12 +26,11 @@ static uint64_t now_ms(void) {
 }
 
 static void default_logger(pd4c_log_level_t lvl, const char* msg, void* user) {
-    (void)user;
-    const char* p = "INFO";
-    if (lvl == PD4C_LOG_ERROR) p = "ERROR";
-    else if (lvl == PD4C_LOG_WARN) p = "WRN";
-    else if (lvl == PD4C_LOG_DEBUG) p = "DBG";
-    fprintf(stderr, "[pd4c][%s] %s\n", p, msg);
+  (void)user;
+    if (lvl == PD4C_LOG_ERROR) STC_LOG_ERROR("[pd4c] %s", msg);
+    else if (lvl == PD4C_LOG_WARN) STC_LOG_WARN("[pd4c] %s", msg);
+    else if (lvl == PD4C_LOG_DEBUG) STC_LOG_DEBUG("[pd4c] %s", msg);
+    else STC_LOG_INFO("[pd4c] %s", msg);
 }
 
 static void logf_ctx(pd4c_ctx_t* ctx, pd4c_log_level_t lvl, const char* fmt, ...) {
