@@ -120,3 +120,4 @@ target_include_directories(test_can_worker_concurrency_tsan PRIVATE ${PROJECT_SO
 target_compile_options(test_can_worker_concurrency_tsan PRIVATE -Wall -Wextra -Wno-unused-function -fsanitize=thread -fno-omit-frame-pointer)
 target_link_options(test_can_worker_concurrency_tsan PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
 target_link_libraries(test_can_worker_concurrency_tsan PRIVATE pthread m)
+
