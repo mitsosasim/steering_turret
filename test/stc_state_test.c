@@ -1,0 +1,55 @@
+#include "stc_state.h"
+#include "stc_faults.h"
+
+#include <assert.h>
+#include <stdio.h>
+
+static void expect_transition(stc_state_t from, stc_event_t evt, stc_state_t to) {
+  stc_state_t next = STC_STATE_INIT;
+  assert(stc_state_transition(from, evt, &next) == 0);
+  assert(next == to);
+}
+
+static void expect_invalid(stc_state_t from, stc_event_t evt) {
+  stc_state_t next = STC_STATE_INIT;
+  assert(stc_state_transition(from, evt, &next) != 0);
+}
+
+int main(void) {
+  expect_transition(STC_STATE_INIT, EVT_INIT_COMPLETE, STC_STATE_INIT_DONE);
+  expect_transition(STC_STATE_INIT_DONE, EVT_ENTER_SAFE, STC_STATE_SAFE);
+  expect_transition(STC_STATE_SAFE, EVT_ENTER_OPER, STC_STATE_OPER);
+  expect_transition(STC_STATE_SAFE, EVT_SELF_LEV, STC_STATE_SELF_LEVELLING);
+  expect_transition(STC_STATE_SAFE, EVT_IBIT, STC_STATE_IBIT_RUNNING);
+  expect_transition(STC_STATE_SAFE, EVT_STORE, STC_STATE_STORE);
+  expect_transition(STC_STATE_OPER, EVT_ENTER_SAFE, STC_STATE_SAFE);
+  expect_transition(STC_STATE_OPER, EVT_SELF_LEV, STC_STATE_SELF_LEVELLING);
+  expect_transition(STC_STATE_OPER, EVT_IBIT, STC_STATE_IBIT_RUNNING);
+  expect_transition(STC_STATE_SELF_LEVELLING, EVT_ENTER_SAFE, STC_STATE_SAFE);
+  expect_transition(STC_STATE_IBIT_RUNNING, EVT_ENTER_SAFE, STC_STATE_SAFE);
+  expect_transition(STC_STATE_STORE, EVT_ENTER_SAFE, STC_STATE_SAFE);
+  expect_transition(STC_STATE_FAIL, EVT_RESET, STC_STATE_SAFE);
+
+  for (int s = STC_STATE_INIT; s <= STC_STATE_FAIL; ++s) {
+    expect_transition((stc_state_t)s, EVT_FAULT_CRITICAL, STC_STATE_FAIL);
+  }
+
+  expect_invalid(STC_STATE_INIT, EVT_ENTER_OPER);
+  expect_invalid(STC_STATE_INIT_DONE, EVT_IBIT);
+  expect_invalid(STC_STATE_FAIL, EVT_ENTER_SAFE);
+
+  assert(stc_state_can_move(STC_STATE_OPER));
+  assert(!stc_state_can_move(STC_STATE_SAFE));
+  assert(stc_state_can_stream(STC_STATE_OPER));
+  assert(!stc_state_can_stream(STC_STATE_STORE));
+
+  assert(stc_detect_ds402_fault(0x0008));
+  assert(stc_detect_ds402_fault(0xFFFF));
+  assert(!stc_detect_ds402_fault(0x0000));
+
+  assert(!stc_detect_can_timeout(1000, 10, 1000));
+  assert(stc_detect_can_timeout(1010, 10, 1000));
+
+  puts("stc_state_test: PASS");
+  return 0;
+}
