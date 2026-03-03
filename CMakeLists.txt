@@ -74,3 +74,40 @@ target_compile_options(test_icd_codec PRIVATE -Wall -Wextra)
 
 target_include_directories(stc_diag_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_diag_test PRIVATE -Wall -Wextra)
+
+add_executable(test_can_worker_concurrency
+  dev/tests/test_can_worker_concurrency.c
+  dev/src/stc_log.c
+  dev/src/stc_icd.c
+  dev/src/stc_model.c
+  dev/src/stc_config.c
+  dev/src/pd4c.c
+  dev/src/stc_actions.c
+  dev/src/stc_limits.c
+  dev/src/stc_state.c
+  dev/src/stc_faults.c
+  dev/src/stc_diag.c
+)
+
+target_include_directories(test_can_worker_concurrency PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_can_worker_concurrency PRIVATE -Wall -Wextra -Wno-unused-function)
+target_link_libraries(test_can_worker_concurrency PRIVATE pthread m)
+
+add_executable(test_can_worker_concurrency_tsan
+  dev/tests/test_can_worker_concurrency.c
+  dev/src/stc_log.c
+  dev/src/stc_icd.c
+  dev/src/stc_model.c
+  dev/src/stc_config.c
+  dev/src/pd4c.c
+  dev/src/stc_actions.c
+  dev/src/stc_limits.c
+  dev/src/stc_state.c
+  dev/src/stc_faults.c
+  dev/src/stc_diag.c
+)
+
+target_include_directories(test_can_worker_concurrency_tsan PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_can_worker_concurrency_tsan PRIVATE -Wall -Wextra -Wno-unused-function -fsanitize=thread -fno-omit-frame-pointer)
+target_link_options(test_can_worker_concurrency_tsan PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
+target_link_libraries(test_can_worker_concurrency_tsan PRIVATE pthread m)

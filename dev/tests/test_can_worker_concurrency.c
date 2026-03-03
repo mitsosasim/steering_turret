@@ -1,0 +1,112 @@
+#define main stc_server_main
+#include "../src/stc_server.c"
+#undef main
+
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+typedef struct {
+  shared_t* sh;
+  actionq_t* q;
+} stress_ctx_t;
+
+static void* action_producer_thread(void* arg) {
+  stress_ctx_t* ctx = (stress_ctx_t*)arg;
+  for (int i = 0; i < 20000; i++) {
+    stc_action_t act;
+    if ((i % 11) == 0) {
+      stc_action_make_simple(&act, ACTION_RESET, 0xFFFFFFFFu);
+    } else if ((i % 3) == 0) {
+      double target_deg[STC_AXIS_COUNT] = {0};
+      for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) target_deg[axis] = (double)((i + (int)axis) % 360);
+      stc_action_make_pp_move(&act, 0xFFFFFFFFu, target_deg);
+    } else {
+      double speed_deg_s[STC_AXIS_COUNT] = {0};
+      for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) speed_deg_s[axis] = (double)((i + (int)axis) % 20) - 10.0;
+      stc_action_make_stream_speed(&act, 0xFFFFFFFFu, speed_deg_s);
+    }
+
+    while (actionq_push(ctx->q, &act) != 0) {
+      usleep(50);
+    }
+
+    pthread_mutex_lock(&ctx->sh->mtx);
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      ctx->sh->d.stream[axis].enabled = 1;
+      ctx->sh->d.stream[axis].desired_speed_deg_s = (double)((i + (int)axis) % 30) - 15.0;
+      ctx->sh->d.stream[axis].last_cmd_ms = mono_ms();
+    }
+    pthread_mutex_unlock(&ctx->sh->mtx);
+  }
+  return NULL;
+}
+
+static void* telemetry_updater_thread(void* arg) {
+  shared_t* sh = (shared_t*)arg;
+  for (int i = 0; i < 30000; i++) {
+    pthread_mutex_lock(&sh->mtx);
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      sh->d.telem[axis].status_word = (uint16_t)((i + (int)axis) & 0xFFFF);
+      sh->d.last_rx_ms[axis] = mono_ms();
+      sh->d.cfg[axis].max_speed_deg_s = 120.0 + (double)(i % 10);
+      sh->d.ds402_timeout_ms = 100 + (i % 5);
+      sh->d.can_timeout_ms = 100 + (uint32_t)(i % 5);
+      sh->d.speed_watchdog_ms = 100 + (i % 20);
+    }
+    pthread_mutex_unlock(&sh->mtx);
+    usleep(50);
+  }
+  return NULL;
+}
+
+int main(void) {
+  shared_t sh;
+  memset(&sh, 0, sizeof(sh));
+  pthread_mutex_init(&sh.mtx, NULL);
+
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    sh.d.axis_node_id[axis] = 0;
+    sh.d.cfg[axis].counts_per_rev = 4096;
+    sh.d.cfg[axis].gear_ratio = 1.0;
+    sh.d.cfg[axis].pp_profile_vel = 100;
+    sh.d.cfg[axis].vel_raw_units = AXIS_VEL_RAW_RPM;
+    sh.d.last_rx_ms[axis] = mono_ms();
+  }
+  sh.d.st_state = STC_STATE_OPER;
+  sh.d.speed_watchdog_ms = 250;
+  sh.d.ds402_timeout_ms = 200;
+  sh.d.can_timeout_ms = 250;
+
+  actionq_t q;
+  actionq_init(&q);
+
+  can_worker_arg_t warg = {
+      .sh = &sh,
+      .q = &q,
+      .can_if = "vcan0",
+  };
+
+  atomic_store(&g_stop, 0);
+
+  pthread_t can_thread;
+  pthread_t producer_thread;
+  pthread_t telemetry_thread;
+
+  assert(pthread_create(&can_thread, NULL, can_worker_thread, &warg) == 0);
+
+  stress_ctx_t stress_ctx = {.sh = &sh, .q = &q};
+  assert(pthread_create(&producer_thread, NULL, action_producer_thread, &stress_ctx) == 0);
+  assert(pthread_create(&telemetry_thread, NULL, telemetry_updater_thread, &sh) == 0);
+
+  assert(pthread_join(producer_thread, NULL) == 0);
+  assert(pthread_join(telemetry_thread, NULL) == 0);
+
+  atomic_store(&g_stop, 1);
+  assert(pthread_join(can_thread, NULL) == 0);
+
+  pthread_mutex_destroy(&sh.mtx);
+  printf("can_worker concurrency stress completed\n");
+  return 0;
+}
