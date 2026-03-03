@@ -43,6 +43,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
+#include <stdatomic.h>
 
 /* ----------------------------- time helpers ----------------------------- */
 
@@ -187,11 +188,11 @@ typedef struct {
 
 /* ----------------------------- signal handling ----------------------------- */
 
-static volatile sig_atomic_t g_stop = 0;
+static _Atomic sig_atomic_t g_stop = 0;
 
 static void on_sig(int s) {
   (void)s;
-  g_stop = 1;
+  atomic_store(&g_stop, 1);
 }
 
 /* ----------------------------- ICD validation ----------------------------- */
@@ -532,6 +533,9 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
 
 static void* can_worker_thread(void* arg) {
   can_worker_arg_t* a = (can_worker_arg_t*)arg;
+  // Lock policy for shared_t in this thread:
+  // - Read snapshots of shared_t::d under a->sh->mtx into locals before use.
+  // - Hold a->sh->mtx across any read-modify-write update of shared_t::d fields.
   pd4c_ctx_t pd_ctx[STC_AXIS_COUNT];
   int axis_connected[STC_AXIS_COUNT] = {0};
   mtr_mode_t axis_mode[STC_AXIS_COUNT] = {0};
@@ -567,7 +571,7 @@ static void* can_worker_thread(void* arg) {
   a->sh->d.can_ok = any_connected;
   pthread_mutex_unlock(&a->sh->mtx);
 
-  while (!g_stop) {
+  while (!atomic_load(&g_stop)) {
     uint64_t now = mono_ms();
 
     struct pollfd pfds[STC_AXIS_COUNT];
@@ -660,13 +664,15 @@ static void* can_worker_thread(void* arg) {
         case ACTION_STREAM_SPEED:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            axis_cfg_t axis_cfg;
             pthread_mutex_lock(&a->sh->mtx);
             stc_state_t action_state = a->sh->d.st_state;
+            axis_cfg = a->sh->d.cfg[axis];
             pthread_mutex_unlock(&a->sh->mtx);
             if (!stc_state_can_stream(action_state)) continue;
             (void)motor_ensure_enabled(&pd_ctx[axis], a->sh, MTR_MODE_PV, &axis_mode[axis], &axis_enabled[axis]);
             int clipped = 0;
-            int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[axis], act.u.speed_deg_s[axis], &clipped);
+            int32_t tv_raw = axis_deg_s_to_target_vel_units(&axis_cfg, act.u.speed_deg_s[axis], &clipped);
             if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
             if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
             (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
@@ -688,8 +694,10 @@ static void* can_worker_thread(void* arg) {
           break;
         case ACTION_RESET: {
           int reset_ok = 0;
+          int ds402_timeout_ms = 0;
           pthread_mutex_lock(&a->sh->mtx);
           reset_ok = (shared_transition_locked(a->sh, EVT_RESET) == 0);
+          ds402_timeout_ms = a->sh->d.ds402_timeout_ms;
           if (reset_ok) {
             memset(a->sh->d.axis_fault_active, 0, sizeof(a->sh->d.axis_fault_active));
           }
@@ -698,7 +706,7 @@ static void* can_worker_thread(void* arg) {
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
             (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
-            (void)pd4c_ds402_fault_reset(&pd_ctx[axis], (int8_t)axis_mode[axis], a->sh->d.ds402_timeout_ms);
+            (void)pd4c_ds402_fault_reset(&pd_ctx[axis], (int8_t)axis_mode[axis], ds402_timeout_ms);
             (void)pd4c_nmt_start(&pd_ctx[axis]);
             axis_enabled[axis] = 0;
           }
@@ -758,10 +766,12 @@ static void* can_worker_thread(void* arg) {
       int speed_on = 0;
       double desired_deg_s = 0.0;
       uint64_t last_cmd_ms = 0;
+      axis_cfg_t axis_cfg;
       pthread_mutex_lock(&a->sh->mtx);
       speed_on = a->sh->d.stream[axis].enabled;
       desired_deg_s = a->sh->d.stream[axis].desired_speed_deg_s;
       last_cmd_ms = a->sh->d.stream[axis].last_cmd_ms;
+      axis_cfg = a->sh->d.cfg[axis];
       pthread_mutex_unlock(&a->sh->mtx);
 
       if (!speed_on) continue;
@@ -775,7 +785,7 @@ static void* can_worker_thread(void* arg) {
       } else {
         (void)motor_ensure_enabled(&pd_ctx[axis], a->sh, MTR_MODE_PV, &axis_mode[axis], &axis_enabled[axis]);
         int clipped = 0;
-        int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[axis], desired_deg_s, &clipped);
+        int32_t tv_raw = axis_deg_s_to_target_vel_units(&axis_cfg, desired_deg_s, &clipped);
         if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
         if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
         (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
@@ -813,7 +823,7 @@ static void* tlmh_tx_thread(void* arg) {
   clock_gettime(CLOCK_MONOTONIC, &next);
   const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 10000000L;
 
-  while (!g_stop) {
+  while (!atomic_load(&g_stop)) {
     stc_tlmh_t m;
     memset(&m, 0, sizeof(m));
     memcpy(m.magic, a->cfg.tlmh_magic, 4);
@@ -849,7 +859,7 @@ static void* tlml_tx_thread(void* arg) {
   clock_gettime(CLOCK_MONOTONIC, &next);
   const long period_ns = (a->rate_hz > 0) ? (1000000000L / a->rate_hz) : 100000000L;
 
-  while (!g_stop) {
+  while (!atomic_load(&g_stop)) {
     stc_tlml_t m;
     memset(&m, 0, sizeof(m));
     memcpy(m.magic, a->cfg.tlml_magic, 4);
@@ -1229,7 +1239,7 @@ int main(int argc, char** argv) {
   STC_LOG_INFO("STC server listening on TCP port %d", net.tcp_port);
   STC_LOG_INFO("UDP multicast: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
 
-  while (!g_stop) {
+  while (!atomic_load(&g_stop)) {
     struct sockaddr_in cli;
     socklen_t clen = sizeof(cli);
     int cfd = accept(srv, (struct sockaddr*)&cli, &clen);
@@ -1243,7 +1253,7 @@ int main(int argc, char** argv) {
     inet_ntop(AF_INET, &cli.sin_addr, ipbuf, sizeof(ipbuf));
     STC_LOG_INFO("Client connected: %s:%d", ipbuf, ntohs(cli.sin_port));
 
-    while (!g_stop) {
+    while (!atomic_load(&g_stop)) {
       uint8_t hdr[20];
       int rr = recv_exact(cfd, hdr, sizeof(hdr));
       if (rr == 0) {
@@ -1586,7 +1596,7 @@ int main(int argc, char** argv) {
   }
 
   close(srv);
-  g_stop = 1;
+  atomic_store(&g_stop, 1);
 
   pthread_join(th_h, NULL);
   pthread_join(th_l, NULL);
