@@ -46,11 +46,38 @@ static int parse_u16(const char* value, uint16_t* out) {
   return 0;
 }
 
+static int parse_u8(const char* value, uint8_t* out) {
+  char* endp = NULL;
+  unsigned long v = strtoul(value, &endp, 0);
+  if (endp == value || *endp != '\0' || v > 0xFFu) return -1;
+  *out = (uint8_t)v;
+  return 0;
+}
+
 static int parse_double(const char* value, double* out) {
   char* endp = NULL;
   double v = strtod(value, &endp);
   if (endp == value || *endp != '\0') return -1;
   *out = v;
+  return 0;
+}
+
+static int parse_motor_status_map(const char* value, int8_t out[8]) {
+  char tmp[256];
+  snprintf(tmp, sizeof(tmp), "%s", value);
+
+  char* tok = strtok(tmp, ",");
+  int idx = 0;
+  while (tok && idx < 8) {
+    trim_inplace(tok);
+    int axis = 0;
+    if (parse_int(tok, &axis) != 0) return -1;
+    if (axis < -1 || axis >= (int)STC_AXIS_COUNT) return -1;
+    out[idx++] = (int8_t)axis;
+    tok = strtok(NULL, ",");
+  }
+
+  if (idx != 8 || tok != NULL) return -1;
   return 0;
 }
 
@@ -81,6 +108,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
     cfg->axis_diag_cat[i] = 0;
     cfg->axis_diag_subcat[i] = 0;
   }
+  for (size_t i = 0; i < 8; i++) cfg->motor_status_map[i] = -1;
 }
 
 bool load_config(const char* path, stc_config_t* cfg) {
@@ -97,6 +125,9 @@ bool load_config(const char* path, stc_config_t* cfg) {
   char section[64] = "";
   char parse_key[128] = "";
   int max_axis_seen = -1;
+  int seen_diag_cat[STC_AXIS_COUNT] = {0};
+  int seen_diag_subcat[STC_AXIS_COUNT] = {0};
+  int seen_motor_status_map = 0;
 
   char line[512];
   int line_no = 0;
@@ -180,12 +211,33 @@ bool load_config(const char* path, stc_config_t* cfg) {
       } else if (strcmp(key, "pp_profile_vel") == 0) {
         if (parse_u16(value, &cfg->axis_pp_profile_vel[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "diag_cat") == 0) {
-        if (parse_u16(value, &cfg->axis_diag_cat[axis_idx]) != 0) goto parse_error;
+        if (parse_u8(value, &cfg->axis_diag_cat[axis_idx]) != 0) goto parse_error;
+        seen_diag_cat[axis_idx] = 1;
       } else if (strcmp(key, "diag_subcat") == 0) {
-        if (parse_u16(value, &cfg->axis_diag_subcat[axis_idx]) != 0) goto parse_error;
+        if (parse_u8(value, &cfg->axis_diag_subcat[axis_idx]) != 0) goto parse_error;
+        seen_diag_subcat[axis_idx] = 1;
       }
 
       if (axis_idx > max_axis_seen) max_axis_seen = axis_idx;
+      continue;
+    }
+
+    if (strcmp(section, "diagnostics") == 0) {
+      if (strcmp(key, "motor_status_map") == 0) {
+        if (parse_motor_status_map(value, cfg->motor_status_map) != 0) goto parse_error;
+        seen_motor_status_map = 1;
+      } else {
+        int axis = -1;
+        if (sscanf(key, "axis[%d].category", &axis) == 1) {
+          if (axis < 0 || axis >= (int)STC_AXIS_COUNT) goto parse_error;
+          if (parse_u8(value, &cfg->axis_diag_cat[axis]) != 0) goto parse_error;
+          seen_diag_cat[axis] = 1;
+        } else if (sscanf(key, "axis[%d].subcategory", &axis) == 1) {
+          if (axis < 0 || axis >= (int)STC_AXIS_COUNT) goto parse_error;
+          if (parse_u8(value, &cfg->axis_diag_subcat[axis]) != 0) goto parse_error;
+          seen_diag_subcat[axis] = 1;
+        }
+      }
       continue;
     }
 
@@ -234,6 +286,17 @@ bool load_config(const char* path, stc_config_t* cfg) {
   if (cfg->turret_el_axis >= cfg->num_axes) {
     fprintf(stderr, "%s: [Turret].el_axis out of range\n", path);
     return false;
+  }
+
+  if (!seen_motor_status_map) {
+    fprintf(stderr, "%s: missing [diagnostics].motor_status_map\n", path);
+    return false;
+  }
+  for (int i = 0; i < cfg->num_axes; i++) {
+    if (!seen_diag_cat[i] || !seen_diag_subcat[i]) {
+      fprintf(stderr, "%s: missing diagnostic category/subcategory for axis %d\n", path, i);
+      return false;
+    }
   }
 
   return true;

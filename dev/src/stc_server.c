@@ -19,6 +19,7 @@
 
 #include "stc_icd.h"
 #include "stc_config.h"
+#include "stc_diag.h"
 #include "stc_model.h"
 #include "pd4c.h"
 #include "stc_actions.h"
@@ -128,8 +129,9 @@ typedef struct {
   axis_stream_t stream[STC_AXIS_COUNT];
   bool saturated[STC_AXIS_COUNT];
   double storage_deg[STC_AXIS_COUNT];
-  uint16_t diag_cat[STC_AXIS_COUNT];
-  uint16_t diag_subcat[STC_AXIS_COUNT];
+  uint8_t diag_cat[STC_AXIS_COUNT];
+  uint8_t diag_subcat[STC_AXIS_COUNT];
+  int8_t motor_map[8];
 
   int turret_az_axis;
   int turret_el_axis;
@@ -169,6 +171,7 @@ typedef struct {
   int can_ok;
   uint64_t last_rx_ms[STC_AXIS_COUNT];
   uint8_t axis_fault_active[STC_AXIS_COUNT];
+  uint8_t axis_enabled[STC_AXIS_COUNT];
 
   // --- telemetry seq + uptime
   uint16_t seq_h;
@@ -781,6 +784,12 @@ static void* can_worker_thread(void* arg) {
         (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
       }
     }
+
+    pthread_mutex_lock(&a->sh->mtx);
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      a->sh->d.axis_enabled[axis] = axis_enabled[axis] ? 1u : 0u;
+    }
+    pthread_mutex_unlock(&a->sh->mtx);
   }
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -853,7 +862,6 @@ static void* tlml_tx_thread(void* arg) {
     uint64_t nowm = mono_ms();
     uint64_t noww = wall_ms();
 
-    // snapshot shared
     pthread_mutex_lock(&a->sh->mtx);
     m.seq = a->sh->d.seq_l++;
     m.state = (uint8_t)a->sh->d.st_state;
@@ -861,64 +869,76 @@ static void* tlml_tx_thread(void* arg) {
     m.uptime_sec = (uint32_t)(uptime_ms / 1000ULL);
     m.lat = a->sh->d.has_manualpos ? a->sh->d.lat : 0.0;
     m.lon = a->sh->d.has_manualpos ? a->sh->d.lon : 0.0;
-    m.alt_m = a->sh->d.has_manualpos ? (float)a->sh->d.alt : 0.0f;
-    m.heading_deg = a->sh->d.has_manualpos ? (float)a->sh->d.heading : 0.0f;
-
-    int can_ok = a->sh->d.can_ok;
-    uint16_t sw = a->sh->d.telem[0].status_word;
-    int have_emcy = a->sh->d.have_emcy;
-    uint16_t emcy_code = a->sh->d.emcy_code;
-    uint8_t emcy_reg = a->sh->d.emcy_reg;
+    m.alt_m = a->sh->d.has_manualpos ? a->sh->d.alt : 0.0;
+    m.heading_deg = a->sh->d.has_manualpos ? a->sh->d.heading : 0.0;
 
     bool saturated[STC_AXIS_COUNT] = {false};
     uint8_t axis_fault_active[STC_AXIS_COUNT] = {0};
+    uint8_t axis_enabled[STC_AXIS_COUNT] = {0};
+    uint64_t last_rx_ms[STC_AXIS_COUNT] = {0};
+    uint8_t diag_cat[STC_AXIS_COUNT] = {0};
+    uint8_t diag_subcat[STC_AXIS_COUNT] = {0};
+    int8_t motor_map[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+
     for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
       saturated[i] = a->sh->d.saturated[i];
       axis_fault_active[i] = a->sh->d.axis_fault_active[i];
+      axis_enabled[i] = a->sh->d.axis_enabled[i];
+      last_rx_ms[i] = a->sh->d.last_rx_ms[i];
+      diag_cat[i] = a->sh->d.diag_cat[i];
+      diag_subcat[i] = a->sh->d.diag_subcat[i];
       a->sh->d.saturated[i] = false;
     }
-
-    uint64_t t1 = a->sh->d.ts_tpdo1_ms;
-    uint64_t t2 = a->sh->d.ts_tpdo2_ms;
-    uint64_t t3 = a->sh->d.ts_tpdo3_ms;
+    memcpy(motor_map, a->sh->d.motor_map, sizeof(motor_map));
+    uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = noww;
     m.temperature_c = 0.0f;
-    m.humidity_pct  = 0.0f;
-    m.pressure_hpa  = 0.0f;
-    memset(m.motor_status, 0, sizeof(m.motor_status));
-    memset(m.laser_status, 0, sizeof(m.laser_status));
+    m.humidity_pct = 0.0f;
+    m.pressure_hpa = 0.0f;
     m.level_x = 0.0f;
     m.level_y = 0.0f;
 
-    // error list
+    for (int j = 0; j < 8; j++) {
+      int ax = motor_map[j];
+      if (ax < 0 || ax >= (int)STC_AXIS_COUNT) {
+        m.motor_status[j] = 0;
+        continue;
+      }
+
+      uint8_t flags = 0;
+      if (axis_enabled[ax]) flags |= (1u << 0);
+      if (axis_fault_active[ax]) flags |= (1u << 1);
+      if (nowm - last_rx_ms[ax] > can_timeout_ms) flags |= (1u << 2);
+      if (saturated[ax]) flags |= (1u << 3);
+      m.motor_status[j] = flags;
+    }
+
+    memset(m.laser_status, 0, sizeof(m.laser_status));
+
+    enum {
+      STC_DIAG_ERR_AXIS_FAULT = 0x0001,
+      STC_DIAG_ERR_AXIS_STALE = 0x0002,
+      STC_DIAG_WARN_AXIS_SAT = 0x0100,
+    };
+
     m.error_count = 0;
-    if (!can_ok) {
-      m.errors[m.error_count++] = 0xE0010001u;  // CAN down
-    }
-    // TPDO staleness thresholds: 500ms
-    if (can_ok) {
-      if (t1 == 0 || (nowm > t1 && (nowm - t1) > 500)) m.errors[m.error_count++] = 0xE0010002u;
-      if (t2 == 0 || (nowm > t2 && (nowm - t2) > 500)) m.errors[m.error_count++] = 0xE0010003u;
-      if (t3 == 0 || (nowm > t3 && (nowm - t3) > 500)) m.errors[m.error_count++] = 0xE0010004u;
-    }
-    // DS402 fault pattern
-    if ((sw & 0x006F) == 0x0008) {
-      m.errors[m.error_count++] = 0xE0020000u | (uint32_t)sw;
-    }
-    // EMCY
-    if (have_emcy) {
-      m.errors[m.error_count++] = 0xE0030000u | (uint32_t)emcy_code;
-      m.errors[m.error_count++] = 0xE0040000u | (uint32_t)emcy_reg;
-    }
     for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
-      if (saturated[i]) m.errors[m.error_count++] = 0xE1000000u | (uint32_t)i;
-      if (axis_fault_active[i] && m.error_count < STC_ICD_MAX_ERRORS) {
-        m.errors[m.error_count++] = 0xE2000000u | (uint32_t)i;
+      const int stale = (nowm - last_rx_ms[i] > can_timeout_ms);
+      if (axis_fault_active[i]) {
+        m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_FAULT);
+      }
+      if (stale && m.error_count < STC_ICD_MAX_ERRORS) {
+        m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_STALE);
       }
     }
-    if (m.error_count > STC_ICD_MAX_ERRORS) m.error_count = STC_ICD_MAX_ERRORS;
+
+    for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
+      if (saturated[i]) {
+        m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_WARN_AXIS_SAT);
+      }
+    }
 
     uint8_t buf[1024];
     size_t blen = 0;
@@ -983,6 +1003,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
 
   sh->d.mirror_count = cfg->mirror_count;
   memcpy(sh->d.mirror_axis, cfg->mirror_axis, sizeof(sh->d.mirror_axis));
+  memcpy(sh->d.motor_map, cfg->motor_status_map, sizeof(sh->d.motor_map));
 }
 
 int main(int argc, char** argv) {
@@ -1027,6 +1048,7 @@ int main(int argc, char** argv) {
   sh.d.st_state = STC_STATE_INIT;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     sh.d.last_rx_ms[axis] = sh.d.boot_ms;
+    sh.d.axis_enabled[axis] = 0;
     sh.d.axis_fault_active[axis] = 0;
   }
 
