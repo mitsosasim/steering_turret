@@ -14,6 +14,8 @@ add_executable(stc_server
   dev/src/pd4c.c
   dev/src/stc_actions.c
   dev/src/stc_limits.c
+  dev/src/stc_state.c
+  dev/src/stc_faults.c
 )
 
 add_executable(icd_tx_tcp
@@ -44,3 +46,12 @@ add_executable(test_actions
 
 target_include_directories(test_actions PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(test_actions PRIVATE -Wall -Wextra)
+
+add_executable(stc_state_test
+  test/stc_state_test.c
+  dev/src/stc_state.c
+  dev/src/stc_faults.c
+)
+
+target_include_directories(stc_state_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(stc_state_test PRIVATE -Wall -Wextra)

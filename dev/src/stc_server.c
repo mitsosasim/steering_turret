@@ -24,6 +24,8 @@
 #include "stc_actions.h"
 #include "stc_version.h"
 #include "stc_limits.h"
+#include "stc_state.h"
+#include "stc_faults.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -140,9 +142,10 @@ typedef struct {
   int speed_watchdog_ms;
   int ds402_timeout_ms;
   int pp_sdo_diag;              // enable SDO snapshot before PP move
+  uint32_t can_timeout_ms;
 
   // --- software state / navigation
-  uint8_t cu_state;             // from CU_STATE command
+  stc_state_t st_state;
   uint8_t posmode;              // from POSMODE command
 
   int has_manualpos;
@@ -164,6 +167,8 @@ typedef struct {
 
   // --- runtime flags
   int can_ok;
+  uint64_t last_rx_ms[STC_AXIS_COUNT];
+  uint8_t axis_fault_active[STC_AXIS_COUNT];
 
   // --- telemetry seq + uptime
   uint16_t seq_h;
@@ -254,6 +259,18 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
   return STC_ERR_NO_ERROR;
 }
 
+
+static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
+  stc_state_t next = sh->d.st_state;
+  if (stc_state_transition(sh->d.st_state, evt, &next) != 0) return -1;
+  sh->d.st_state = next;
+  if (!stc_state_can_stream(sh->d.st_state)) {
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      sh->d.stream[axis].enabled = 0;
+    }
+  }
+  return 0;
+}
 
 static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
   if (!limited) return;
@@ -577,23 +594,53 @@ static void* can_worker_thread(void* arg) {
             axis_mode[axis] = (mtr_mode_t)t->mode_display;
             pthread_mutex_lock(&a->sh->mtx);
             copy_pd4c_telem_into_shared(a->sh, axis, t, now);
+            a->sh->d.last_rx_ms[axis] = now;
             pthread_mutex_unlock(&a->sh->mtx);
           }
         }
       }
     }
 
+    int enter_fail = 0;
+    pthread_mutex_lock(&a->sh->mtx);
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!axis_connected[axis]) continue;
+      if (stc_detect_ds402_fault(a->sh->d.telem[axis].status_word)) {
+        a->sh->d.axis_fault_active[axis] = 1;
+        enter_fail = 1;
+      }
+      if (stc_detect_can_timeout(now, a->sh->d.last_rx_ms[axis], a->sh->d.can_timeout_ms)) {
+        a->sh->d.axis_fault_active[axis] = 1;
+        enter_fail = 1;
+      }
+    }
+    if (enter_fail) {
+      (void)shared_transition_locked(a->sh, EVT_FAULT_CRITICAL);
+    }
+    stc_state_t post_fault_state = a->sh->d.st_state;
+    pthread_mutex_unlock(&a->sh->mtx);
+
+    if (post_fault_state == STC_STATE_FAIL) {
+      for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+        if (axis_connected[axis]) {
+          (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
+          (void)pd4c_rpdo1_send_control_mode(&pd_ctx[axis], 0x0006, (int8_t)axis_mode[axis]);
+          axis_enabled[axis] = 0;
+        }
+      }
+    }
+
     stc_action_t act;
     while (actionq_try_peek(a->q, &act)) {
+      pthread_mutex_lock(&a->sh->mtx);
+      stc_state_t queue_state = a->sh->d.st_state;
+      pthread_mutex_unlock(&a->sh->mtx);
+      if (queue_state == STC_STATE_FAIL && act.type != ACTION_RESET) {
+        (void)actionq_drop_head(a->q);
+        continue;
+      }
       switch (act.type) {
         case ACTION_SET_STATE:
-          if (act.u.new_state != 3) {
-            for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-              if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
-              (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
-              axis_enabled[axis] = 0;
-            }
-          }
           break;
         case ACTION_PP_MOVE:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -613,6 +660,10 @@ static void* can_worker_thread(void* arg) {
         case ACTION_STREAM_SPEED:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+            pthread_mutex_lock(&a->sh->mtx);
+            stc_state_t action_state = a->sh->d.st_state;
+            pthread_mutex_unlock(&a->sh->mtx);
+            if (!stc_state_can_stream(action_state)) continue;
             (void)motor_ensure_enabled(&pd_ctx[axis], a->sh, MTR_MODE_PV, &axis_mode[axis], &axis_enabled[axis]);
             int clipped = 0;
             int32_t tv_raw = axis_deg_s_to_target_vel_units(&a->sh->d.cfg[axis], act.u.speed_deg_s[axis], &clipped);
@@ -635,7 +686,15 @@ static void* can_worker_thread(void* arg) {
             (void)pd4c_sdo_write_u32(&pd_ctx[axis], 0x1010, 0x01, 0x65766173UL);
           }
           break;
-        case ACTION_RESET:
+        case ACTION_RESET: {
+          int reset_ok = 0;
+          pthread_mutex_lock(&a->sh->mtx);
+          reset_ok = (shared_transition_locked(a->sh, EVT_RESET) == 0);
+          if (reset_ok) {
+            memset(a->sh->d.axis_fault_active, 0, sizeof(a->sh->d.axis_fault_active));
+          }
+          pthread_mutex_unlock(&a->sh->mtx);
+          if (!reset_ok) break;
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
             (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
@@ -644,6 +703,7 @@ static void* can_worker_thread(void* arg) {
             axis_enabled[axis] = 0;
           }
           break;
+        }
         case ACTION_FACTORY:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
@@ -671,14 +731,14 @@ static void* can_worker_thread(void* arg) {
       (void)actionq_drop_head(a->q);
     }
 
-    uint8_t cu_state = 0;
+    stc_state_t st_state = STC_STATE_INIT;
     int watchdog_ms = 0;
     pthread_mutex_lock(&a->sh->mtx);
-    cu_state = a->sh->d.cu_state;
+    st_state = a->sh->d.st_state;
     watchdog_ms = a->sh->d.speed_watchdog_ms;
     pthread_mutex_unlock(&a->sh->mtx);
 
-    if (cu_state != 3) {
+    if (!stc_state_can_stream(st_state)) {
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
         if (!axis_connected[axis]) continue;
         pthread_mutex_lock(&a->sh->mtx);
@@ -693,7 +753,7 @@ static void* can_worker_thread(void* arg) {
     }
 
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-      if (!axis_connected[axis] || cu_state != 3) continue;
+      if (!axis_connected[axis] || !stc_state_can_stream(st_state)) continue;
 
       int speed_on = 0;
       double desired_deg_s = 0.0;
@@ -796,7 +856,7 @@ static void* tlml_tx_thread(void* arg) {
     // snapshot shared
     pthread_mutex_lock(&a->sh->mtx);
     m.seq = a->sh->d.seq_l++;
-    m.state = a->sh->d.cu_state;
+    m.state = (uint8_t)a->sh->d.st_state;
     uint64_t uptime_ms = nowm - a->sh->d.boot_ms;
     m.uptime_sec = (uint32_t)(uptime_ms / 1000ULL);
     m.lat = a->sh->d.has_manualpos ? a->sh->d.lat : 0.0;
@@ -811,8 +871,10 @@ static void* tlml_tx_thread(void* arg) {
     uint8_t emcy_reg = a->sh->d.emcy_reg;
 
     bool saturated[STC_AXIS_COUNT] = {false};
+    uint8_t axis_fault_active[STC_AXIS_COUNT] = {0};
     for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
       saturated[i] = a->sh->d.saturated[i];
+      axis_fault_active[i] = a->sh->d.axis_fault_active[i];
       a->sh->d.saturated[i] = false;
     }
 
@@ -852,6 +914,9 @@ static void* tlml_tx_thread(void* arg) {
     }
     for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
       if (saturated[i]) m.errors[m.error_count++] = 0xE1000000u | (uint32_t)i;
+      if (axis_fault_active[i] && m.error_count < STC_ICD_MAX_ERRORS) {
+        m.errors[m.error_count++] = 0xE2000000u | (uint32_t)i;
+      }
     }
     if (m.error_count > STC_ICD_MAX_ERRORS) m.error_count = STC_ICD_MAX_ERRORS;
 
@@ -958,6 +1023,12 @@ int main(int argc, char** argv) {
   sh.d.cfg[0].pp_profile_vel = 500;       // default profile velocity
   sh.d.ds402_timeout_ms = 2000;
   sh.d.pp_sdo_diag = 0;
+  sh.d.can_timeout_ms = 1000;
+  sh.d.st_state = STC_STATE_INIT;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    sh.d.last_rx_ms[axis] = sh.d.boot_ms;
+    sh.d.axis_fault_active[axis] = 0;
+  }
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--can") && i + 1 < argc) net.can_if = argv[++i];
@@ -1004,6 +1075,7 @@ int main(int argc, char** argv) {
     }
     else if (!strcmp(argv[i], "--ds402-timeout-ms") && i + 1 < argc) sh.d.ds402_timeout_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--pp-sdo-diag") && i + 1 < argc) sh.d.pp_sdo_diag = atoi(argv[++i]) ? 1 : 0;
+    else if (!strcmp(argv[i], "--can-timeout-ms") && i + 1 < argc) sh.d.can_timeout_ms = (uint32_t)atoi(argv[++i]);
     else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) {
       net.tlmh_ip = argv[++i];
       legacy_cli_mode = 1;
@@ -1079,6 +1151,10 @@ int main(int argc, char** argv) {
 
   signal(SIGINT, on_sig);
   signal(SIGTERM, on_sig);
+
+  stc_state_t next_state = STC_STATE_INIT;
+  if (stc_state_transition(sh.d.st_state, EVT_INIT_COMPLETE, &next_state) == 0) sh.d.st_state = next_state;
+  if (stc_state_transition(sh.d.st_state, EVT_ENTER_SAFE, &next_state) == 0) sh.d.st_state = next_state;
 
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
   cfg.strict_magic = 0;    // allow us to return NACK even when magic is wrong
@@ -1250,9 +1326,28 @@ int main(int argc, char** argv) {
         pthread_mutex_lock(&sh.mtx);
         if (cmd.payload_decoded) {
           if (cmd.cmd_id == STC_CMD_CU_STATE) {
-            sh.d.cu_state = cmd.u.cu_state.state;
-            stc_action_make_set_state(&act, (int8_t)cmd.u.cu_state.state);
-            has_action = 1;
+            stc_event_t evt;
+            if (cmd.u.cu_state.state == STC_STATE_SAFE) evt = EVT_ENTER_SAFE;
+            else if (cmd.u.cu_state.state == STC_STATE_OPER) evt = EVT_ENTER_OPER;
+            else {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+              evt = EVT_ENTER_SAFE;
+            }
+            if (v == STC_ERR_NO_ERROR && shared_transition_locked(&sh, evt) != 0) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            }
+          } else if (cmd.cmd_id == STC_CMD_SELFLEV) {
+            if (cmd.u.selflev.v == 0) {
+              if (shared_transition_locked(&sh, EVT_ENTER_SAFE) != 0) v = STC_ERR_NOT_ALLOWED_STATE;
+            } else if (shared_transition_locked(&sh, EVT_SELF_LEV) != 0) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            }
+          } else if (cmd.cmd_id == STC_CMD_IBIT) {
+            if (cmd.u.ibit.v == 0) {
+              if (shared_transition_locked(&sh, EVT_ENTER_SAFE) != 0) v = STC_ERR_NOT_ALLOWED_STATE;
+            } else if (shared_transition_locked(&sh, EVT_IBIT) != 0) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            }
           } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
             sh.d.lat = cmd.u.manualpos.lat;
             sh.d.lon = cmd.u.manualpos.lon;
@@ -1262,7 +1357,7 @@ int main(int argc, char** argv) {
           } else if (cmd.cmd_id == STC_CMD_POSMODE) {
             sh.d.posmode = cmd.u.posmode.v;
           } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
-            if (sh.d.cu_state != 3) {
+            if (!stc_state_can_move(sh.d.st_state)) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             } else {
               uint32_t axes_mask = 0;
@@ -1392,8 +1487,12 @@ int main(int argc, char** argv) {
           }
         } else {
           if (cmd.cmd_id == STC_CMD_RESET) {
-            stc_action_make_simple(&act, ACTION_RESET, 0u);
-            has_action = 1;
+            if (sh.d.st_state != STC_STATE_FAIL) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            } else {
+              stc_action_make_simple(&act, ACTION_RESET, 0xFFFFFFFFu);
+              has_action = 1;
+            }
           } else if (cmd.cmd_id == STC_CMD_FACTORY) {
             stc_action_make_simple(&act, ACTION_FACTORY, 0u);
             has_action = 1;
@@ -1401,8 +1500,12 @@ int main(int argc, char** argv) {
             stc_action_make_simple(&act, ACTION_SHUTDOWN, 0u);
             has_action = 1;
           } else if (cmd.cmd_id == STC_CMD_STORAGE) {
-            stc_action_make_simple(&act, ACTION_ENTER_STORE, 0u);
-            has_action = 1;
+            if (shared_transition_locked(&sh, EVT_STORE) != 0) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            } else {
+              stc_action_make_simple(&act, ACTION_ENTER_STORE, 0xFFFFFFFFu);
+              has_action = 1;
+            }
           }
         }
         pthread_mutex_unlock(&sh.mtx);

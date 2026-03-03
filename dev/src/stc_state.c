@@ -1,0 +1,83 @@
+#include "stc_state.h"
+
+int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next) {
+  if (!next) return -1;
+
+  if (evt == EVT_FAULT_CRITICAL) {
+    *next = STC_STATE_FAIL;
+    return 0;
+  }
+
+  switch (current) {
+    case STC_STATE_INIT:
+      if (evt == EVT_INIT_COMPLETE) {
+        *next = STC_STATE_INIT_DONE;
+        return 0;
+      }
+      break;
+    case STC_STATE_INIT_DONE:
+      if (evt == EVT_ENTER_SAFE) {
+        *next = STC_STATE_SAFE;
+        return 0;
+      }
+      break;
+    case STC_STATE_SAFE:
+      if (evt == EVT_ENTER_OPER) {
+        *next = STC_STATE_OPER;
+        return 0;
+      }
+      if (evt == EVT_SELF_LEV) {
+        *next = STC_STATE_SELF_LEVELLING;
+        return 0;
+      }
+      if (evt == EVT_IBIT) {
+        *next = STC_STATE_IBIT_RUNNING;
+        return 0;
+      }
+      if (evt == EVT_STORE) {
+        *next = STC_STATE_STORE;
+        return 0;
+      }
+      break;
+    case STC_STATE_OPER:
+      if (evt == EVT_ENTER_SAFE) {
+        *next = STC_STATE_SAFE;
+        return 0;
+      }
+      if (evt == EVT_SELF_LEV) {
+        *next = STC_STATE_SELF_LEVELLING;
+        return 0;
+      }
+      if (evt == EVT_IBIT) {
+        *next = STC_STATE_IBIT_RUNNING;
+        return 0;
+      }
+      break;
+    case STC_STATE_SELF_LEVELLING:
+    case STC_STATE_IBIT_RUNNING:
+    case STC_STATE_STORE:
+      if (evt == EVT_ENTER_SAFE) {
+        *next = STC_STATE_SAFE;
+        return 0;
+      }
+      break;
+    case STC_STATE_FAIL:
+      if (evt == EVT_RESET) {
+        *next = STC_STATE_SAFE;
+        return 0;
+      }
+      break;
+    default:
+      break;
+  }
+
+  return -1;
+}
+
+int stc_state_can_move(stc_state_t state) {
+  return state == STC_STATE_OPER;
+}
+
+int stc_state_can_stream(stc_state_t state) {
+  return state == STC_STATE_OPER;
+}
