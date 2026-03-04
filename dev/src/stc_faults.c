@@ -5,5 +5,8 @@ int stc_detect_ds402_fault(uint16_t status) {
 }
 
 int stc_detect_can_timeout(uint64_t now_ms, uint64_t last_rx_ms, uint32_t timeout_ms) {
+  if (now_ms < last_rx_ms) {
+    return 0;
+  }
   return (now_ms - last_rx_ms) >= (uint64_t)timeout_ms;
 }
