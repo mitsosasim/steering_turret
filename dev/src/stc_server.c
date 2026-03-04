@@ -59,6 +59,13 @@ static uint64_t wall_ms(void) {
   return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)(tv.tv_usec / 1000);
 }
 
+static uint64_t elapsed_ms_nonnegative(uint64_t now_ms, uint64_t last_ms) {
+  if (now_ms < last_ms) {
+    return 0;
+  }
+  return now_ms - last_ms;
+}
+
 static void sleep_until(struct timespec* next, long period_ns) {
   next->tv_nsec += period_ns;
   while (next->tv_nsec >= 1000000000L) {
@@ -937,7 +944,7 @@ static void* tlml_tx_thread(void* arg) {
       uint8_t flags = 0;
       if (axis_enabled[ax]) flags |= (1u << 0);
       if (axis_fault_active[ax]) flags |= (1u << 1);
-      if (nowm - last_rx_ms[ax] > can_timeout_ms) flags |= (1u << 2);
+      if (elapsed_ms_nonnegative(nowm, last_rx_ms[ax]) > can_timeout_ms) flags |= (1u << 2);
       if (saturated[ax]) flags |= (1u << 3);
       m.motor_status[j] = flags;
     }
@@ -952,7 +959,7 @@ static void* tlml_tx_thread(void* arg) {
 
     m.error_count = 0;
     for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
-      const int stale = (nowm - last_rx_ms[i] > can_timeout_ms);
+      const int stale = (elapsed_ms_nonnegative(nowm, last_rx_ms[i]) > can_timeout_ms);
       if (axis_fault_active[i]) {
         m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_FAULT);
       }

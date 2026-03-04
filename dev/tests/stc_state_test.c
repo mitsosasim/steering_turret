@@ -49,6 +49,7 @@ int main(void) {
 
   assert(!stc_detect_can_timeout(1000, 10, 1000));
   assert(stc_detect_can_timeout(1010, 10, 1000));
+  assert(!stc_detect_can_timeout(99, 100, 10));
 
   puts("stc_state_test: PASS");
   return 0;
