@@ -520,20 +520,9 @@ stc_icd_rc_t stc_icd_tlml_parse(const stc_icd_cfg_t* cfg,
 
   uint8_t declared = buf[off]; off += 1;
 
-  /* remaining bytes should be 4*N */
-  size_t rem = (len > off) ? (len - off) : 0;
-  uint16_t inferred = (uint16_t)(rem / 4u);
+  if (len != (base + ((size_t)declared * 4u))) return STC_ICD_EPROTO;
 
   uint16_t use_n = declared;
-  if ((size_t)declared * 4u != rem) {
-    /* If mismatch, infer from remaining bytes if aligned */
-    if (rem % 4u == 0) {
-      use_n = inferred;
-    } else {
-      /* not aligned -> protocol error */
-      return STC_ICD_EPROTO;
-    }
-  }
 
   if (use_n > STC_ICD_MAX_ERRORS) use_n = STC_ICD_MAX_ERRORS;
   out->error_count = (uint8_t)use_n;

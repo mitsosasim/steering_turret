@@ -220,12 +220,36 @@ static void test_cmd_mirror_id(void) {
   assert_true(buf[6]==0x07 && buf[7]==0x00, "mirror cmd_id le bytes");
 }
 
+static void test_tlml_declared_error_count_mismatch(void) {
+  stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
+
+  stc_tlml_t tlm;
+  memset(&tlm, 0, sizeof(tlm));
+  tlm.version = 0x01;
+  tlm.error_count = 2;
+  tlm.errors[0] = 0x11111111u;
+  tlm.errors[1] = 0x22222222u;
+
+  uint8_t buf[512];
+  size_t out_len = 0;
+  stc_icd_rc_t rc = stc_icd_tlml_pack(&cfg, &tlm, buf, sizeof(buf), &out_len);
+  assert_true(rc == STC_ICD_OK, "tlml_pack mismatch frame setup");
+
+  /* Corrupt only the declared error count, keep trailing bytes unchanged. */
+  buf[out_len - ((size_t)tlm.error_count * 4u) - 1u] = (uint8_t)(tlm.error_count + 1u);
+
+  stc_tlml_t parsed;
+  rc = stc_icd_tlml_parse(&cfg, buf, out_len, &parsed);
+  assert_true(rc == STC_ICD_EPROTO, "tlml parse declared count mismatch");
+}
+
 int main(void) {
   test_cmd_turret_pack_parse();
   test_rsp_pack_parse();
   test_tlmh_pack_parse();
   test_tlml_pack_parse();
   test_cmd_mirror_id();
+  test_tlml_declared_error_count_mismatch();
 
   printf("OK\n");
   return 0;
