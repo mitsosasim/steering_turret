@@ -89,9 +89,9 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   memset(cfg, 0, sizeof(*cfg));
 
   cfg->tcp_port = 7000;
-  snprintf(cfg->mcast_ip, sizeof(cfg->mcast_ip), "%s", "239.255.10.2");
-  cfg->mcast_tlmh_port = 6010;
-  cfg->mcast_tlml_port = 6020;
+  snprintf(cfg->tlm_dest_ip, sizeof(cfg->tlm_dest_ip), "%s", "127.0.0.1");
+  cfg->tlmh_port = 6010;
+  cfg->tlml_port = 6020;
   cfg->tlmh_interval_ms = 10;
   cfg->tlml_interval_ms = 100;
   cfg->rt_enabled = 1;
@@ -187,13 +187,23 @@ bool load_config(const char* path, stc_config_t* cfg) {
       bool recognized = true;
       if (strcmp(key, "tcp_port") == 0) {
         if (parse_int(value, &cfg->tcp_port) != 0) goto parse_error;
+      } else if (strcmp(key, "tlm_dest_ip") == 0) {
+        if (strlen(value) >= sizeof(cfg->tlm_dest_ip)) goto parse_error;
+        strcpy(cfg->tlm_dest_ip, value);
+      } else if (strcmp(key, "tlmh_port") == 0) {
+        if (parse_int(value, &cfg->tlmh_port) != 0) goto parse_error;
+      } else if (strcmp(key, "tlml_port") == 0) {
+        if (parse_int(value, &cfg->tlml_port) != 0) goto parse_error;
       } else if (strcmp(key, "mcast_ip") == 0) {
-        if (strlen(value) >= sizeof(cfg->mcast_ip)) goto parse_error;
-        strcpy(cfg->mcast_ip, value);
+        if (strlen(value) >= sizeof(cfg->tlm_dest_ip)) goto parse_error;
+        strcpy(cfg->tlm_dest_ip, value);
+        STC_LOG_WARN("%s:%d: [Network].mcast_ip is deprecated; use tlm_dest_ip", path, line_no);
       } else if (strcmp(key, "mcast_tlmh_port") == 0) {
-        if (parse_int(value, &cfg->mcast_tlmh_port) != 0) goto parse_error;
+        if (parse_int(value, &cfg->tlmh_port) != 0) goto parse_error;
+        STC_LOG_WARN("%s:%d: [Network].mcast_tlmh_port is deprecated; use tlmh_port", path, line_no);
       } else if (strcmp(key, "mcast_tlml_port") == 0) {
-        if (parse_int(value, &cfg->mcast_tlml_port) != 0) goto parse_error;
+        if (parse_int(value, &cfg->tlml_port) != 0) goto parse_error;
+        STC_LOG_WARN("%s:%d: [Network].mcast_tlml_port is deprecated; use tlml_port", path, line_no);
       } else if (strcmp(key, "tlmh_interval_ms") == 0) {
         if (parse_int(value, &cfg->tlmh_interval_ms) != 0) goto parse_error;
       } else if (strcmp(key, "tlml_interval_ms") == 0) {

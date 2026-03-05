@@ -1,13 +1,13 @@
 // stc_server.c
 //
-// STC runtime daemon (TCP CMD/RSP <-> CANopen PD4-C) + UDP multicast telemetry.
+// STC runtime daemon (TCP CMD/RSP <-> CANopen PD4-C) + UDP unicast telemetry.
 //
 // Architecture:
 //  - TCP thread (main): receive CMD, parse/validate, perform fast side-effects (state/manualpos),
 //    and enqueue discrete actions for CAN worker.
 //  - CAN worker thread: owns pd4c_ctx_t, executes queued commands, runs safety watchdog,
 //    polls TPDOs and updates shared telemetry.
-//  - Telemetry threads: publish TLMH @100Hz and TLML @10Hz over UDP multicast.
+//  - Telemetry threads: publish TLMH @100Hz and TLML @10Hz over UDP unicast.
 //
 /* Build example:
  *   gcc -std=c11 -O2 -Wall -Wextra -pthread \
@@ -110,21 +110,15 @@ static int open_udp_tx(void) {
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) return -1;
 
-  unsigned char ttl = 1;
-  setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
-
-  unsigned char loop = 1;  // allow local testing
-  setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
-
   return fd;
 }
 
-static int udp_send_to(int fd, const char* mcast_ip, int port, const uint8_t* buf, size_t len) {
+static int udp_send_to(int fd, const char* dest_ip, int port, const uint8_t* buf, size_t len) {
   struct sockaddr_in dst;
   memset(&dst, 0, sizeof(dst));
   dst.sin_family = AF_INET;
   dst.sin_port = htons((uint16_t)port);
-  if (inet_pton(AF_INET, mcast_ip, &dst.sin_addr) != 1) return -1;
+  if (inet_pton(AF_INET, dest_ip, &dst.sin_addr) != 1) return -1;
 
   ssize_t s = sendto(fd, buf, len, 0, (struct sockaddr*)&dst, sizeof(dst));
   return (s == (ssize_t)len) ? 0 : -1;
@@ -1175,8 +1169,8 @@ static void usage(const char* p) {
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
           "          [--ds402-timeout-ms MS] [--pp-sdo-diag 0|1]\n"
-          "          [--tlmh-ip 239.255.10.2 --tlmh-port 6010 --tlmh-hz 100]\n"
-          "          [--tlml-ip 239.255.10.3 --tlml-port 6020 --tlml-hz 10]\n"
+          "          [--tlmh-ip 127.0.0.1 --tlmh-port 6010 --tlmh-hz 100]\n"
+          "          [--tlml-ip 127.0.0.1 --tlml-port 6020 --tlml-hz 10]\n"
           "          [--rt-enabled 0|1] [--rt-strict 0|1] [--rt-policy fifo|rr|other]\n"
           "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n",
           p);
@@ -1250,11 +1244,11 @@ int main(int argc, char** argv) {
     .can_if = "can0",
     .node_id = 1,
     .tcp_port = 7000,
-    .tlmh_ip = "239.255.10.2",
+    .tlmh_ip = "127.0.0.1",
     .tlmh_port = 6010,
     .tlmh_hz = 100,
     .tlmh_period_ns = 10000000L,
-    .tlml_ip = "239.255.10.3",
+    .tlml_ip = "127.0.0.1",
     .tlml_port = 6020,
     .tlml_hz = 10,
     .tlml_period_ns = 100000000L,
@@ -1427,10 +1421,10 @@ int main(int argc, char** argv) {
 
     net.node_id = parsed_cfg.axis_node_id[0];
     net.tcp_port = parsed_cfg.tcp_port;
-    net.tlmh_ip = parsed_cfg.mcast_ip;
-    net.tlml_ip = parsed_cfg.mcast_ip;
-    net.tlmh_port = parsed_cfg.mcast_tlmh_port;
-    net.tlml_port = parsed_cfg.mcast_tlml_port;
+    net.tlmh_ip = parsed_cfg.tlm_dest_ip;
+    net.tlml_ip = parsed_cfg.tlm_dest_ip;
+    net.tlmh_port = parsed_cfg.tlmh_port;
+    net.tlml_port = parsed_cfg.tlml_port;
     net.tlmh_period_ns = telemetry_interval_ms_to_period_ns(parsed_cfg.tlmh_interval_ms, 10000000L);
     net.tlml_period_ns = telemetry_interval_ms_to_period_ns(parsed_cfg.tlml_interval_ms, 100000000L);
     net.tlmh_hz = telemetry_interval_ms_to_rate_hz(parsed_cfg.tlmh_interval_ms, 100);
@@ -1556,7 +1550,7 @@ int main(int argc, char** argv) {
 
   STC_LOG_INFO("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)", net.can_if);
   STC_LOG_INFO("STC server listening on TCP port %d", net.tcp_port);
-  STC_LOG_INFO("UDP multicast: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
+  STC_LOG_INFO("UDP unicast telemetry: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
 
   while (!atomic_load(&g_stop)) {
     struct sockaddr_in cli;

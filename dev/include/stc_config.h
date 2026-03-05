@@ -15,9 +15,9 @@ extern "C" {
 
 typedef struct stc_config_s {
   int tcp_port;
-  char mcast_ip[16];
-  int mcast_tlmh_port;
-  int mcast_tlml_port;
+  char tlm_dest_ip[16];
+  int tlmh_port;
+  int tlml_port;
   int tlmh_interval_ms;
   int tlml_interval_ms;
 
