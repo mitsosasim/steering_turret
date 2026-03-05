@@ -44,6 +44,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
+#include <limits.h>
 #include <stdatomic.h>
 
 /* ----------------------------- time helpers ----------------------------- */
@@ -724,12 +725,23 @@ static void* can_worker_thread(void* arg) {
   a->sh->d.can_ok = any_connected;
   pthread_mutex_unlock(&a->sh->mtx);
 
+  const uint64_t maintenance_period_ms = 10;
+  uint64_t next_maintenance_ms = mono_ms();
   while (!atomic_load(&g_stop)) {
     uint64_t now = mono_ms();
 
-    struct pollfd pfds[STC_AXIS_COUNT];
-    size_t axis_idx[STC_AXIS_COUNT];
+    struct pollfd pfds[STC_AXIS_COUNT + 1];
+    size_t axis_idx[STC_AXIS_COUNT + 1];
     nfds_t nfds = 0;
+
+    const int wake_fd = actionq_wakeup_fd(a->q);
+    if (wake_fd >= 0) {
+      pfds[nfds].fd = wake_fd;
+      pfds[nfds].events = POLLIN;
+      pfds[nfds].revents = 0;
+      axis_idx[nfds] = SIZE_MAX;
+      nfds++;
+    }
 
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       if (!axis_connected[axis]) continue;
@@ -740,11 +752,28 @@ static void* can_worker_thread(void* arg) {
       nfds++;
     }
 
+    int has_pending_action = actionq_try_peek(a->q, &(stc_action_t){0});
+
+    int timeout_ms = 0;
+    now = mono_ms();
+    if (has_pending_action) {
+      timeout_ms = 0;
+    } else if (now >= next_maintenance_ms) {
+      timeout_ms = 0;
+    } else {
+      uint64_t wait_ms = next_maintenance_ms - now;
+      timeout_ms = (wait_ms > INT_MAX) ? INT_MAX : (int)wait_ms;
+    }
+
     if (nfds > 0) {
-      int prc = poll(pfds, nfds, 10);
+      int prc = poll(pfds, nfds, timeout_ms);
       if (prc > 0) {
         for (nfds_t j = 0; j < nfds; j++) {
           if ((pfds[j].revents & POLLIN) == 0) continue;
+          if (axis_idx[j] == SIZE_MAX) {
+            actionq_consume_wakeup(a->q);
+            continue;
+          }
           size_t axis = axis_idx[j];
           int ev = pd4c_poll(&pd_ctx[axis], 0);
           if (ev >= 0) {
@@ -757,7 +786,11 @@ static void* can_worker_thread(void* arg) {
           }
         }
       }
+    } else if (timeout_ms > 0) {
+      usleep((useconds_t)timeout_ms * 1000);
     }
+
+    now = mono_ms();
 
     int enter_fail = 0;
     pthread_mutex_lock(&a->sh->mtx);
@@ -944,6 +977,9 @@ static void* can_worker_thread(void* arg) {
         (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
       }
     }
+
+    now = mono_ms();
+    next_maintenance_ms = now + maintenance_period_ms;
 
     pthread_mutex_lock(&a->sh->mtx);
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
