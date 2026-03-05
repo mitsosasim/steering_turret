@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <sched.h>
 
 static void trim_inplace(char* s) {
   if (!s) return;
@@ -93,6 +94,12 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->mcast_tlml_port = 6020;
   cfg->tlmh_interval_ms = 10;
   cfg->tlml_interval_ms = 100;
+  cfg->rt_enabled = 1;
+  cfg->rt_strict = 0;
+  cfg->rt_sched_policy = SCHED_FIFO;
+  cfg->can_worker_priority = 80;
+  cfg->tlmh_tx_priority = 70;
+  cfg->tlml_tx_priority = 60;
 
   cfg->turret_az_axis = -1;
   cfg->turret_el_axis = -1;
@@ -191,6 +198,38 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->tlmh_interval_ms) != 0) goto parse_error;
       } else if (strcmp(key, "tlml_interval_ms") == 0) {
         if (parse_int(value, &cfg->tlml_interval_ms) != 0) goto parse_error;
+      } else {
+        recognized = false;
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
+      }
+      continue;
+    }
+
+    if (strcmp(section, "Runtime") == 0) {
+      bool recognized = true;
+      if (strcmp(key, "rt_enabled") == 0) {
+        if (parse_int(value, &cfg->rt_enabled) != 0) goto parse_error;
+      } else if (strcmp(key, "rt_strict") == 0) {
+        if (parse_int(value, &cfg->rt_strict) != 0) goto parse_error;
+      } else if (strcmp(key, "rt_sched_policy") == 0) {
+        if (strcmp(value, "fifo") == 0 || strcmp(value, "FIFO") == 0) {
+          cfg->rt_sched_policy = SCHED_FIFO;
+        } else if (strcmp(value, "rr") == 0 || strcmp(value, "RR") == 0) {
+          cfg->rt_sched_policy = SCHED_RR;
+        } else if (strcmp(value, "other") == 0 || strcmp(value, "OTHER") == 0) {
+          cfg->rt_sched_policy = SCHED_OTHER;
+        } else {
+          goto parse_error;
+        }
+      } else if (strcmp(key, "can_worker_priority") == 0) {
+        if (parse_int(value, &cfg->can_worker_priority) != 0) goto parse_error;
+      } else if (strcmp(key, "tlmh_tx_priority") == 0) {
+        if (parse_int(value, &cfg->tlmh_tx_priority) != 0) goto parse_error;
+      } else if (strcmp(key, "tlml_tx_priority") == 0) {
+        if (parse_int(value, &cfg->tlml_tx_priority) != 0) goto parse_error;
       } else {
         recognized = false;
       }

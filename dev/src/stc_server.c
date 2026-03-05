@@ -40,6 +40,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <poll.h>
+#include <sched.h>
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
@@ -399,6 +400,151 @@ typedef enum {
   MTR_MODE_PV   = PD4C_MODE_PROFILE_VELOCITY,
   MTR_MODE_PP   = PD4C_MODE_PROFILE_POSITION
 } mtr_mode_t;
+
+
+typedef struct {
+  int rt_enabled;
+  int rt_strict;
+  int sched_policy;
+  int can_worker_priority;
+  int tlmh_tx_priority;
+  int tlml_tx_priority;
+} runtime_sched_t;
+
+static const char* sched_policy_name(int policy) {
+  switch (policy) {
+    case SCHED_FIFO: return "SCHED_FIFO";
+    case SCHED_RR: return "SCHED_RR";
+    case SCHED_OTHER: return "SCHED_OTHER";
+    default: return "SCHED_UNKNOWN";
+  }
+}
+
+static int parse_sched_policy_cli(const char* value, int* out_policy) {
+  if (!value || !out_policy) return -1;
+  if (!strcmp(value, "fifo")) {
+    *out_policy = SCHED_FIFO;
+  } else if (!strcmp(value, "rr")) {
+    *out_policy = SCHED_RR;
+  } else if (!strcmp(value, "other")) {
+    *out_policy = SCHED_OTHER;
+  } else {
+    return -1;
+  }
+  return 0;
+}
+
+static int apply_thread_sched_attr(pthread_attr_t* attr,
+                                   int policy,
+                                   int priority,
+                                   const char* thread_name) {
+  int rc = pthread_attr_setinheritsched(attr, PTHREAD_EXPLICIT_SCHED);
+  if (rc != 0) {
+    STC_LOG_ERROR("%s: pthread_attr_setinheritsched(PTHREAD_EXPLICIT_SCHED) failed: %s", thread_name, strerror(rc));
+    return rc;
+  }
+
+  rc = pthread_attr_setschedpolicy(attr, policy);
+  if (rc != 0) {
+    STC_LOG_ERROR("%s: pthread_attr_setschedpolicy(%s) failed: %s", thread_name, sched_policy_name(policy), strerror(rc));
+    return rc;
+  }
+
+  struct sched_param sp;
+  memset(&sp, 0, sizeof(sp));
+  sp.sched_priority = priority;
+  rc = pthread_attr_setschedparam(attr, &sp);
+  if (rc != 0) {
+    STC_LOG_ERROR("%s: pthread_attr_setschedparam(priority=%d) failed: %s", thread_name, priority, strerror(rc));
+    return rc;
+  }
+
+  return 0;
+}
+
+static void log_thread_effective_sched(const char* thread_name, pthread_t thread) {
+  int policy = 0;
+  struct sched_param sp;
+  memset(&sp, 0, sizeof(sp));
+  int rc = pthread_getschedparam(thread, &policy, &sp);
+  if (rc != 0) {
+    STC_LOG_WARN("%s: pthread_getschedparam failed: %s", thread_name, strerror(rc));
+    return;
+  }
+  STC_LOG_INFO("%s effective scheduling: policy=%s priority=%d", thread_name, sched_policy_name(policy), sp.sched_priority);
+}
+
+static int create_thread_with_sched(pthread_t* thread,
+                                    const char* thread_name,
+                                    void* (*thread_fn)(void*),
+                                    void* arg,
+                                    const runtime_sched_t* sched_cfg,
+                                    int priority) {
+  if (!thread || !thread_name || !thread_fn || !sched_cfg) return EINVAL;
+
+  if (!sched_cfg->rt_enabled) {
+    int rc = pthread_create(thread, NULL, thread_fn, arg);
+    if (rc == 0) {
+      STC_LOG_INFO("%s scheduling request: RT disabled, using default pthread attrs", thread_name);
+      log_thread_effective_sched(thread_name, *thread);
+    }
+    return rc;
+  }
+
+  pthread_attr_t attr;
+  int rc = pthread_attr_init(&attr);
+  if (rc != 0) return rc;
+
+  int max_prio = sched_get_priority_max(sched_cfg->sched_policy);
+  int min_prio = sched_get_priority_min(sched_cfg->sched_policy);
+  int requested_prio = priority;
+  if (max_prio >= min_prio) {
+    if (requested_prio < min_prio) requested_prio = min_prio;
+    if (requested_prio > max_prio) requested_prio = max_prio;
+  }
+
+  STC_LOG_INFO("%s scheduling request: policy=%s priority=%d strict_rt=%d", thread_name, sched_policy_name(sched_cfg->sched_policy), requested_prio, sched_cfg->rt_strict);
+
+  rc = apply_thread_sched_attr(&attr, sched_cfg->sched_policy, requested_prio, thread_name);
+  if (rc != 0) {
+    pthread_attr_destroy(&attr);
+    return rc;
+  }
+
+  rc = pthread_create(thread, &attr, thread_fn, arg);
+  pthread_attr_destroy(&attr);
+  if (rc == 0) {
+    log_thread_effective_sched(thread_name, *thread);
+    return 0;
+  }
+
+  if ((rc == EPERM || rc == EINVAL) && !sched_cfg->rt_strict) {
+    STC_LOG_WARN("%s RT thread create failed (%s, policy=%s priority=%d); falling back to SCHED_OTHER",
+                 thread_name,
+                 strerror(rc),
+                 sched_policy_name(sched_cfg->sched_policy),
+                 requested_prio);
+    pthread_attr_t fb_attr;
+    int fb_rc = pthread_attr_init(&fb_attr);
+    if (fb_rc != 0) return fb_rc;
+
+    fb_rc = apply_thread_sched_attr(&fb_attr, SCHED_OTHER, 0, thread_name);
+    if (fb_rc != 0) {
+      pthread_attr_destroy(&fb_attr);
+      return rc;
+    }
+
+    fb_rc = pthread_create(thread, &fb_attr, thread_fn, arg);
+    pthread_attr_destroy(&fb_attr);
+    if (fb_rc == 0) {
+      log_thread_effective_sched(thread_name, *thread);
+      return 0;
+    }
+    return fb_rc;
+  }
+
+  return rc;
+}
 
 typedef struct {
   const char* can_if;
@@ -994,9 +1140,12 @@ static void usage(const char* p) {
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
           "          [--ds402-timeout-ms MS] [--pp-sdo-diag 0|1]\n"
           "          [--tlmh-ip 239.255.10.2 --tlmh-port 6010 --tlmh-hz 100]\n"
-          "          [--tlml-ip 239.255.10.3 --tlml-port 6020 --tlml-hz 10]\n",
+          "          [--tlml-ip 239.255.10.3 --tlml-port 6020 --tlml-hz 10]\n"
+          "          [--rt-enabled 0|1] [--rt-strict 0|1] [--rt-policy fifo|rr|other]\n"
+          "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n",
           p);
 }
+
 
 typedef struct {
   const char* can_if;
@@ -1010,6 +1159,7 @@ typedef struct {
   int tlml_port;
   int tlml_hz;
   long tlml_period_ns;
+  runtime_sched_t sched;
 } runtime_net_t;
 
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
@@ -1072,6 +1222,14 @@ int main(int argc, char** argv) {
     .tlml_port = 6020,
     .tlml_hz = 10,
     .tlml_period_ns = 100000000L,
+    .sched = {
+      .rt_enabled = 1,
+      .rt_strict = 0,
+      .sched_policy = SCHED_FIFO,
+      .can_worker_priority = 80,
+      .tlmh_tx_priority = 70,
+      .tlml_tx_priority = 60,
+    },
   };
   const char* config_path = NULL;
   int legacy_cli_mode = 0;
@@ -1181,6 +1339,34 @@ int main(int argc, char** argv) {
       net.tlml_period_ns = telemetry_rate_hz_to_period_ns(net.tlml_hz, 100000000L);
       legacy_cli_mode = 1;
     }
+    else if (!strcmp(argv[i], "--rt-enabled") && i + 1 < argc) {
+      net.sched.rt_enabled = atoi(argv[++i]) ? 1 : 0;
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--rt-strict") && i + 1 < argc) {
+      net.sched.rt_strict = atoi(argv[++i]) ? 1 : 0;
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--rt-policy") && i + 1 < argc) {
+      if (parse_sched_policy_cli(argv[++i], &net.sched.sched_policy) != 0) {
+        STC_LOG_ERROR("invalid --rt-policy value; expected fifo|rr|other");
+        exit_code = 2;
+        goto cleanup;
+      }
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--can-worker-prio") && i + 1 < argc) {
+      net.sched.can_worker_priority = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tlmh-prio") && i + 1 < argc) {
+      net.sched.tlmh_tx_priority = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--tlml-prio") && i + 1 < argc) {
+      net.sched.tlml_tx_priority = atoi(argv[++i]);
+      legacy_cli_mode = 1;
+    }
     else {
       usage(argv[0]);
       exit_code = 2;
@@ -1213,6 +1399,12 @@ int main(int argc, char** argv) {
     net.tlml_period_ns = telemetry_interval_ms_to_period_ns(parsed_cfg.tlml_interval_ms, 100000000L);
     net.tlmh_hz = telemetry_interval_ms_to_rate_hz(parsed_cfg.tlmh_interval_ms, 100);
     net.tlml_hz = telemetry_interval_ms_to_rate_hz(parsed_cfg.tlml_interval_ms, 10);
+    net.sched.rt_enabled = parsed_cfg.rt_enabled ? 1 : 0;
+    net.sched.rt_strict = parsed_cfg.rt_strict ? 1 : 0;
+    net.sched.sched_policy = parsed_cfg.rt_sched_policy;
+    net.sched.can_worker_priority = parsed_cfg.can_worker_priority;
+    net.sched.tlmh_tx_priority = parsed_cfg.tlmh_tx_priority;
+    net.sched.tlml_tx_priority = parsed_cfg.tlml_tx_priority;
 
     apply_config_to_shared(&sh, &parsed_cfg);
   } else {
@@ -1250,7 +1442,12 @@ int main(int argc, char** argv) {
 
   // CAN worker thread
   can_worker_arg_t carg = { .can_if = net.can_if, .sh = &sh, .q = &q };
-  if (pthread_create(&th_can, NULL, can_worker_thread, &carg) != 0) {
+  if (create_thread_with_sched(&th_can,
+                               "can_worker_thread",
+                               can_worker_thread,
+                               &carg,
+                               &net.sched,
+                               net.sched.can_worker_priority) != 0) {
     STC_LOG_ERROR("failed to create CAN worker thread");
     exit_code = 1;
     goto cleanup;
@@ -1271,13 +1468,23 @@ int main(int argc, char** argv) {
 
   tlm_tx_arg_t harg = { .udp_fd = udp_h, .ip = net.tlmh_ip, .port = net.tlmh_port, .period_ns = net.tlmh_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
   tlm_tx_arg_t larg = { .udp_fd = udp_l, .ip = net.tlml_ip, .port = net.tlml_port, .period_ns = net.tlml_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
-  if (pthread_create(&th_h, NULL, tlmh_tx_thread, &harg) != 0) {
+  if (create_thread_with_sched(&th_h,
+                               "tlmh_tx_thread",
+                               tlmh_tx_thread,
+                               &harg,
+                               &net.sched,
+                               net.sched.tlmh_tx_priority) != 0) {
     STC_LOG_ERROR("failed to create TLMH thread");
     exit_code = 1;
     goto cleanup;
   }
   tlmh_thread_started = 1;
-  if (pthread_create(&th_l, NULL, tlml_tx_thread, &larg) != 0) {
+  if (create_thread_with_sched(&th_l,
+                               "tlml_tx_thread",
+                               tlml_tx_thread,
+                               &larg,
+                               &net.sched,
+                               net.sched.tlml_tx_priority) != 0) {
     STC_LOG_ERROR("failed to create TLML thread");
     exit_code = 1;
     goto cleanup;
