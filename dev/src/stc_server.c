@@ -510,6 +510,12 @@ typedef struct {
   int tlml_tx_priority;
 } runtime_sched_t;
 
+typedef struct {
+  int ok;
+  int err;
+  int requested_priority;
+} rt_probe_result_t;
+
 static const char* sched_policy_name(int policy) {
   switch (policy) {
     case SCHED_FIFO: return "SCHED_FIFO";
@@ -531,6 +537,102 @@ static int parse_sched_policy_cli(const char* value, int* out_policy) {
     return -1;
   }
   return 0;
+}
+
+static int clamp_sched_priority(int policy, int requested_priority) {
+  int max_prio = sched_get_priority_max(policy);
+  int min_prio = sched_get_priority_min(policy);
+  if (max_prio < min_prio) return requested_priority;
+  if (requested_priority < min_prio) return min_prio;
+  if (requested_priority > max_prio) return max_prio;
+  return requested_priority;
+}
+
+static void log_rt_remediation(const char* binary_hint) {
+  const char* bin = (binary_hint && binary_hint[0]) ? binary_hint : "<binary>";
+  STC_LOG_WARN("RT privilege remediation options:");
+  STC_LOG_WARN("  1) grant CAP_SYS_NICE: sudo setcap cap_sys_nice=ep %s", bin);
+  STC_LOG_WARN("  2) systemd unit: AmbientCapabilities=CAP_SYS_NICE and LimitRTPRIO=<priority>");
+  STC_LOG_WARN("  3) run as root where local policy allows");
+}
+
+static rt_probe_result_t probe_rt_privilege(int policy, int requested_priority) {
+  rt_probe_result_t r;
+  memset(&r, 0, sizeof(r));
+  r.ok = 0;
+  r.err = EINVAL;
+  r.requested_priority = clamp_sched_priority(policy, requested_priority);
+
+  int old_policy = 0;
+  struct sched_param old_sp;
+  memset(&old_sp, 0, sizeof(old_sp));
+  int rc = pthread_getschedparam(pthread_self(), &old_policy, &old_sp);
+  if (rc != 0) {
+    r.err = rc;
+    return r;
+  }
+
+  struct sched_param probe_sp;
+  memset(&probe_sp, 0, sizeof(probe_sp));
+  probe_sp.sched_priority = r.requested_priority;
+  rc = pthread_setschedparam(pthread_self(), policy, &probe_sp);
+  if (rc != 0) {
+    r.err = rc;
+    return r;
+  }
+
+  rc = pthread_setschedparam(pthread_self(), old_policy, &old_sp);
+  if (rc != 0) {
+    r.err = rc;
+    return r;
+  }
+
+  r.ok = 1;
+  r.err = 0;
+  return r;
+}
+
+static int enforce_rt_startup_policy(runtime_sched_t* sched_cfg,
+                                     const char* binary_hint) {
+  if (!sched_cfg || !sched_cfg->rt_enabled) return 0;
+  if (sched_cfg->sched_policy == SCHED_OTHER) {
+    STC_LOG_INFO("RT startup probe skipped: requested policy=%s", sched_policy_name(sched_cfg->sched_policy));
+    return 0;
+  }
+
+  int highest_requested = sched_cfg->can_worker_priority;
+  if (sched_cfg->tlmh_tx_priority > highest_requested) highest_requested = sched_cfg->tlmh_tx_priority;
+  if (sched_cfg->tlml_tx_priority > highest_requested) highest_requested = sched_cfg->tlml_tx_priority;
+
+  rt_probe_result_t probe = probe_rt_privilege(sched_cfg->sched_policy, highest_requested);
+  if (probe.ok) {
+    STC_LOG_INFO("RT startup probe succeeded: policy=%s priority=%d", sched_policy_name(sched_cfg->sched_policy), probe.requested_priority);
+    return 0;
+  }
+
+  STC_LOG_ERROR("RT startup probe failed: policy=%s priority=%d err=%s",
+                sched_policy_name(sched_cfg->sched_policy),
+                probe.requested_priority,
+                strerror(probe.err));
+  log_rt_remediation(binary_hint);
+
+  if (sched_cfg->rt_strict) {
+    STC_LOG_ERROR("strict RT mode enabled (--rt-strict=1): refusing to start without RT privileges");
+    return -1;
+  }
+
+  STC_LOG_WARN("non-strict RT mode (--rt-strict=0): continuing with RT disabled for deterministic startup behavior");
+  sched_cfg->rt_enabled = 0;
+  return 0;
+}
+
+static const char* resolve_binary_hint(char* out, size_t out_len, const char* argv0) {
+  if (!out || out_len == 0) return NULL;
+  out[0] = '\0';
+  if (!argv0 || !argv0[0]) return NULL;
+  if (realpath(argv0, out)) return out;
+  snprintf(out, out_len, "%s", argv0);
+  return out;
 }
 
 static int apply_thread_sched_attr(pthread_attr_t* attr,
@@ -594,13 +696,7 @@ static int create_thread_with_sched(pthread_t* thread,
   int rc = pthread_attr_init(&attr);
   if (rc != 0) return rc;
 
-  int max_prio = sched_get_priority_max(sched_cfg->sched_policy);
-  int min_prio = sched_get_priority_min(sched_cfg->sched_policy);
-  int requested_prio = priority;
-  if (max_prio >= min_prio) {
-    if (requested_prio < min_prio) requested_prio = min_prio;
-    if (requested_prio > max_prio) requested_prio = max_prio;
-  }
+  int requested_prio = clamp_sched_priority(sched_cfg->sched_policy, priority);
 
   STC_LOG_INFO("%s scheduling request: policy=%s priority=%d strict_rt=%d", thread_name, sched_policy_name(sched_cfg->sched_policy), requested_prio, sched_cfg->rt_strict);
 
@@ -1744,6 +1840,13 @@ int main(int argc, char** argv) {
     parsed_cfg.turret_el_axis = 0;
 
     apply_config_to_shared(&sh, &parsed_cfg);
+  }
+
+  char binary_hint[PATH_MAX];
+  const char* binary_path = resolve_binary_hint(binary_hint, sizeof(binary_hint), argv[0]);
+  if (enforce_rt_startup_policy(&net.sched, binary_path) != 0) {
+    exit_code = 1;
+    goto cleanup;
   }
 
   signal(SIGINT, on_sig);
