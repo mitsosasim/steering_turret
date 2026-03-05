@@ -21,6 +21,13 @@ typedef struct stc_config_s {
   int tlmh_interval_ms;
   int tlml_interval_ms;
 
+  int rt_enabled;
+  int rt_strict;
+  int rt_sched_policy;
+  int can_worker_priority;
+  int tlmh_tx_priority;
+  int tlml_tx_priority;
+
   int num_axes;
   int axis_node_id[STC_AXIS_COUNT];
   double axis_counts_per_rev[STC_AXIS_COUNT];
