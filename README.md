@@ -43,16 +43,18 @@ sudo setcap cap_sys_nice=ep /opt/stc/bin/stc_server
 getcap /opt/stc/bin/stc_server
 ```
 
-Install the provided `systemd` service unit example:
+Install the Linux deployment artifacts (`systemd` unit + preflight checks):
 
 ```bash
-sudo install -m 0644 dev/config/stc_server.service /etc/systemd/system/stc_server.service
+sudo install -d /opt/stc/deploy
+sudo install -m 0755 deploy/stc_preflight.sh /opt/stc/deploy/stc_preflight.sh
+sudo install -m 0644 deploy/stc_server.service /etc/systemd/system/stc_server.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now stc_server
 sudo systemctl status stc_server --no-pager
 ```
 
-If your local deployment policy allows it, running as root is also valid.
+See `deploy/CPU_AFFINITY.md` for CPU isolation guidance and `deploy/OPERATOR_RUNBOOK.md` for privilege model (root vs capability-based) operations.
 
 ### ICD command transmitter (`icd_tx_tcp`)
 
