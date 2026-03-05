@@ -36,6 +36,7 @@ typedef struct {
   size_t head;
   size_t tail;
   size_t count;
+  int wake_fd;
   pthread_mutex_t mtx;
   pthread_cond_t cv;
 } actionq_t;
@@ -44,6 +45,8 @@ void actionq_init(actionq_t* q);
 int actionq_push(actionq_t* q, const stc_action_t* action);
 int actionq_try_peek(actionq_t* q, stc_action_t* out);
 int actionq_drop_head(actionq_t* q);
+int actionq_wakeup_fd(const actionq_t* q);
+void actionq_consume_wakeup(actionq_t* q);
 
 void stc_action_make_simple(stc_action_t* action, stc_action_type_t type, uint32_t axes_mask);
 void stc_action_make_set_state(stc_action_t* action, int8_t new_state);

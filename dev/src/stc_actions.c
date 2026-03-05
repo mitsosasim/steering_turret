@@ -1,15 +1,58 @@
 #include "stc_actions.h"
 
+#include <errno.h>
 #include <string.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
+
+static void actionq_notify_locked(actionq_t* q) {
+  if (q->wake_fd < 0) return;
+  const uint64_t one = 1;
+  ssize_t wr = write(q->wake_fd, &one, sizeof(one));
+  if (wr < 0 && errno != EAGAIN) {
+    (void)wr;
+  }
+}
+
+static size_t actionq_filter_locked(actionq_t* q, stc_action_type_t type_to_drop) {
+  size_t kept = 0;
+  stc_action_t compacted[STC_ACTIONQ_CAPACITY];
+
+  for (size_t i = 0; i < q->count; i++) {
+    size_t idx = (q->head + i) % STC_ACTIONQ_CAPACITY;
+    if (q->items[idx].type == type_to_drop) {
+      continue;
+    }
+    compacted[kept++] = q->items[idx];
+  }
+
+  if (kept == q->count) {
+    return 0;
+  }
+
+  for (size_t i = 0; i < kept; i++) {
+    q->items[i] = compacted[i];
+  }
+  q->head = 0;
+  q->tail = kept % STC_ACTIONQ_CAPACITY;
+  q->count = kept;
+  return 1;
+}
 
 void actionq_init(actionq_t* q) {
   memset(q, 0, sizeof(*q));
+  q->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
   pthread_mutex_init(&q->mtx, NULL);
   pthread_cond_init(&q->cv, NULL);
 }
 
 int actionq_push(actionq_t* q, const stc_action_t* action) {
   pthread_mutex_lock(&q->mtx);
+
+  if (action->type == ACTION_STREAM_SPEED) {
+    (void)actionq_filter_locked(q, ACTION_STREAM_SPEED);
+  }
+
   if (q->count >= STC_ACTIONQ_CAPACITY) {
     pthread_mutex_unlock(&q->mtx);
     return -1;
@@ -17,6 +60,7 @@ int actionq_push(actionq_t* q, const stc_action_t* action) {
   q->items[q->tail] = *action;
   q->tail = (q->tail + 1) % STC_ACTIONQ_CAPACITY;
   q->count++;
+  actionq_notify_locked(q);
   pthread_cond_signal(&q->cv);
   pthread_mutex_unlock(&q->mtx);
   return 0;
@@ -43,6 +87,17 @@ int actionq_drop_head(actionq_t* q) {
   }
   pthread_mutex_unlock(&q->mtx);
   return ok;
+}
+
+int actionq_wakeup_fd(const actionq_t* q) {
+  return q->wake_fd;
+}
+
+void actionq_consume_wakeup(actionq_t* q) {
+  if (q->wake_fd < 0) return;
+  uint64_t ignored;
+  while (read(q->wake_fd, &ignored, sizeof(ignored)) == sizeof(ignored)) {
+  }
 }
 
 void stc_action_make_simple(stc_action_t* action, stc_action_type_t type, uint32_t axes_mask) {
