@@ -60,6 +60,7 @@ int actionq_push(actionq_t* q, const stc_action_t* action) {
   q->items[q->tail] = *action;
   q->tail = (q->tail + 1) % STC_ACTIONQ_CAPACITY;
   q->count++;
+  if (q->count > q->peak_count) q->peak_count = q->count;
   actionq_notify_locked(q);
   pthread_cond_signal(&q->cv);
   pthread_mutex_unlock(&q->mtx);
@@ -98,6 +99,22 @@ void actionq_consume_wakeup(actionq_t* q) {
   uint64_t ignored;
   while (read(q->wake_fd, &ignored, sizeof(ignored)) == sizeof(ignored)) {
   }
+}
+
+size_t actionq_count(actionq_t* q) {
+  size_t count = 0;
+  pthread_mutex_lock(&q->mtx);
+  count = q->count;
+  pthread_mutex_unlock(&q->mtx);
+  return count;
+}
+
+size_t actionq_peak_count(actionq_t* q) {
+  size_t peak = 0;
+  pthread_mutex_lock(&q->mtx);
+  peak = q->peak_count;
+  pthread_mutex_unlock(&q->mtx);
+  return peak;
 }
 
 void stc_action_make_simple(stc_action_t* action, stc_action_type_t type, uint32_t axes_mask) {
