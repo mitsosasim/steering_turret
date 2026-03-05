@@ -21,6 +21,8 @@ typedef enum {
 
 typedef struct {
   uint32_t axes_mask;
+  uint64_t obs_tcp_rx_ns;
+  uint64_t obs_queued_ns;
   union {
     double target_deg[STC_AXIS_COUNT];
     double speed_deg_s[STC_AXIS_COUNT];
@@ -47,6 +49,7 @@ int actionq_try_peek(actionq_t* q, stc_action_t* out);
 int actionq_drop_head(actionq_t* q);
 int actionq_wakeup_fd(const actionq_t* q);
 void actionq_consume_wakeup(actionq_t* q);
+size_t actionq_count(actionq_t* q);
 
 void stc_action_make_simple(stc_action_t* action, stc_action_type_t type, uint32_t axes_mask);
 void stc_action_make_set_state(stc_action_t* action, int8_t new_state);

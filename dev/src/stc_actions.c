@@ -100,6 +100,14 @@ void actionq_consume_wakeup(actionq_t* q) {
   }
 }
 
+size_t actionq_count(actionq_t* q) {
+  size_t count = 0;
+  pthread_mutex_lock(&q->mtx);
+  count = q->count;
+  pthread_mutex_unlock(&q->mtx);
+  return count;
+}
+
 void stc_action_make_simple(stc_action_t* action, stc_action_type_t type, uint32_t axes_mask) {
   memset(action, 0, sizeof(*action));
   action->type = type;

@@ -55,6 +55,12 @@ static uint64_t mono_ms(void) {
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 }
 
+static uint64_t mono_ns(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 static uint64_t wall_ms(void) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
@@ -75,6 +81,10 @@ static void sleep_until(struct timespec* next, long period_ns) {
     next->tv_sec += 1;
   }
   clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, next, NULL);
+}
+
+static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
+  return (a >= b) ? (a - b) : (b - a);
 }
 
 /* ----------------------------- networking helpers ----------------------------- */
@@ -125,6 +135,33 @@ static int udp_send_to(int fd, const char* dest_ip, int port, const uint8_t* buf
 }
 
 /* ----------------------------- shared state ----------------------------- */
+
+typedef struct {
+  uint64_t sample_count;
+  uint64_t deadline_miss_count;
+  uint64_t expected_wake_ns;
+  uint64_t actual_wake_ns;
+  uint64_t send_complete_ns;
+  uint64_t current_sec_samples;
+  uint64_t current_sec_jitter_sum_ns;
+  uint64_t current_sec_jitter_min_ns;
+  uint64_t current_sec_jitter_max_ns;
+  uint64_t current_sec_idx;
+  uint64_t last_sec_samples;
+  uint64_t last_sec_jitter_min_ns;
+  uint64_t last_sec_jitter_max_ns;
+  uint64_t last_sec_jitter_avg_ns;
+} tx_timing_stats_t;
+
+typedef struct {
+  uint64_t samples;
+  uint64_t tcp_recv_ns;
+  uint64_t action_queued_ns;
+  uint64_t exec_start_ns;
+  uint64_t tcp_to_queue_avg_ns;
+  uint64_t queue_to_exec_avg_ns;
+  uint64_t end_to_end_avg_ns;
+} cmd_timing_stats_t;
 
 typedef struct {
   // --- per-axis config/telemetry/stream (axis0 = turret az active in step3)
@@ -183,6 +220,13 @@ typedef struct {
   uint16_t seq_l;
   uint64_t boot_ms;
 
+  // --- observability
+  tx_timing_stats_t tlmh_timing;
+  tx_timing_stats_t tlml_timing;
+  cmd_timing_stats_t cmd_timing;
+  uint64_t action_queue_depth_peak;
+  uint64_t obs_last_log_ms;
+
   // --- active CU telemetry destination (authoritative while connected)
   struct in_addr active_cu_addr;
   int active_cu_connected;
@@ -192,6 +236,62 @@ typedef struct {
   pthread_mutex_t mtx;
   shared_data_t d;
 } shared_t;
+
+static void tx_timing_update(tx_timing_stats_t* stats,
+                             uint64_t expected_wake_ns,
+                             uint64_t actual_wake_ns,
+                             uint64_t send_complete_ns) {
+  if (!stats) return;
+  const uint64_t jitter_ns = abs_diff_u64(actual_wake_ns, expected_wake_ns);
+  const uint64_t sec_idx = actual_wake_ns / 1000000000ULL;
+
+  stats->sample_count++;
+  stats->expected_wake_ns = expected_wake_ns;
+  stats->actual_wake_ns = actual_wake_ns;
+  stats->send_complete_ns = send_complete_ns;
+  if (actual_wake_ns > expected_wake_ns) {
+    stats->deadline_miss_count++;
+  }
+
+  if (stats->current_sec_idx != sec_idx) {
+    if (stats->current_sec_samples > 0) {
+      stats->last_sec_samples = stats->current_sec_samples;
+      stats->last_sec_jitter_min_ns = stats->current_sec_jitter_min_ns;
+      stats->last_sec_jitter_max_ns = stats->current_sec_jitter_max_ns;
+      stats->last_sec_jitter_avg_ns = stats->current_sec_jitter_sum_ns / stats->current_sec_samples;
+    }
+    stats->current_sec_idx = sec_idx;
+    stats->current_sec_samples = 0;
+    stats->current_sec_jitter_sum_ns = 0;
+    stats->current_sec_jitter_min_ns = UINT64_MAX;
+    stats->current_sec_jitter_max_ns = 0;
+  }
+
+  stats->current_sec_samples++;
+  stats->current_sec_jitter_sum_ns += jitter_ns;
+  if (jitter_ns < stats->current_sec_jitter_min_ns) stats->current_sec_jitter_min_ns = jitter_ns;
+  if (jitter_ns > stats->current_sec_jitter_max_ns) stats->current_sec_jitter_max_ns = jitter_ns;
+}
+
+static void cmd_timing_update(cmd_timing_stats_t* stats,
+                              uint64_t tcp_recv_ns,
+                              uint64_t action_queued_ns,
+                              uint64_t exec_start_ns) {
+  if (!stats) return;
+  const uint64_t tcp_to_queue_ns = (action_queued_ns >= tcp_recv_ns) ? (action_queued_ns - tcp_recv_ns) : 0;
+  const uint64_t queue_to_exec_ns = (exec_start_ns >= action_queued_ns) ? (exec_start_ns - action_queued_ns) : 0;
+  const uint64_t end_to_end_ns = (exec_start_ns >= tcp_recv_ns) ? (exec_start_ns - tcp_recv_ns) : 0;
+
+  stats->samples++;
+  stats->tcp_recv_ns = tcp_recv_ns;
+  stats->action_queued_ns = action_queued_ns;
+  stats->exec_start_ns = exec_start_ns;
+  stats->tcp_to_queue_avg_ns += (tcp_to_queue_ns - stats->tcp_to_queue_avg_ns) / stats->samples;
+  stats->queue_to_exec_avg_ns += (queue_to_exec_ns - stats->queue_to_exec_avg_ns) / stats->samples;
+  stats->end_to_end_avg_ns += (end_to_end_ns - stats->end_to_end_avg_ns) / stats->samples;
+}
+
+static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms);
 
 /* ----------------------------- signal handling ----------------------------- */
 
@@ -821,6 +921,13 @@ static void* can_worker_thread(void* arg) {
 
     stc_action_t act;
     while (actionq_try_peek(a->q, &act)) {
+      uint64_t exec_start_ns = mono_ns();
+      if (act.obs_tcp_rx_ns != 0 && act.obs_queued_ns != 0) {
+        pthread_mutex_lock(&a->sh->mtx);
+        cmd_timing_update(&a->sh->d.cmd_timing, act.obs_tcp_rx_ns, act.obs_queued_ns, exec_start_ns);
+        pthread_mutex_unlock(&a->sh->mtx);
+      }
+
       pthread_mutex_lock(&a->sh->mtx);
       stc_state_t queue_state = a->sh->d.st_state;
       pthread_mutex_unlock(&a->sh->mtx);
@@ -977,6 +1084,7 @@ static void* can_worker_thread(void* arg) {
     }
 
     now = mono_ms();
+    observability_emit_periodic_log(a->sh, now);
     next_maintenance_ms = now + maintenance_period_ms;
 
     pthread_mutex_lock(&a->sh->mtx);
@@ -1061,6 +1169,123 @@ static long telemetry_rate_hz_to_period_ns(int rate_hz, long default_period_ns) 
   return 1000000000L / rate_hz;
 }
 
+static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms) {
+  pthread_mutex_lock(&sh->mtx);
+  if (elapsed_ms_nonnegative(now_ms, sh->d.obs_last_log_ms) < 1000) {
+    pthread_mutex_unlock(&sh->mtx);
+    return;
+  }
+  sh->d.obs_last_log_ms = now_ms;
+
+  tx_timing_stats_t h = sh->d.tlmh_timing;
+  tx_timing_stats_t l = sh->d.tlml_timing;
+  cmd_timing_stats_t c = sh->d.cmd_timing;
+  uint64_t qpeak = sh->d.action_queue_depth_peak;
+  pthread_mutex_unlock(&sh->mtx);
+
+  STC_LOG_INFO("OBS type=timing tlmh={samples:%llu,deadline_miss:%llu,last_jitter_ns:{min:%llu,max:%llu,avg:%llu}} tlml={samples:%llu,deadline_miss:%llu,last_jitter_ns:{min:%llu,max:%llu,avg:%llu}} cmd={samples:%llu,tcp_to_queue_avg_ns:%llu,queue_to_exec_avg_ns:%llu,end_to_end_avg_ns:%llu} queue_depth_peak=%llu",
+               (unsigned long long)h.sample_count,
+               (unsigned long long)h.deadline_miss_count,
+               (unsigned long long)h.last_sec_jitter_min_ns,
+               (unsigned long long)h.last_sec_jitter_max_ns,
+               (unsigned long long)h.last_sec_jitter_avg_ns,
+               (unsigned long long)l.sample_count,
+               (unsigned long long)l.deadline_miss_count,
+               (unsigned long long)l.last_sec_jitter_min_ns,
+               (unsigned long long)l.last_sec_jitter_max_ns,
+               (unsigned long long)l.last_sec_jitter_avg_ns,
+               (unsigned long long)c.samples,
+               (unsigned long long)c.tcp_to_queue_avg_ns,
+               (unsigned long long)c.queue_to_exec_avg_ns,
+               (unsigned long long)c.end_to_end_avg_ns,
+               (unsigned long long)qpeak);
+}
+
+typedef struct {
+  shared_t* sh;
+  int port;
+} diag_server_arg_t;
+
+static void* diag_server_thread(void* arg) {
+  diag_server_arg_t* darg = (diag_server_arg_t*)arg;
+  if (!darg || darg->port <= 0) return NULL;
+
+  int srv = socket(AF_INET, SOCK_STREAM, 0);
+  if (srv < 0) {
+    STC_LOG_ERROR("diag server socket failed: %s", strerror(errno));
+    return NULL;
+  }
+
+  int yes = 1;
+  setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons((uint16_t)darg->port);
+
+  if (bind(srv, (struct sockaddr*)&addr, sizeof(addr)) < 0 || listen(srv, 2) < 0) {
+    STC_LOG_ERROR("diag server bind/listen failed on 127.0.0.1:%d: %s", darg->port, strerror(errno));
+    close(srv);
+    return NULL;
+  }
+
+  STC_LOG_INFO("diagnostics endpoint enabled on 127.0.0.1:%d", darg->port);
+
+  while (!atomic_load(&g_stop)) {
+    struct pollfd pfd = {.fd = srv, .events = POLLIN, .revents = 0};
+    int prc = poll(&pfd, 1, 500);
+    if (prc <= 0 || (pfd.revents & POLLIN) == 0) continue;
+
+    int cfd = accept(srv, NULL, NULL);
+    if (cfd < 0) continue;
+
+    char out[1024];
+    pthread_mutex_lock(&darg->sh->mtx);
+    tx_timing_stats_t h = darg->sh->d.tlmh_timing;
+    tx_timing_stats_t l = darg->sh->d.tlml_timing;
+    cmd_timing_stats_t c = darg->sh->d.cmd_timing;
+    uint64_t qpeak = darg->sh->d.action_queue_depth_peak;
+    pthread_mutex_unlock(&darg->sh->mtx);
+
+    int n = snprintf(out, sizeof(out),
+                     "{\"tlmh\":{\"samples\":%llu,\"deadline_miss\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
+                     "\"tlml\":{\"samples\":%llu,\"deadline_miss\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
+                     "\"command_path\":{\"samples\":%llu,\"tcp_recv_ns\":%llu,\"action_queued_ns\":%llu,\"exec_start_ns\":%llu,\"tcp_to_queue_avg_ns\":%llu,\"queue_to_exec_avg_ns\":%llu,\"end_to_end_avg_ns\":%llu},"
+                     "\"queue_depth_peak\":%llu}\n",
+                     (unsigned long long)h.sample_count,
+                     (unsigned long long)h.deadline_miss_count,
+                     (unsigned long long)h.expected_wake_ns,
+                     (unsigned long long)h.actual_wake_ns,
+                     (unsigned long long)h.send_complete_ns,
+                     (unsigned long long)h.last_sec_jitter_min_ns,
+                     (unsigned long long)h.last_sec_jitter_max_ns,
+                     (unsigned long long)h.last_sec_jitter_avg_ns,
+                     (unsigned long long)l.sample_count,
+                     (unsigned long long)l.deadline_miss_count,
+                     (unsigned long long)l.expected_wake_ns,
+                     (unsigned long long)l.actual_wake_ns,
+                     (unsigned long long)l.send_complete_ns,
+                     (unsigned long long)l.last_sec_jitter_min_ns,
+                     (unsigned long long)l.last_sec_jitter_max_ns,
+                     (unsigned long long)l.last_sec_jitter_avg_ns,
+                     (unsigned long long)c.samples,
+                     (unsigned long long)c.tcp_recv_ns,
+                     (unsigned long long)c.action_queued_ns,
+                     (unsigned long long)c.exec_start_ns,
+                     (unsigned long long)c.tcp_to_queue_avg_ns,
+                     (unsigned long long)c.queue_to_exec_avg_ns,
+                     (unsigned long long)c.end_to_end_avg_ns,
+                     (unsigned long long)qpeak);
+    if (n > 0) (void)send_all(cfd, (const uint8_t*)out, (size_t)n);
+    close(cfd);
+  }
+
+  close(srv);
+  return NULL;
+}
+
 static void* tlmh_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
@@ -1068,6 +1293,8 @@ static void* tlmh_tx_thread(void* arg) {
   const long period_ns = a->period_ns;
 
   while (!atomic_load(&g_stop)) {
+    const uint64_t expected_wake_ns = (uint64_t)next.tv_sec * 1000000000ULL + (uint64_t)next.tv_nsec;
+    const uint64_t actual_wake_ns = mono_ns();
     stc_tlmh_t m;
     memset(&m, 0, sizeof(m));
     memcpy(m.magic, a->cfg.tlmh_magic, 4);
@@ -1092,6 +1319,12 @@ static void* tlmh_tx_thread(void* arg) {
     if (stc_icd_tlmh_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
       (void)telemetry_send_if_dest_available(a, buf, blen);
     }
+
+    const uint64_t send_complete_ns = mono_ns();
+    pthread_mutex_lock(&a->sh->mtx);
+    tx_timing_update(&a->sh->d.tlmh_timing, expected_wake_ns, actual_wake_ns, send_complete_ns);
+    pthread_mutex_unlock(&a->sh->mtx);
+    observability_emit_periodic_log(a->sh, mono_ms());
     sleep_until(&next, period_ns);
   }
   return NULL;
@@ -1104,6 +1337,8 @@ static void* tlml_tx_thread(void* arg) {
   const long period_ns = a->period_ns;
 
   while (!atomic_load(&g_stop)) {
+    const uint64_t expected_wake_ns = (uint64_t)next.tv_sec * 1000000000ULL + (uint64_t)next.tv_nsec;
+    const uint64_t actual_wake_ns = mono_ns();
     stc_tlml_t m;
     memset(&m, 0, sizeof(m));
     memcpy(m.magic, a->cfg.tlml_magic, 4);
@@ -1196,6 +1431,12 @@ static void* tlml_tx_thread(void* arg) {
     if (stc_icd_tlml_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
       (void)telemetry_send_if_dest_available(a, buf, blen);
     }
+
+    const uint64_t send_complete_ns = mono_ns();
+    pthread_mutex_lock(&a->sh->mtx);
+    tx_timing_update(&a->sh->d.tlml_timing, expected_wake_ns, actual_wake_ns, send_complete_ns);
+    pthread_mutex_unlock(&a->sh->mtx);
+    observability_emit_periodic_log(a->sh, mono_ms());
     sleep_until(&next, period_ns);
   }
   return NULL;
@@ -1213,7 +1454,8 @@ static void usage(const char* p) {
           "          [--tlmh-ip 127.0.0.1 --tlmh-port 6010 --tlmh-hz 100]\n"
           "          [--tlml-ip 127.0.0.1 --tlml-port 6020 --tlml-hz 10]\n"
           "          [--rt-enabled 0|1] [--rt-strict 0|1] [--rt-policy fifo|rr|other]\n"
-          "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n",
+          "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n"
+          "          [--diag-port 0|PORT]\n",
           p);
 }
 
@@ -1230,6 +1472,7 @@ typedef struct {
   int tlml_port;
   int tlml_hz;
   long tlml_period_ns;
+  int diag_port;
   runtime_sched_t sched;
 } runtime_net_t;
 
@@ -1268,6 +1511,7 @@ int main(int argc, char** argv) {
   int can_thread_started = 0;
   int tlmh_thread_started = 0;
   int tlml_thread_started = 0;
+  int diag_thread_started = 0;
   int udp_h_open = 0;
   int udp_l_open = 0;
   int srv_open = 0;
@@ -1275,6 +1519,7 @@ int main(int argc, char** argv) {
   pthread_t th_can = 0;
   pthread_t th_h = 0;
   pthread_t th_l = 0;
+  pthread_t th_diag = 0;
   int udp_h = -1;
   int udp_l = -1;
   int srv = -1;
@@ -1293,6 +1538,7 @@ int main(int argc, char** argv) {
     .tlml_port = 6020,
     .tlml_hz = 10,
     .tlml_period_ns = 100000000L,
+    .diag_port = 0,
     .sched = {
       .rt_enabled = 1,
       .rt_strict = 0,
@@ -1409,6 +1655,9 @@ int main(int argc, char** argv) {
       if (net.tlml_hz < 1) net.tlml_hz = 1;
       net.tlml_period_ns = telemetry_rate_hz_to_period_ns(net.tlml_hz, 100000000L);
       legacy_cli_mode = 1;
+    }
+    else if (!strcmp(argv[i], "--diag-port") && i + 1 < argc) {
+      net.diag_port = atoi(argv[++i]);
     }
     else if (!strcmp(argv[i], "--rt-enabled") && i + 1 < argc) {
       net.sched.rt_enabled = atoi(argv[++i]) ? 1 : 0;
@@ -1564,6 +1813,16 @@ int main(int argc, char** argv) {
   }
   tlml_thread_started = 1;
 
+  diag_server_arg_t diag_arg = { .sh = &sh, .port = net.diag_port };
+  if (net.diag_port > 0) {
+    if (pthread_create(&th_diag, NULL, diag_server_thread, &diag_arg) != 0) {
+      STC_LOG_ERROR("failed to create diagnostics thread");
+      exit_code = 1;
+      goto cleanup;
+    }
+    diag_thread_started = 1;
+  }
+
   // TCP server
   srv = socket(AF_INET, SOCK_STREAM, 0);
   if (srv < 0) {
@@ -1674,6 +1933,7 @@ int main(int argc, char** argv) {
           break;
         }
       }
+      uint64_t tcp_recv_ns = mono_ns();
 
       stc_icd_cmd_t cmd;
       stc_icd_rc_t prc = stc_icd_cmd_parse(&cfg, buf, 20u + payload_size, &cmd);
@@ -1914,7 +2174,18 @@ int main(int argc, char** argv) {
       }
 
       if (v == STC_ERR_NO_ERROR && has_action) {
-        if (actionq_push(&q, &act) != 0) v = STC_ERR_INSUFFICIENT_RES;
+        act.obs_tcp_rx_ns = tcp_recv_ns;
+        act.obs_queued_ns = mono_ns();
+        if (actionq_push(&q, &act) != 0) {
+          v = STC_ERR_INSUFFICIENT_RES;
+        } else {
+          size_t qdepth = actionq_count(&q);
+          pthread_mutex_lock(&sh.mtx);
+          if ((uint64_t)qdepth > sh.d.action_queue_depth_peak) {
+            sh.d.action_queue_depth_peak = (uint64_t)qdepth;
+          }
+          pthread_mutex_unlock(&sh.mtx);
+        }
       }
 
       // Build response
@@ -1981,6 +2252,7 @@ cleanup:
 
   if (tlmh_thread_started) pthread_join(th_h, NULL);
   if (tlml_thread_started) pthread_join(th_l, NULL);
+  if (diag_thread_started) pthread_join(th_diag, NULL);
   if (can_thread_started) pthread_join(th_can, NULL);
 
   if (udp_h_open) close(udp_h);
