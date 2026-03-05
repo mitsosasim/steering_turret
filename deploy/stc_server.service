@@ -1,0 +1,30 @@
+[Unit]
+Description=STC Server (RT + SocketCAN)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stc
+Group=stc
+WorkingDirectory=/opt/stc
+ExecStartPre=/opt/stc/deploy/stc_preflight.sh
+ExecStart=/opt/stc/bin/stc_server --config /opt/stc/config/stc_default.ini --rt-enabled 1 --rt-strict 1 --rt-policy fifo
+Restart=on-failure
+RestartSec=2
+
+# Allow RT scheduling and raw CAN sockets in capability-based deployments.
+CapabilityBoundingSet=CAP_SYS_NICE CAP_NET_RAW
+AmbientCapabilities=CAP_SYS_NICE CAP_NET_RAW
+
+# RT operating envelope.
+LimitRTPRIO=90
+LimitMEMLOCK=infinity
+LimitRTTIME=infinity
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=70
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
