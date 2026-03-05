@@ -182,6 +182,10 @@ typedef struct {
   uint16_t seq_h;
   uint16_t seq_l;
   uint64_t boot_ms;
+
+  // --- active CU telemetry destination (authoritative while connected)
+  struct in_addr active_cu_addr;
+  int active_cu_connected;
 } shared_data_t;
 
 typedef struct {
@@ -992,13 +996,50 @@ static void* can_worker_thread(void* arg) {
 
 typedef struct {
   int udp_fd;
-  const char* ip;
+  const char* config_ip;
+  struct in_addr config_addr;
+  int config_addr_valid;
   int port;
   long period_ns;
   shared_t* sh;
   stc_icd_cfg_t cfg;
   uint8_t sender_id;
 } tlm_tx_arg_t;
+
+static int parse_ipv4_addr(const char* ip, struct in_addr* out) {
+  if (!ip || !out) return -1;
+  return (inet_pton(AF_INET, ip, out) == 1) ? 0 : -1;
+}
+
+static void format_ipv4_addr(const struct in_addr* addr, char* out, size_t out_sz) {
+  if (!addr || !out || out_sz == 0) return;
+  if (!inet_ntop(AF_INET, addr, out, out_sz)) {
+    snprintf(out, out_sz, "<invalid>");
+  }
+}
+
+static int telemetry_send_if_dest_available(const tlm_tx_arg_t* a,
+                                            const uint8_t* buf,
+                                            size_t blen) {
+  struct in_addr dest_addr;
+  int have_dest = 0;
+
+  pthread_mutex_lock(&a->sh->mtx);
+  if (a->sh->d.active_cu_connected) {
+    dest_addr = a->sh->d.active_cu_addr;
+    have_dest = 1;
+  }
+  pthread_mutex_unlock(&a->sh->mtx);
+
+  if (!have_dest) {
+    // CU session is authoritative; don't send when disconnected.
+    return 0;
+  }
+
+  char ipbuf[INET_ADDRSTRLEN];
+  format_ipv4_addr(&dest_addr, ipbuf, sizeof(ipbuf));
+  return udp_send_to(a->udp_fd, ipbuf, a->port, buf, blen);
+}
 
 static long telemetry_interval_ms_to_period_ns(int interval_ms, long default_period_ns) {
   if (interval_ms <= 0) return default_period_ns;
@@ -1049,7 +1090,7 @@ static void* tlmh_tx_thread(void* arg) {
     uint8_t buf[512];
     size_t blen = 0;
     if (stc_icd_tlmh_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
-      (void)udp_send_to(a->udp_fd, a->ip, a->port, buf, blen);
+      (void)telemetry_send_if_dest_available(a, buf, blen);
     }
     sleep_until(&next, period_ns);
   }
@@ -1153,7 +1194,7 @@ static void* tlml_tx_thread(void* arg) {
     uint8_t buf[1024];
     size_t blen = 0;
     if (stc_icd_tlml_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
-      (void)udp_send_to(a->udp_fd, a->ip, a->port, buf, blen);
+      (void)telemetry_send_if_dest_available(a, buf, blen);
     }
     sleep_until(&next, period_ns);
   }
@@ -1496,8 +1537,10 @@ int main(int argc, char** argv) {
     goto cleanup;
   }
 
-  tlm_tx_arg_t harg = { .udp_fd = udp_h, .ip = net.tlmh_ip, .port = net.tlmh_port, .period_ns = net.tlmh_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
-  tlm_tx_arg_t larg = { .udp_fd = udp_l, .ip = net.tlml_ip, .port = net.tlml_port, .period_ns = net.tlml_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  tlm_tx_arg_t harg = { .udp_fd = udp_h, .config_ip = net.tlmh_ip, .port = net.tlmh_port, .period_ns = net.tlmh_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  tlm_tx_arg_t larg = { .udp_fd = udp_l, .config_ip = net.tlml_ip, .port = net.tlml_port, .period_ns = net.tlml_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  harg.config_addr_valid = (parse_ipv4_addr(harg.config_ip, &harg.config_addr) == 0);
+  larg.config_addr_valid = (parse_ipv4_addr(larg.config_ip, &larg.config_addr) == 0);
   if (create_thread_with_sched(&th_h,
                                "tlmh_tx_thread",
                                tlmh_tx_thread,
@@ -1565,6 +1608,22 @@ int main(int argc, char** argv) {
     char ipbuf[64];
     inet_ntop(AF_INET, &cli.sin_addr, ipbuf, sizeof(ipbuf));
     STC_LOG_INFO("Client connected: %s:%d", ipbuf, ntohs(cli.sin_port));
+
+    pthread_mutex_lock(&sh.mtx);
+    sh.d.active_cu_addr = cli.sin_addr;
+    sh.d.active_cu_connected = 1;
+    pthread_mutex_unlock(&sh.mtx);
+
+    if (harg.config_addr_valid && harg.config_addr.s_addr == cli.sin_addr.s_addr) {
+      STC_LOG_INFO("TLMH config IP matches active CU IP: %s", ipbuf);
+    } else if (harg.config_addr_valid) {
+      STC_LOG_WARN("TLMH config IP (%s) differs from active CU IP (%s)", harg.config_ip, ipbuf);
+    }
+    if (larg.config_addr_valid && larg.config_addr.s_addr == cli.sin_addr.s_addr) {
+      STC_LOG_INFO("TLML config IP matches active CU IP: %s", ipbuf);
+    } else if (larg.config_addr_valid) {
+      STC_LOG_WARN("TLML config IP (%s) differs from active CU IP (%s)", larg.config_ip, ipbuf);
+    }
 
     while (!atomic_load(&g_stop)) {
       uint8_t hdr[20];
@@ -1906,6 +1965,11 @@ int main(int argc, char** argv) {
     }
 
     close(cfd);
+    pthread_mutex_lock(&sh.mtx);
+    sh.d.active_cu_connected = 0;
+    sh.d.active_cu_addr.s_addr = htonl(INADDR_ANY);
+    pthread_mutex_unlock(&sh.mtx);
+    STC_LOG_INFO("Client disconnected; telemetry destination cleared until CU reconnects");
   }
 
 cleanup:
