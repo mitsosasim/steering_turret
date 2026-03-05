@@ -19,6 +19,41 @@ If `--help` is not implemented in your build, run the server directly:
 ./build/stc_server
 ```
 
+### Real-time scheduling privileges
+
+`stc_server` can request RT scheduler policies (`SCHED_FIFO`/`SCHED_RR`).
+At startup it probes RT privilege once and behaves deterministically:
+
+- `--rt-strict 1`: fail startup if RT policy/priority cannot be set.
+- `--rt-strict 0`: log warning + remediation and continue with RT disabled.
+
+Runtime flags:
+
+```text
+--rt-enabled 0|1
+--rt-strict 0|1
+--rt-policy fifo|rr|other
+--can-worker-prio <int> --tlmh-prio <int> --tlml-prio <int>
+```
+
+Grant `CAP_SYS_NICE` directly on the binary:
+
+```bash
+sudo setcap cap_sys_nice=ep /opt/stc/bin/stc_server
+getcap /opt/stc/bin/stc_server
+```
+
+Install the provided `systemd` service unit example:
+
+```bash
+sudo install -m 0644 dev/config/stc_server.service /etc/systemd/system/stc_server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now stc_server
+sudo systemctl status stc_server --no-pager
+```
+
+If your local deployment policy allows it, running as root is also valid.
+
 ### ICD command transmitter (`icd_tx_tcp`)
 
 `icd_tx_tcp` uses:

@@ -1,0 +1,23 @@
+[Unit]
+Description=STC Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stc
+Group=stc
+WorkingDirectory=/opt/stc
+ExecStart=/opt/stc/bin/stc_server --config /opt/stc/config/stc_default.ini --rt-enabled 1 --rt-strict 1 --rt-policy fifo
+Restart=on-failure
+RestartSec=2
+
+# Required for real-time scheduling without running as root.
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+LimitRTPRIO=80
+LimitRTTIME=infinity
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
