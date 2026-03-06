@@ -1,10 +1,26 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(STC C)
+project(STC C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(USE_SIMULATOR "Use software motor simulator" ON)
+
+if(USE_SIMULATOR)
+  add_library(simulator STATIC
+    dev/src/simulation/sim_api.cpp
+    dev/stub_ST/MotorModel.cpp
+  )
+  target_include_directories(simulator PUBLIC
+    ${PROJECT_SOURCE_DIR}/dev/include
+    ${PROJECT_SOURCE_DIR}/dev/src/simulation
+    ${PROJECT_SOURCE_DIR}/dev/stub_ST
+  )
+endif()
 
 add_executable(stc_server
   dev/src/stc_server.c
@@ -31,6 +47,9 @@ add_executable(tlm_rx_udp
 )
 
 target_include_directories(stc_server PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+if(USE_SIMULATOR)
+  target_include_directories(stc_server PRIVATE ${PROJECT_SOURCE_DIR}/dev/src/simulation)
+endif()
 target_include_directories(icd_tx_tcp PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_include_directories(tlm_rx_udp PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 
@@ -39,6 +58,10 @@ target_compile_options(icd_tx_tcp PRIVATE -Wall -Wextra)
 target_compile_options(tlm_rx_udp PRIVATE -Wall -Wextra)
 
 target_link_libraries(stc_server PRIVATE pthread m)
+if(USE_SIMULATOR)
+  target_compile_definitions(stc_server PRIVATE SIMULATION)
+  target_link_libraries(stc_server PRIVATE simulator)
+endif()
 
 add_executable(test_actions
   dev/tests/test_actions.c
@@ -120,4 +143,3 @@ target_include_directories(test_can_worker_concurrency_tsan PRIVATE ${PROJECT_SO
 target_compile_options(test_can_worker_concurrency_tsan PRIVATE -Wall -Wextra -Wno-unused-function -fsanitize=thread -fno-omit-frame-pointer)
 target_link_options(test_can_worker_concurrency_tsan PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
 target_link_libraries(test_can_worker_concurrency_tsan PRIVATE pthread m)
-
