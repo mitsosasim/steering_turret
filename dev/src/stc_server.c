@@ -74,13 +74,30 @@ static uint64_t elapsed_ms_nonnegative(uint64_t now_ms, uint64_t last_ms) {
   return now_ms - last_ms;
 }
 
+static _Atomic sig_atomic_t g_stop;
+
 static void sleep_until(struct timespec* next, long period_ns) {
   next->tv_nsec += period_ns;
   while (next->tv_nsec >= 1000000000L) {
     next->tv_nsec -= 1000000000L;
     next->tv_sec += 1;
   }
-  clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, next, NULL);
+
+  for (;;) {
+    int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, next, NULL);
+    if (rc == 0) {
+      return;
+    }
+    if (rc == EINTR) {
+      if (atomic_load(&g_stop)) {
+        return;
+      }
+      continue;
+    }
+
+    STC_LOG_WARN("clock_nanosleep(TIMER_ABSTIME) failed: rc=%d (%s)", rc, strerror(rc));
+    return;
+  }
 }
 
 static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
