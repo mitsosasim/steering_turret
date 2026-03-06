@@ -47,6 +47,10 @@
 #include <limits.h>
 #include <stdatomic.h>
 
+#ifdef SIMULATION
+#include "sim_api.h"
+#endif
+
 /* ----------------------------- time helpers ----------------------------- */
 
 static uint64_t mono_ms(void) {
@@ -800,7 +804,12 @@ static int motor_ensure_enabled(pd4c_ctx_t* ctx, shared_t* sh, mtr_mode_t mode, 
   if (!ctx || !sh || !cur_mode || !enabled) return PD4C_EINVAL;
   if (*enabled && *cur_mode == mode) return PD4C_OK;
 
-  int rc = pd4c_ds402_enable_operation(ctx, (int8_t)mode, sh->d.ds402_timeout_ms);
+  int ds402_timeout_ms = 0;
+  pthread_mutex_lock(&sh->mtx);
+  ds402_timeout_ms = sh->d.ds402_timeout_ms;
+  pthread_mutex_unlock(&sh->mtx);
+
+  int rc = pd4c_ds402_enable_operation(ctx, (int8_t)mode, ds402_timeout_ms);
   if (rc == PD4C_OK) {
     *cur_mode = mode;
     *enabled = 1;
@@ -824,18 +833,22 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   double gear_ratio = 0.0;
   uint16_t pp_profile_vel = 0;
   int run_sdo_diag = 0;
+  axis_cfg_t axis_cfg;
+  int ds402_timeout_ms = 0;
   pthread_mutex_lock(&sh->mtx);
   cur_pos_raw = sh->d.telem[axis].pos_raw;
   counts_per_rev = sh->d.cfg[axis].counts_per_rev;
   gear_ratio = sh->d.cfg[axis].gear_ratio;
   pp_profile_vel = sh->d.cfg[axis].pp_profile_vel;
   run_sdo_diag = sh->d.pp_sdo_diag;
+  axis_cfg = sh->d.cfg[axis];
+  ds402_timeout_ms = sh->d.ds402_timeout_ms;
   pthread_mutex_unlock(&sh->mtx);
 
   // Convert turret degrees -> motor counts and call low-level PP handshake.
-  const int32_t target_counts = axis_deg_to_counts(&sh->d.cfg[axis], target_deg);
+  const int32_t target_counts = axis_deg_to_counts(&axis_cfg, target_deg);
   const uint16_t pv = pp_profile_vel;
-  const double cur_deg = axis_counts_to_deg(&sh->d.cfg[axis], cur_pos_raw);
+  const double cur_deg = axis_counts_to_deg(&axis_cfg, cur_pos_raw);
 
   STC_LOG_DEBUG("PP move request: axis=%zu requested_az_deg=%.3f target_counts=%d current_pos_raw=%d current_deg=%.3f counts_per_rev=%.3f gear_ratio=%.3f pp_profile_vel=%u",
           axis,
@@ -890,7 +903,7 @@ static int motor_do_pp_move(pd4c_ctx_t* ctx,
   // Therefore we call pd4c_pp_move as absolute (is_relative=0).
   const int is_relative = 0;
 
-  rc = pd4c_pp_move(ctx, target_counts, pv, is_relative, sh->d.ds402_timeout_ms);
+  rc = pd4c_pp_move(ctx, target_counts, pv, is_relative, ds402_timeout_ms);
   return rc;
 }
 
@@ -909,6 +922,18 @@ static void* can_worker_thread(void* arg) {
   memset(pd_ctx, 0, sizeof(pd_ctx));
 
   int any_connected = 0;
+#ifdef SIMULATION
+  axis_cfg_t sim_cfg[STC_AXIS_COUNT];
+  pthread_mutex_lock(&a->sh->mtx);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    sim_cfg[axis] = a->sh->d.cfg[axis];
+    axis_connected[axis] = (a->sh->d.axis_node_id[axis] != 0) ? 1 : 0;
+    if (axis_connected[axis]) any_connected = 1;
+  }
+  pthread_mutex_unlock(&a->sh->mtx);
+  sim_init(sim_cfg, STC_AXIS_COUNT);
+  STC_LOG_INFO("Simulation mode active: CAN hardware access disabled");
+#else
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     uint8_t node_id;
     pthread_mutex_lock(&a->sh->mtx);
@@ -931,6 +956,7 @@ static void* can_worker_thread(void* arg) {
               pd4c_strerror(rc));
     }
   }
+#endif
 
   pthread_mutex_lock(&a->sh->mtx);
   a->sh->d.can_ok = any_connected;
@@ -956,11 +982,13 @@ static void* can_worker_thread(void* arg) {
 
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       if (!axis_connected[axis]) continue;
+#ifndef SIMULATION
       pfds[nfds].fd = pd_ctx[axis].sock;
       pfds[nfds].events = POLLIN;
       pfds[nfds].revents = 0;
       axis_idx[nfds] = axis;
       nfds++;
+#endif
     }
 
     int has_pending_action = actionq_try_peek(a->q, &(stc_action_t){0});
@@ -986,6 +1014,7 @@ static void* can_worker_thread(void* arg) {
             continue;
           }
           size_t axis = axis_idx[j];
+#ifndef SIMULATION
           int ev = pd4c_poll(&pd_ctx[axis], 0);
           if (ev >= 0) {
             const pd4c_telemetry_t* t = pd4c_telem(&pd_ctx[axis]);
@@ -995,11 +1024,46 @@ static void* can_worker_thread(void* arg) {
             a->sh->d.last_rx_ms[axis] = now;
             pthread_mutex_unlock(&a->sh->mtx);
           }
+#else
+          (void)axis;
+#endif
         }
       }
     } else if (timeout_ms > 0) {
       usleep((useconds_t)timeout_ms * 1000);
     }
+
+#ifdef SIMULATION
+    sim_update(((double)maintenance_period_ms) / 1000.0);
+    now = mono_ms();
+    pthread_mutex_lock(&a->sh->mtx);
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!axis_connected[axis]) continue;
+      int32_t pos_raw = sim_get_pos_counts(axis);
+      int32_t vel_raw = sim_get_vel_raw(axis);
+      uint16_t status_word = sim_get_status_word(axis);
+      int8_t mode_display = sim_get_mode_display(axis);
+      axis_mode[axis] = (mtr_mode_t)mode_display;
+      axis_telem_update(&a->sh->d.telem[axis],
+                        &a->sh->d.cfg[axis],
+                        pos_raw,
+                        vel_raw,
+                        status_word,
+                        mode_display,
+                        now);
+      a->sh->d.last_rx_ms[axis] = sim_get_last_rx_ms(axis);
+    }
+    a->sh->d.have_hb = 1;
+    a->sh->d.hb_state = 5;
+    a->sh->d.have_emcy = 0;
+    a->sh->d.emcy_code = 0;
+    a->sh->d.emcy_reg = 0;
+    a->sh->d.ts_hb_ms = now;
+    a->sh->d.ts_tpdo1_ms = now;
+    a->sh->d.ts_tpdo2_ms = now;
+    a->sh->d.ts_tpdo3_ms = now;
+    pthread_mutex_unlock(&a->sh->mtx);
+#endif
 
     now = mono_ms();
 
@@ -1025,8 +1089,12 @@ static void* can_worker_thread(void* arg) {
     if (post_fault_state == STC_STATE_FAIL) {
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
         if (axis_connected[axis]) {
+#ifdef SIMULATION
+          sim_quick_stop(axis);
+#else
           (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
           (void)pd4c_rpdo1_send_control_mode(&pd_ctx[axis], 0x0006, (int8_t)axis_mode[axis]);
+#endif
           axis_enabled[axis] = 0;
         }
       }
@@ -1058,11 +1126,22 @@ static void* can_worker_thread(void* arg) {
             a->sh->d.stream[axis].enabled = 0;
             pthread_mutex_unlock(&a->sh->mtx);
 
-            int rc = motor_do_pp_move(&pd_ctx[axis], a->sh, axis, act.u.target_deg[axis], &axis_mode[axis], &axis_enabled[axis]);
+            int rc = 0;
+#ifdef SIMULATION
+            sim_set_position_target(axis, act.u.target_deg[axis]);
+            axis_mode[axis] = MTR_MODE_PP;
+            axis_enabled[axis] = 1;
+#else
+            rc = motor_do_pp_move(&pd_ctx[axis], a->sh, axis, act.u.target_deg[axis], &axis_mode[axis], &axis_enabled[axis]);
+#endif
             STC_LOG_DEBUG("PP_MOVE axis=%zu pd4c_pp_move=%d latest_statusword=0x%04X",
                     axis,
                     rc,
+#ifdef SIMULATION
+                    sim_get_status_word(axis));
+#else
                     pd4c_telem(&pd_ctx[axis])->statusword);
+#endif
           }
           break;
         case ACTION_STREAM_SPEED:
@@ -1074,26 +1153,38 @@ static void* can_worker_thread(void* arg) {
             axis_cfg = a->sh->d.cfg[axis];
             pthread_mutex_unlock(&a->sh->mtx);
             if (!stc_state_can_stream(action_state)) continue;
+#ifdef SIMULATION
+            sim_set_velocity_target(axis, act.u.speed_deg_s[axis]);
+            axis_mode[axis] = MTR_MODE_PV;
+            axis_enabled[axis] = 1;
+#else
             (void)motor_ensure_enabled(&pd_ctx[axis], a->sh, MTR_MODE_PV, &axis_mode[axis], &axis_enabled[axis]);
             int clipped = 0;
             int32_t tv_raw = axis_deg_s_to_target_vel_units(&axis_cfg, act.u.speed_deg_s[axis], &clipped);
             if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
             if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
             (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
+#endif
           }
           break;
         case ACTION_STOP:
         case ACTION_QUICK_STOP:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+#ifdef SIMULATION
+            sim_quick_stop(axis);
+#else
             (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
+#endif
             axis_enabled[axis] = 0;
           }
           break;
         case ACTION_ENTER_STORE:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+#ifndef SIMULATION
             (void)pd4c_sdo_write_u32(&pd_ctx[axis], 0x1010, 0x01, 0x65766173UL);
+#endif
           }
           break;
         case ACTION_RESET: {
@@ -1109,9 +1200,14 @@ static void* can_worker_thread(void* arg) {
           if (!reset_ok) break;
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+#ifdef SIMULATION
+            sim_quick_stop(axis);
+            sim_reset_axis(axis);
+#else
             (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
             (void)pd4c_ds402_fault_reset(&pd_ctx[axis], (int8_t)axis_mode[axis], ds402_timeout_ms);
             (void)pd4c_nmt_start(&pd_ctx[axis]);
+#endif
             axis_enabled[axis] = 0;
           }
           break;
@@ -1119,7 +1215,9 @@ static void* can_worker_thread(void* arg) {
         case ACTION_FACTORY:
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if ((act.axes_mask & (1u << axis)) == 0 || !axis_connected[axis]) continue;
+#ifndef SIMULATION
             (void)pd4c_nmt_stop(&pd_ctx[axis]);
+#endif
             axis_enabled[axis] = 0;
             axis_mode[axis] = MTR_MODE_NONE;
           }
@@ -1130,8 +1228,12 @@ static void* can_worker_thread(void* arg) {
             pthread_mutex_lock(&a->sh->mtx);
             a->sh->d.stream[axis].enabled = 0;
             pthread_mutex_unlock(&a->sh->mtx);
+#ifdef SIMULATION
+            sim_quick_stop(axis);
+#else
             motor_stop_and_disable(&pd_ctx[axis], axis_mode[axis]);
             (void)pd4c_nmt_stop(&pd_ctx[axis]);
+#endif
             axis_enabled[axis] = 0;
             axis_mode[axis] = MTR_MODE_NONE;
           }
@@ -1158,7 +1260,11 @@ static void* can_worker_thread(void* arg) {
         a->sh->d.stream[axis].enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
         if (speed_on) {
+#ifdef SIMULATION
+          sim_quick_stop(axis);
+#else
           motor_stop_and_disable(&pd_ctx[axis], axis_mode[axis]);
+#endif
           axis_enabled[axis] = 0;
         }
       }
@@ -1184,15 +1290,25 @@ static void* can_worker_thread(void* arg) {
         pthread_mutex_lock(&a->sh->mtx);
         a->sh->d.stream[axis].enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
+#ifdef SIMULATION
+        sim_quick_stop(axis);
+#else
         (void)pd4c_ds402_quick_stop(&pd_ctx[axis], (int8_t)axis_mode[axis]);
+#endif
         axis_enabled[axis] = 0;
       } else {
+#ifdef SIMULATION
+        sim_set_velocity_target(axis, desired_deg_s);
+        axis_mode[axis] = MTR_MODE_PV;
+        axis_enabled[axis] = 1;
+#else
         (void)motor_ensure_enabled(&pd_ctx[axis], a->sh, MTR_MODE_PV, &axis_mode[axis], &axis_enabled[axis]);
         int clipped = 0;
         int32_t tv_raw = axis_deg_s_to_target_vel_units(&axis_cfg, desired_deg_s, &clipped);
         if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
         if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
         (void)pd4c_rpdo3_send_target_velocity(&pd_ctx[axis], (int16_t)tv_raw);
+#endif
       }
     }
 
@@ -1208,8 +1324,15 @@ static void* can_worker_thread(void* arg) {
   }
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+#ifndef SIMULATION
     if (axis_connected[axis]) pd4c_close(&pd_ctx[axis]);
+#else
+    (void)axis;
+#endif
   }
+#ifdef SIMULATION
+  sim_shutdown();
+#endif
   return NULL;
 }
 
