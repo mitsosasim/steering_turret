@@ -8,6 +8,8 @@ set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(BUILD_DIAG_GUI "Build Qt-based diagnostics GUI" ON)
+
 option(USE_SIMULATOR "Use software motor simulator" ON)
 
 if(USE_SIMULATOR)
@@ -143,3 +145,18 @@ target_include_directories(test_can_worker_concurrency_tsan PRIVATE ${PROJECT_SO
 target_compile_options(test_can_worker_concurrency_tsan PRIVATE -Wall -Wextra -Wno-unused-function -fsanitize=thread -fno-omit-frame-pointer)
 target_link_options(test_can_worker_concurrency_tsan PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
 target_link_libraries(test_can_worker_concurrency_tsan PRIVATE pthread m)
+
+if(BUILD_DIAG_GUI)
+  find_package(Qt6 COMPONENTS Core Gui Widgets Network QUIET)
+  if(Qt6_FOUND)
+    add_executable(diag_gui_qt
+      dev/tools/diag_gui_qt.cpp
+      dev/src/stc_icd.c
+    )
+    target_include_directories(diag_gui_qt PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+    target_compile_options(diag_gui_qt PRIVATE -Wall -Wextra)
+    target_link_libraries(diag_gui_qt PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network m)
+  else()
+    message(STATUS "Qt6 not found: skipping diag_gui_qt target")
+  endif()
+endif()
