@@ -88,3 +88,20 @@ Examples:
 ./build/tlm_rx_udp --ifname eth0
 ./build/tlm_rx_udp --tlmh-ip 239.255.10.2 --tlmh-port 6010 --tlml-ip 239.255.10.3 --tlml-port 6020 --raw
 ```
+
+
+### Qt diagnostics GUI (`diag_gui_qt`)
+
+If Qt6 (Core/Gui/Widgets/Network) is available, CMake builds `diag_gui_qt`.
+The GUI provides:
+
+- ICD command send controls (`CU_STATE`, `SELFLEV`, `IBIT`, turret motion).
+- Dual UDP telemetry listeners (high/low rate) with asynchronous `readyRead` handling.
+- Dynamic 18-axis panel (`Position`, `Velocity`, `Target`, `Type`).
+- Simulation mode toggle with a 10ms update timer.
+
+Run:
+
+```bash
+./build/diag_gui_qt
+```
