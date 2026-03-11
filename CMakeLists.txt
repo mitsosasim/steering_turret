@@ -14,6 +14,7 @@ option(USE_SIMULATOR "Use software motor simulator" ON)
 
 if(USE_SIMULATOR)
   add_library(simulator STATIC
+    dev/src/simulation/sim_backend.cpp
     dev/src/simulation/sim_api.cpp
     dev/stub_ST/MotorModel.cpp
   )
@@ -60,9 +61,12 @@ target_compile_options(icd_tx_tcp PRIVATE -Wall -Wextra)
 target_compile_options(tlm_rx_udp PRIVATE -Wall -Wextra)
 
 target_link_libraries(stc_server PRIVATE pthread m)
+
 if(USE_SIMULATOR)
   target_compile_definitions(stc_server PRIVATE SIMULATION)
   target_link_libraries(stc_server PRIVATE simulator)
+else()
+  target_sources(stc_server PRIVATE dev/src/can_backend.c)
 endif()
 
 add_executable(test_actions
@@ -124,8 +128,17 @@ add_executable(test_can_worker_concurrency
 )
 
 target_include_directories(test_can_worker_concurrency PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+if(USE_SIMULATOR)
+  target_include_directories(test_can_worker_concurrency PRIVATE ${PROJECT_SOURCE_DIR}/dev/src/simulation ${PROJECT_SOURCE_DIR}/dev/stub_ST)
+endif()
 target_compile_options(test_can_worker_concurrency PRIVATE -Wall -Wextra -Wno-unused-function)
 target_link_libraries(test_can_worker_concurrency PRIVATE pthread m)
+if(USE_SIMULATOR)
+  target_compile_definitions(test_can_worker_concurrency PRIVATE SIMULATION)
+  target_link_libraries(test_can_worker_concurrency PRIVATE simulator)
+else()
+  target_sources(test_can_worker_concurrency PRIVATE dev/src/can_backend.c)
+endif()
 
 add_executable(test_can_worker_concurrency_tsan
   dev/tests/test_can_worker_concurrency.c
@@ -142,9 +155,18 @@ add_executable(test_can_worker_concurrency_tsan
 )
 
 target_include_directories(test_can_worker_concurrency_tsan PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+if(USE_SIMULATOR)
+  target_include_directories(test_can_worker_concurrency_tsan PRIVATE ${PROJECT_SOURCE_DIR}/dev/src/simulation ${PROJECT_SOURCE_DIR}/dev/stub_ST)
+endif()
 target_compile_options(test_can_worker_concurrency_tsan PRIVATE -Wall -Wextra -Wno-unused-function -fsanitize=thread -fno-omit-frame-pointer)
 target_link_options(test_can_worker_concurrency_tsan PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
 target_link_libraries(test_can_worker_concurrency_tsan PRIVATE pthread m)
+if(USE_SIMULATOR)
+  target_compile_definitions(test_can_worker_concurrency_tsan PRIVATE SIMULATION)
+  target_link_libraries(test_can_worker_concurrency_tsan PRIVATE simulator)
+else()
+  target_sources(test_can_worker_concurrency_tsan PRIVATE dev/src/can_backend.c)
+endif()
 
 if(BUILD_DIAG_GUI)
   find_package(Qt6 COMPONENTS Core Gui Widgets Network QUIET)
