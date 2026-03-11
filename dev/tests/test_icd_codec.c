@@ -51,7 +51,7 @@ static void test_cmd_turret_pack_parse(void) {
   assert_eq_u16((uint16_t)out_len, (uint16_t)(20+9), "turret cmd length");
 
   /* Fixed expected bytes for the header parts */
-  const uint8_t exp_magic[4] = {'C','M','D','\0'};
+  const uint8_t exp_magic[4] = {'T','C','M','D'};
   assert_mem(buf, exp_magic, 4, "turret cmd magic");
   assert_true(buf[4]==0x01, "turret cmd version");
   assert_true(buf[5]==11, "turret cmd controller_id");

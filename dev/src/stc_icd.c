@@ -75,8 +75,8 @@ static int magic_eq4(const uint8_t a[4], const uint8_t b[4]) {
 
 stc_icd_cfg_t stc_icd_parse_cfg_default(void) {
   stc_icd_cfg_t cfg;
-  cfg.cmd_magic[0]  = 'C'; cfg.cmd_magic[1]  = 'M'; cfg.cmd_magic[2]  = 'D'; cfg.cmd_magic[3]  = '\0';
-  cfg.rsp_magic[0]  = 'R'; cfg.rsp_magic[1]  = 'E'; cfg.rsp_magic[2]  = 'S'; cfg.rsp_magic[3]  = 'P';
+  cfg.cmd_magic[0]  = 'T'; cfg.cmd_magic[1]  = 'C'; cfg.cmd_magic[2]  = 'M'; cfg.cmd_magic[3]  = 'D';
+  cfg.rsp_magic[0]  = 'T'; cfg.rsp_magic[1]  = 'R'; cfg.rsp_magic[2]  = 'S'; cfg.rsp_magic[3]  = 'P';
   cfg.tlmh_magic[0] = 'T'; cfg.tlmh_magic[1] = 'L'; cfg.tlmh_magic[2] = 'M'; cfg.tlmh_magic[3] = 'H';
   cfg.tlml_magic[0] = 'T'; cfg.tlml_magic[1] = 'L'; cfg.tlml_magic[2] = 'M'; cfg.tlml_magic[3] = 'L';
   cfg.protocol_version_default = 0x01;
@@ -113,7 +113,9 @@ static stc_icd_rc_t decode_cmd_payload(stc_icd_cmd_t* out) {
 
     case STC_CMD_STORAGE:
     case STC_CMD_RESET:
+    case STC_CMD_DELLOG:
     case STC_CMD_FACTORY:
+    case STC_CMD_SELFTEST:
     case STC_CMD_SHUTDOWN:
     case STC_CMD_REQ_SW_VERSION:
     case STC_CMD_REQ_HW_INFO:
@@ -259,7 +261,9 @@ static stc_icd_rc_t encode_cmd_payload(const stc_icd_cmd_t* cmd,
 
     case STC_CMD_STORAGE:
     case STC_CMD_RESET:
+    case STC_CMD_DELLOG:
     case STC_CMD_FACTORY:
+    case STC_CMD_SELFTEST:
     case STC_CMD_SHUTDOWN:
     case STC_CMD_REQ_SW_VERSION:
     case STC_CMD_REQ_HW_INFO:
