@@ -75,7 +75,9 @@ static uint64_t elapsed_ms_nonnegative(uint64_t now_ms, uint64_t last_ms) {
   return now_ms - last_ms;
 }
 
-static _Atomic sig_atomic_t g_stop;
+static _Atomic sig_atomic_t g_stop = 0;
+static _Atomic int g_listener_fd = -1;
+static _Atomic int g_client_fd = -1;
 
 static void sleep_until(struct timespec* next, long period_ns) {
   next->tv_nsec += period_ns;
@@ -126,7 +128,10 @@ static int recv_exact(int fd, uint8_t* buf, size_t len) {
     ssize_t r = recv(fd, buf + off, len - off, 0);
     if (r == 0) return 0;  // closed
     if (r < 0) {
-      if (errno == EINTR) continue;
+      if (errno == EINTR) {
+        if (atomic_load(&g_stop)) return -1;
+        continue;
+      }
       return -1;
     }
     off += (size_t)r;
@@ -320,12 +325,19 @@ static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms);
 
 /* ----------------------------- signal handling ----------------------------- */
 
-static _Atomic sig_atomic_t g_stop = 0;
-
 static void on_sig(int s) {
   (void)s;
   atomic_store(&g_stop, 1);
-  STC_LOG_INFO("Shutdown signal received; stopping STC server");
+  int listener_fd = atomic_load(&g_listener_fd);
+  if (listener_fd >= 0) {
+    close(listener_fd);
+    atomic_store(&g_listener_fd, -1);
+  }
+  int client_fd = atomic_load(&g_client_fd);
+  if (client_fd >= 0) {
+    close(client_fd);
+    atomic_store(&g_client_fd, -1);
+  }
 }
 
 /* ----------------------------- ICD validation ----------------------------- */
@@ -852,6 +864,12 @@ static void* can_worker_thread(void* arg) {
 
     stc_action_t act;
     while (actionq_try_peek(a->q, &act) == 0) {
+      const uint64_t exec_start_ns = mono_ns();
+      if (act.obs_tcp_rx_ns > 0 && act.obs_queued_ns > 0) {
+        pthread_mutex_lock(&a->sh->mtx);
+        cmd_timing_update(&a->sh->d.cmd_timing, act.obs_tcp_rx_ns, act.obs_queued_ns, exec_start_ns);
+        pthread_mutex_unlock(&a->sh->mtx);
+      }
       switch (act.type) {
         case ACTION_PP_MOVE:
           (void)motion_backend_apply_pp_move(backend, act.axes_mask, act.u.target_deg);
@@ -1740,6 +1758,7 @@ int main(int argc, char** argv) {
     exit_code = 1;
     goto cleanup;
   }
+  atomic_store(&g_listener_fd, srv);
 
   STC_LOG_INFO("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)", net.can_if);
   STC_LOG_INFO("STC server listening on TCP port %d", net.tcp_port);
@@ -1762,9 +1781,13 @@ int main(int argc, char** argv) {
     int cfd = accept(srv, (struct sockaddr*)&cli, &clen);
     if (cfd < 0) {
       if (errno == EINTR) continue;
+      if (atomic_load(&g_stop)) {
+        break;
+      }
       STC_LOG_WARN("accept error: %s", strerror(errno));
       continue;
     }
+    atomic_store(&g_client_fd, cfd);
 
     char ipbuf[64];
     inet_ntop(AF_INET, &cli.sin_addr, ipbuf, sizeof(ipbuf));
@@ -2143,6 +2166,7 @@ int main(int argc, char** argv) {
     }
 
     close(cfd);
+    atomic_store(&g_client_fd, -1);
     pthread_mutex_lock(&sh.mtx);
     sh.d.active_cu_connected = 0;
     sh.d.active_cu_addr.s_addr = htonl(INADDR_ANY);
@@ -2151,16 +2175,30 @@ int main(int argc, char** argv) {
   }
 
 cleanup:
+  if (atomic_load(&g_stop)) {
+    STC_LOG_INFO("Shutdown signal received; stopping STC server");
+  }
   if (threads_started) {
     atomic_store(&g_stop, 1);
   }
 
-  if (srv_open) close(srv);
+  if (srv_open) {
+    const int listener_fd = atomic_exchange(&g_listener_fd, -1);
+    if (listener_fd >= 0) {
+      close(listener_fd);
+    }
+  }
+  const int client_fd = atomic_exchange(&g_client_fd, -1);
+  if (client_fd >= 0) {
+    close(client_fd);
+  }
 
-  if (tlmh_thread_started) pthread_join(th_h, NULL);
-  if (tlml_thread_started) pthread_join(th_l, NULL);
-  if (diag_thread_started) pthread_join(th_diag, NULL);
-  if (can_thread_started) pthread_join(th_can, NULL);
+  if (!atomic_load(&g_stop)) {
+    if (tlmh_thread_started) pthread_join(th_h, NULL);
+    if (tlml_thread_started) pthread_join(th_l, NULL);
+    if (diag_thread_started) pthread_join(th_diag, NULL);
+    if (can_thread_started) pthread_join(th_can, NULL);
+  }
 
   if (udp_h_open) close(udp_h);
   if (udp_l_open) close(udp_l);
