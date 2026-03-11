@@ -16,6 +16,7 @@
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
+#include <QtWidgets/QWidget>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QTcpSocket>
 #include <QtNetwork/QUdpSocket>
@@ -39,11 +40,28 @@ constexpr int kAxisCount = static_cast<int>(STC_ICD_AXES_COUNT);
 
 QString stateToString(uint8_t state) {
   switch (state) {
-    case 0: return "OFF";
-    case 1: return "SAFE";
-    case 2: return "OPER";
-    case 3: return "FAULT";
+    case 0: return "INIT";
+    case 1: return "INIT_DONE";
+    case 2: return "SAFE";
+    case 3: return "OPER";
+    case 4: return "SELF_LEVELLING";
+    case 5: return "IBIT_RUNNING";
+    case 6: return "STORE";
+    case 0xFF: return "FAIL";
     default: return QString("UNKNOWN(%1)").arg(state);
+  }
+}
+
+QString nackErrToString(uint16_t errCode) {
+  switch (errCode) {
+    case STC_ERR_NO_ERROR: return "No error";
+    case STC_ERR_CLIENT_UNKNOWN: return "Client unknown";
+    case STC_ERR_PROTOCOL_MISMATCH: return "Protocol mismatch";
+    case STC_ERR_SYNTAX_ERROR: return "Syntax error";
+    case STC_ERR_VALUE_OUT_OF_RANGE: return "Value out of range";
+    case STC_ERR_NOT_ALLOWED_STATE: return "Command not allowed in current state";
+    case STC_ERR_INSUFFICIENT_RES: return "Insufficient resources";
+    default: return QString("Unknown err_code=%1").arg(errCode);
   }
 }
 
@@ -54,6 +72,7 @@ enum class UiCommand {
   Storage,
   Laser,
   Turret,
+  Mirror,
   Sut,
   Reset,
   DelLog,
@@ -67,6 +86,36 @@ enum class UiCommand {
   ReqHwInfo,
   ReqWorkTime
 };
+
+struct CommandSpec {
+  UiCommand ui;
+  const char *label;
+  uint16_t cmdId;
+  bool requiresOper;
+  bool enabled;
+};
+
+const std::array<CommandSpec, 19> kCommandSpecs{{
+  {UiCommand::CuState, "CU_STATE", STC_CMD_CU_STATE, false, true},
+  {UiCommand::SelfLev, "SELFLEV", STC_CMD_SELFLEV, false, true},
+  {UiCommand::Ibit, "IBIT", STC_CMD_IBIT, false, true},
+  {UiCommand::Storage, "STORAGE", STC_CMD_STORAGE, false, true},
+  {UiCommand::Laser, "LASER", STC_CMD_LASER, false, true},
+  {UiCommand::Turret, "TURRET", STC_CMD_TURRET, true, true},
+  {UiCommand::Mirror, "MIRROR", STC_CMD_MIRROR, true, true},
+  {UiCommand::Sut, "SUT", STC_CMD_SUT, true, true},
+  {UiCommand::Reset, "RESET", STC_CMD_RESET, false, true},
+  {UiCommand::DelLog, "DELLOG", STC_CMD_DELLOG, false, true},
+  {UiCommand::Factory, "FACTORY", STC_CMD_FACTORY, false, true},
+  {UiCommand::SelfTest, "SELFTEST", STC_CMD_SELFTEST, false, true},
+  {UiCommand::Shutdown, "SHUTDOWN", STC_CMD_SHUTDOWN, false, true},
+  {UiCommand::Config, "CONFIG (reserved)", STC_CMD_CONFIG, false, false},
+  {UiCommand::ManualPos, "MANUALPOS", STC_CMD_MANUALPOS, false, true},
+  {UiCommand::PosMode, "POSMODE", STC_CMD_POSMODE, false, true},
+  {UiCommand::ReqSwVersion, "REQ_SW_VERSION", STC_CMD_REQ_SW_VERSION, false, true},
+  {UiCommand::ReqHwInfo, "REQ_HW_INFO", STC_CMD_REQ_HW_INFO, false, true},
+  {UiCommand::ReqWorkTime, "REQ_WORK_TIME", STC_CMD_REQ_WORK_TIME, false, true},
+}};
 }
 
 class DiagnosticsWindow : public QMainWindow {
@@ -114,6 +163,7 @@ class DiagnosticsWindow : public QMainWindow {
  private:
   void onCommandSelectionChanged(int index) {
     payloadStack_->setCurrentIndex(index);
+    updateCommandAvailability();
   }
 
   UiCommand currentUiCommand() const {
@@ -164,6 +214,13 @@ class DiagnosticsWindow : public QMainWindow {
         cmd->u.turret.az = static_cast<float>(turretAzSpin_->value());
         cmd->u.turret.el = static_cast<float>(turretElSpin_->value());
         cmd->payload_size = 9;
+        return true;
+      case UiCommand::Mirror:
+        cmd->cmd_id = STC_CMD_MIRROR;
+        cmd->u.mirror.mirror_id = static_cast<uint8_t>(mirrorIdBox_->currentData().toInt());
+        cmd->u.mirror.motion_type = static_cast<uint8_t>(mirrorTypeBox_->currentData().toInt());
+        cmd->u.mirror.elevation = static_cast<float>(mirrorElevationSpin_->value());
+        cmd->payload_size = 6;
         return true;
       case UiCommand::Sut:
         cmd->cmd_id = STC_CMD_SUT;
@@ -251,6 +308,11 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void sendCommand() {
+    if (!sendButton_->isEnabled()) {
+      appendLog("Command blocked: invalid in current state or unavailable in current mode.");
+      return;
+    }
+
     stc_icd_cmd_t cmd{};
     if (!buildCommandFromUi(&cmd)) {
       QMessageBox::warning(this, "Command error", "Unable to build command payload.");
@@ -288,6 +350,35 @@ class DiagnosticsWindow : public QMainWindow {
                   .arg(cmd.seq)
                   .arg(packetLen));
     }
+
+    if (tcpSocket_->waitForReadyRead(800)) {
+      const QByteArray rspPacket = tcpSocket_->readAll();
+      stc_icd_rsp_t rsp{};
+      const stc_icd_rc_t rc = stc_icd_rsp_parse(&cfg_, reinterpret_cast<const uint8_t*>(rspPacket.constData()), static_cast<size_t>(rspPacket.size()), &rsp);
+      if (rc == STC_ICD_OK) {
+        const bool ack = rsp.result == STC_RSP_ACK;
+        const QString resultText = ack ? "ACK" : "NACK";
+        const QString errorText = nackErrToString(rsp.err_code);
+        ackLabel_->setText(QString("Last response: %1 | cmd=0x%2 seq=%3 | err_code=%4 (%5) | payload=%6B")
+                              .arg(resultText)
+                              .arg(rsp.cmd_id, 4, 16, QChar('0'))
+                              .arg(rsp.seq)
+                              .arg(rsp.err_code)
+                              .arg(errorText)
+                              .arg(rsp.payload_size));
+        if (!ack) {
+          appendLog(QString("NACK cmd=0x%1 seq=%2 err_code=%3: %4")
+                      .arg(rsp.cmd_id, 4, 16, QChar('0'))
+                      .arg(rsp.seq)
+                      .arg(rsp.err_code)
+                      .arg(errorText));
+        }
+      } else {
+        ackLabel_->setText("Last response: unable to decode response frame");
+      }
+    } else {
+      ackLabel_->setText("Last response: timeout waiting for ACK/NACK");
+    }
     tcpSocket_->disconnectFromHost();
   }
 
@@ -321,6 +412,7 @@ class DiagnosticsWindow : public QMainWindow {
         continue;
       }
       stateLabel_->setText(QString("State: %1").arg(stateToString(tlm.state)));
+      currentState_ = tlm.state;
       lowSeqLabel_->setText(QString("Low-rate seq: %1").arg(tlm.seq));
       envLabel_->setText(QString("Temp %1 C, Hum %2 %%, Press %3 hPa")
                           .arg(tlm.temperature_c, 0, 'f', 1)
@@ -343,6 +435,7 @@ class DiagnosticsWindow : public QMainWindow {
                                   .arg(scanMaxNode));
 
       updateDeviceSelectors(connectedDevices, discoveredDevices);
+      updateCommandAvailability();
     }
   }
 
@@ -362,15 +455,37 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     if (turretTypeBox_) {
-      turretTypeBox_->setEnabled(connectedDevices >= 2);
-      turretAzSpin_->setEnabled(connectedDevices >= 2);
-      turretElSpin_->setEnabled(connectedDevices >= 2);
+      const bool turretAvailable = simModeBox_->isChecked() || (connectedDevices >= 2);
+      turretTypeBox_->setEnabled(turretAvailable);
+      turretAzSpin_->setEnabled(turretAvailable);
+      turretElSpin_->setEnabled(turretAvailable);
+    }
+
+    if (laserIdSpin_) {
+      laserIdSpin_->setMaximum(simModeBox_->isChecked() ? 8 : qMax(1, discoveredDevices));
+    }
+
+    if (mirrorIdBox_) {
+      const int prev = mirrorIdBox_->currentData().toInt();
+      mirrorIdBox_->clear();
+      mirrorIdBox_->addItem("All", 0xFF);
+      const int maxMirror = simModeBox_->isChecked() ? 8 : discoveredDevices;
+      for (int id = 1; id <= maxMirror; ++id) {
+        mirrorIdBox_->addItem(QString::number(id), id);
+      }
+      int idx = mirrorIdBox_->findData(prev);
+      if (idx < 0) idx = 0;
+      mirrorIdBox_->setCurrentIndex(idx);
+      mirrorIdBox_->setEnabled(maxMirror > 0 || simModeBox_->isChecked());
     }
 
     availabilityLabel_->setText(QString("Selectable devices: turret %1, SUT %2")
                                   .arg(connectedDevices >= 2 ? "enabled" : "disabled")
                                   .arg(availableSut));
-    Q_UNUSED(discoveredDevices);
+    inventoryLabel_->setText(QString("Inventory: discovered=%1, connected=%2, SUT=%3")
+                               .arg(discoveredDevices)
+                               .arg(connectedDevices)
+                               .arg(availableSut));
   }
 
   void onSimModeChanged(bool enabled) {
@@ -384,6 +499,33 @@ class DiagnosticsWindow : public QMainWindow {
       simTimer_->stop();
       appendLog("Simulation mode OFF.");
     }
+    modeLabel_->setText(QString("Server mode: %1").arg(enabled ? "SIM" : "HW"));
+    updateCommandAvailability();
+  }
+
+  void updateMotionUnits(QComboBox *motionTypeBox, QLabel *unitsLabel) {
+    if (!motionTypeBox || !unitsLabel) return;
+    switch (motionTypeBox->currentData().toInt()) {
+      case STC_MOTION_RELATIVE: unitsLabel->setText("units: deg delta"); break;
+      case STC_MOTION_ABSOLUTE: unitsLabel->setText("units: deg"); break;
+      case STC_MOTION_SPEED: unitsLabel->setText("units: deg/s"); break;
+      default: unitsLabel->setText("units: -"); break;
+    }
+  }
+
+  void updateCommandAvailability() {
+    const int idx = commandBox_->currentIndex();
+    if (idx < 0) return;
+    const UiCommand c = currentUiCommand();
+    bool allowed = true;
+    const bool isOper = currentState_ == 3;
+    if (c == UiCommand::Turret || c == UiCommand::Mirror || c == UiCommand::Sut) {
+      allowed = isOper;
+    }
+    if (c == UiCommand::Config) {
+      allowed = false;
+    }
+    sendButton_->setEnabled(allowed);
   }
 
   void tickSimulation() {
@@ -418,24 +560,12 @@ class DiagnosticsWindow : public QMainWindow {
     controllerIdSpin_->setValue(11);
 
     commandBox_ = new QComboBox(cmdGroup);
-    commandBox_->addItem("CU State", static_cast<int>(UiCommand::CuState));
-    commandBox_->addItem("SelfLev", static_cast<int>(UiCommand::SelfLev));
-    commandBox_->addItem("IBIT", static_cast<int>(UiCommand::Ibit));
-    commandBox_->addItem("Storage", static_cast<int>(UiCommand::Storage));
-    commandBox_->addItem("Laser", static_cast<int>(UiCommand::Laser));
-    commandBox_->addItem("Turret", static_cast<int>(UiCommand::Turret));
-    commandBox_->addItem("SUT", static_cast<int>(UiCommand::Sut));
-    commandBox_->addItem("Reset", static_cast<int>(UiCommand::Reset));
-    commandBox_->addItem("DelLog", static_cast<int>(UiCommand::DelLog));
-    commandBox_->addItem("Factory", static_cast<int>(UiCommand::Factory));
-    commandBox_->addItem("SelfTest", static_cast<int>(UiCommand::SelfTest));
-    commandBox_->addItem("Shutdown", static_cast<int>(UiCommand::Shutdown));
-    commandBox_->addItem("Config", static_cast<int>(UiCommand::Config));
-    commandBox_->addItem("ManualPos", static_cast<int>(UiCommand::ManualPos));
-    commandBox_->addItem("PosMode", static_cast<int>(UiCommand::PosMode));
-    commandBox_->addItem("ReqSwVersion", static_cast<int>(UiCommand::ReqSwVersion));
-    commandBox_->addItem("ReqHwInfo", static_cast<int>(UiCommand::ReqHwInfo));
-    commandBox_->addItem("ReqWorkTime", static_cast<int>(UiCommand::ReqWorkTime));
+    for (const auto &spec : kCommandSpecs) {
+      commandBox_->addItem(spec.label, static_cast<int>(spec.ui));
+      if (!spec.enabled) {
+        commandBox_->setItemData(commandBox_->count() - 1, 0, Qt::UserRole - 1);
+      }
+    }
 
     payloadStack_ = new QStackedWidget(cmdGroup);
     for (int i = 0; i < commandBox_->count(); ++i) {
@@ -454,18 +584,24 @@ class DiagnosticsWindow : public QMainWindow {
     auto *statusGroup = new QGroupBox("Status", panel);
     auto *statusLayout = new QVBoxLayout(statusGroup);
     stateLabel_ = new QLabel("State: UNKNOWN", statusGroup);
+    modeLabel_ = new QLabel("Server mode: HW", statusGroup);
+    inventoryLabel_ = new QLabel("Inventory: discovered -, connected -, SUT -", statusGroup);
     highSeqLabel_ = new QLabel("High-rate seq: -", statusGroup);
     lowSeqLabel_ = new QLabel("Low-rate seq: -", statusGroup);
     envLabel_ = new QLabel("Temp -, Hum -, Press -", statusGroup);
     connectionLabel_ = new QLabel("CAN -", statusGroup);
     availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
+    ackLabel_ = new QLabel("Last response: -", statusGroup);
     simModeBox_ = new QCheckBox("Simulation mode", statusGroup);
     statusLayout->addWidget(stateLabel_);
+    statusLayout->addWidget(modeLabel_);
+    statusLayout->addWidget(inventoryLabel_);
     statusLayout->addWidget(highSeqLabel_);
     statusLayout->addWidget(lowSeqLabel_);
     statusLayout->addWidget(envLabel_);
     statusLayout->addWidget(connectionLabel_);
     statusLayout->addWidget(availabilityLabel_);
+    statusLayout->addWidget(ackLabel_);
     statusLayout->addWidget(simModeBox_);
 
     layout->addWidget(cmdGroup, 3);
@@ -479,21 +615,26 @@ class DiagnosticsWindow : public QMainWindow {
     switch (c) {
       case UiCommand::CuState:
         cuStateBox_ = new QComboBox(w);
-        cuStateBox_->addItem("OFF", 0);
-        cuStateBox_->addItem("SAFE", 1);
-        cuStateBox_->addItem("OPER", 2);
+        cuStateBox_->addItem("INIT", 0);
+        cuStateBox_->addItem("INIT_DONE", 1);
+        cuStateBox_->addItem("SAFE", 2);
+        cuStateBox_->addItem("OPER", 3);
+        cuStateBox_->addItem("SELF_LEVELLING", 4);
+        cuStateBox_->addItem("IBIT_RUNNING", 5);
+        cuStateBox_->addItem("STORE", 6);
+        cuStateBox_->addItem("FAIL", 0xFF);
         f->addRow("state", cuStateBox_);
         break;
       case UiCommand::SelfLev:
         selfLevActionBox_ = new QComboBox(w);
-        selfLevActionBox_->addItem("Start", 1);
         selfLevActionBox_->addItem("Stop", 0);
+        selfLevActionBox_->addItem("Start", 1);
         f->addRow("action", selfLevActionBox_);
         break;
       case UiCommand::Ibit:
         ibitActionBox_ = new QComboBox(w);
-        ibitActionBox_->addItem("Start", 1);
         ibitActionBox_->addItem("Stop", 0);
+        ibitActionBox_->addItem("Start", 1);
         f->addRow("action", ibitActionBox_);
         break;
       case UiCommand::Laser:
@@ -509,16 +650,43 @@ class DiagnosticsWindow : public QMainWindow {
         turretTypeBox_ = new QComboBox(w);
         turretTypeBox_->addItem("Relative", 0);
         turretTypeBox_->addItem("Absolute", 1);
-        turretTypeBox_->addItem("Rate", 2);
+        turretTypeBox_->addItem("Speed", 2);
         turretAzSpin_ = new QDoubleSpinBox(w);
         turretAzSpin_->setRange(-720.0, 720.0);
         turretAzSpin_->setDecimals(3);
         turretElSpin_ = new QDoubleSpinBox(w);
         turretElSpin_->setRange(-720.0, 720.0);
         turretElSpin_->setDecimals(3);
+        turretUnitsLabel_ = new QLabel("units: deg delta", w);
+        connect(turretTypeBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+          updateMotionUnits(turretTypeBox_, turretUnitsLabel_);
+        });
         f->addRow("type", turretTypeBox_);
         f->addRow("azimuth", turretAzSpin_);
         f->addRow("elevation", turretElSpin_);
+        f->addRow("", turretUnitsLabel_);
+        updateMotionUnits(turretTypeBox_, turretUnitsLabel_);
+        break;
+      case UiCommand::Mirror:
+        mirrorIdBox_ = new QComboBox(w);
+        mirrorIdBox_->addItem("All", 0xFF);
+        for (int id = 1; id <= 8; ++id) mirrorIdBox_->addItem(QString::number(id), id);
+        mirrorTypeBox_ = new QComboBox(w);
+        mirrorTypeBox_->addItem("Relative", 0);
+        mirrorTypeBox_->addItem("Absolute", 1);
+        mirrorTypeBox_->addItem("Speed", 2);
+        mirrorElevationSpin_ = new QDoubleSpinBox(w);
+        mirrorElevationSpin_->setRange(-720.0, 720.0);
+        mirrorElevationSpin_->setDecimals(3);
+        mirrorUnitsLabel_ = new QLabel("units: deg delta", w);
+        connect(mirrorTypeBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+          updateMotionUnits(mirrorTypeBox_, mirrorUnitsLabel_);
+        });
+        f->addRow("mirror id", mirrorIdBox_);
+        f->addRow("motion type", mirrorTypeBox_);
+        f->addRow("elevation", mirrorElevationSpin_);
+        f->addRow("", mirrorUnitsLabel_);
+        updateMotionUnits(mirrorTypeBox_, mirrorUnitsLabel_);
         break;
       case UiCommand::Sut:
         sutIdBox_ = new QComboBox(w);
@@ -527,17 +695,17 @@ class DiagnosticsWindow : public QMainWindow {
         sutTypeBox_ = new QComboBox(w);
         sutTypeBox_->addItem("Relative", 0);
         sutTypeBox_->addItem("Absolute", 1);
-        sutTypeBox_->addItem("Rate", 2);
+        sutTypeBox_->addItem("Speed", 2);
         sutAzSpin_ = new QDoubleSpinBox(w);
         sutAzSpin_->setRange(-720.0, 720.0);
         sutAzSpin_->setDecimals(3);
         sutElSpin_ = new QDoubleSpinBox(w);
         sutElSpin_->setRange(-720.0, 720.0);
         sutElSpin_->setDecimals(3);
-        f->addRow("id", sutIdBox_);
-        f->addRow("type", sutTypeBox_);
-        f->addRow("azimuth", sutAzSpin_);
-        f->addRow("elevation", sutElSpin_);
+        f->addRow("sut id", sutIdBox_);
+        f->addRow("motion type", sutTypeBox_);
+        f->addRow("SUT azimuth", sutAzSpin_);
+        f->addRow("mirror elevation", sutElSpin_);
         break;
       case UiCommand::ManualPos:
         manualLatSpin_ = new QDoubleSpinBox(w);
@@ -557,8 +725,8 @@ class DiagnosticsWindow : public QMainWindow {
         break;
       case UiCommand::PosMode:
         posModeBox_ = new QComboBox(w);
-        posModeBox_->addItem("0", 0);
-        posModeBox_->addItem("1", 1);
+        posModeBox_->addItem("GPS", 0);
+        posModeBox_->addItem("Manual", 1);
         f->addRow("mode", posModeBox_);
         break;
       default:
@@ -628,6 +796,11 @@ class DiagnosticsWindow : public QMainWindow {
   QComboBox *turretTypeBox_{};
   QDoubleSpinBox *turretAzSpin_{};
   QDoubleSpinBox *turretElSpin_{};
+  QLabel *turretUnitsLabel_{};
+  QComboBox *mirrorIdBox_{};
+  QComboBox *mirrorTypeBox_{};
+  QDoubleSpinBox *mirrorElevationSpin_{};
+  QLabel *mirrorUnitsLabel_{};
   QComboBox *sutIdBox_{};
   QComboBox *sutTypeBox_{};
   QDoubleSpinBox *sutAzSpin_{};
@@ -639,11 +812,14 @@ class DiagnosticsWindow : public QMainWindow {
   QComboBox *posModeBox_{};
 
   QLabel *stateLabel_{};
+  QLabel *modeLabel_{};
+  QLabel *inventoryLabel_{};
   QLabel *highSeqLabel_{};
   QLabel *lowSeqLabel_{};
   QLabel *envLabel_{};
   QLabel *connectionLabel_{};
   QLabel *availabilityLabel_{};
+  QLabel *ackLabel_{};
   QCheckBox *simModeBox_{};
 
   QTableWidget *axisTable_{};
@@ -651,6 +827,7 @@ class DiagnosticsWindow : public QMainWindow {
 
   stc_icd_cfg_t cfg_{};
   uint16_t nextSeq_ = 1;
+  uint8_t currentState_ = 0;
 
   std::array<double, kAxisCount> simPos_{};
   std::array<double, kAxisCount> simVel_{};
