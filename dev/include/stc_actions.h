@@ -16,7 +16,8 @@ typedef enum {
   ACTION_ENTER_STORE,
   ACTION_RESET,
   ACTION_FACTORY,
-  ACTION_SHUTDOWN
+  ACTION_SHUTDOWN,
+  ACTION_CAN_REDISCOVER
 } stc_action_type_t;
 
 typedef struct {

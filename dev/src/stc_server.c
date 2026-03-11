@@ -325,6 +325,7 @@ static _Atomic sig_atomic_t g_stop = 0;
 static void on_sig(int s) {
   (void)s;
   atomic_store(&g_stop, 1);
+  STC_LOG_INFO("Shutdown signal received; stopping STC server");
 }
 
 /* ----------------------------- ICD validation ----------------------------- */
@@ -876,6 +877,16 @@ static void* can_worker_thread(void* arg) {
             }
           }
           break;
+        case ACTION_CAN_REDISCOVER: {
+          STC_LOG_INFO("CAN rediscovery requested by client");
+          const int disc_rc = motion_backend_discover(backend);
+          if (disc_rc == 0) {
+            STC_LOG_INFO("CAN rediscovery completed successfully");
+          } else {
+            STC_LOG_WARN("CAN rediscovery failed (rc=%d)", disc_rc);
+          }
+          break;
+        }
         case ACTION_RESET:
           (void)motion_backend_quick_stop(backend, act.axes_mask);
           memset(axis_enabled, 0, sizeof(axis_enabled));
@@ -1735,13 +1746,24 @@ int main(int argc, char** argv) {
   STC_LOG_INFO("UDP unicast telemetry: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
 
   while (!atomic_load(&g_stop)) {
+    struct pollfd pfd = {.fd = srv, .events = POLLIN, .revents = 0};
+    int prc = poll(&pfd, 1, 500);
+    if (prc < 0) {
+      if (errno == EINTR) continue;
+      STC_LOG_WARN("poll error on listener: %s", strerror(errno));
+      break;
+    }
+    if (prc == 0 || (pfd.revents & POLLIN) == 0) {
+      continue;
+    }
+
     struct sockaddr_in cli;
     socklen_t clen = sizeof(cli);
     int cfd = accept(srv, (struct sockaddr*)&cli, &clen);
     if (cfd < 0) {
       if (errno == EINTR) continue;
       STC_LOG_WARN("accept error: %s", strerror(errno));
-      break;
+      continue;
     }
 
     char ipbuf[64];
@@ -2041,7 +2063,8 @@ int main(int argc, char** argv) {
             stc_action_make_simple(&act, ACTION_FACTORY, 0u);
             has_action = 1;
           } else if (cmd.cmd_id == STC_CMD_SELFTEST) {
-            has_action = 0; /* ACK/no-op placeholder */
+            stc_action_make_simple(&act, ACTION_CAN_REDISCOVER, 0xFFFFFFFFu);
+            has_action = 1;
           } else if (cmd.cmd_id == STC_CMD_SHUTDOWN) {
             stc_action_make_simple(&act, ACTION_SHUTDOWN, 0u);
             has_action = 1;

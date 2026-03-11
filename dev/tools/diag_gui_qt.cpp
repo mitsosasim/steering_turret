@@ -23,6 +23,7 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QTime>
 #include <QtCore/QTimer>
+#include <QtCore/QProcess>
 
 #include <array>
 #include <cstdint>
@@ -144,6 +145,7 @@ class DiagnosticsWindow : public QMainWindow {
     connect(udpHigh_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processHighTelemetry);
     connect(udpLow_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processLowTelemetry);
     connect(simModeBox_, &QCheckBox::toggled, this, &DiagnosticsWindow::onSimModeChanged);
+    connect(canBringupButton_, &QPushButton::clicked, this, &DiagnosticsWindow::bringUpCanAndConnect);
 
     if (!udpHigh_->bind(QHostAddress::AnyIPv4, kDefaultTlmHighPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
       appendLog(QString("Failed binding high telemetry socket: %1").arg(udpHigh_->errorString()));
@@ -503,6 +505,107 @@ class DiagnosticsWindow : public QMainWindow {
     updateCommandAvailability();
   }
 
+  void bringUpCanAndConnect() {
+    if (simModeBox_->isChecked()) {
+      appendLog("CAN bring-up skipped in simulation mode.");
+      ackLabel_->setText("CAN action: skipped (simulation mode)");
+      return;
+    }
+
+    const QString iface = "can0";
+    appendLog(QString("CAN bring-up requested for %1").arg(iface));
+
+    auto runCmd = [this](const QString &program, const QStringList &args) {
+      QProcess proc;
+      proc.start(program, args);
+      if (!proc.waitForStarted(1000)) {
+        return QString("failed to start %1").arg(program);
+      }
+      if (!proc.waitForFinished(6000)) {
+        proc.kill();
+        proc.waitForFinished(500);
+        return QString("timeout running %1 %2").arg(program, args.join(' '));
+      }
+      QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+      const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+      if (!err.isEmpty()) {
+        if (!out.isEmpty()) out += " | ";
+        out += err;
+      }
+      if (out.isEmpty()) out = "ok";
+      return out;
+    };
+
+    QStringList details;
+    bool success = true;
+
+    const QString downOut = runCmd("/sbin/ip", {"link", "set", iface, "down"});
+    details << QString("ip link set %1 down => %2").arg(iface, downOut);
+
+    const int bitrate = 1000000;
+    const QString upOut = runCmd("/sbin/ip", {"link", "set", iface, "type", "can", "bitrate", QString::number(bitrate), "restart-ms", "100"});
+    details << QString("ip link set %1 type can bitrate %2 restart-ms 100 => %3").arg(iface).arg(bitrate).arg(upOut);
+
+    const QString up2Out = runCmd("/sbin/ip", {"link", "set", iface, "up"});
+    details << QString("ip link set %1 up => %2").arg(iface, up2Out);
+
+    const QString canDump = runCmd("/sbin/ip", {"-details", "link", "show", iface});
+    details << QString("ip -details link show %1 => %2").arg(iface, canDump);
+
+    stc_icd_cmd_t cmd{};
+    makeHeader(&cmd);
+    cmd.cmd_id = STC_CMD_SELFTEST;
+    cmd.payload_decoded = 1;
+    cmd.payload_size = 0;
+
+    uint8_t packet[20 + STC_ICD_MAX_PAYLOAD]{};
+    size_t packetLen = 0;
+    const stc_icd_rc_t packRc = stc_icd_cmd_pack(&cfg_, &cmd, packet, sizeof(packet), &packetLen);
+    if (packRc != STC_ICD_OK) {
+      success = false;
+      details << "failed to encode SELFTEST rediscovery command";
+    } else {
+      tcpSocket_->abort();
+      tcpSocket_->connectToHost(serverIpBox_->currentText(), static_cast<quint16>(portSpin_->value()));
+      if (!tcpSocket_->waitForConnected(800)) {
+        success = false;
+        details << QString("TCP connect failed: %1").arg(tcpSocket_->errorString());
+      } else {
+        const qint64 wrote = tcpSocket_->write(reinterpret_cast<const char*>(packet), static_cast<qint64>(packetLen));
+        if (wrote != static_cast<qint64>(packetLen) || !tcpSocket_->waitForBytesWritten(800)) {
+          success = false;
+          details << QString("rediscover command write failed: %1").arg(tcpSocket_->errorString());
+        } else if (tcpSocket_->waitForReadyRead(1200)) {
+          const QByteArray rspPacket = tcpSocket_->readAll();
+          stc_icd_rsp_t rsp{};
+          const stc_icd_rc_t rc = stc_icd_rsp_parse(&cfg_, reinterpret_cast<const uint8_t*>(rspPacket.constData()), static_cast<size_t>(rspPacket.size()), &rsp);
+          if (rc != STC_ICD_OK) {
+            success = false;
+            details << "rediscover response decode failed";
+          } else if (rsp.result != STC_RSP_ACK) {
+            success = false;
+            details << QString("rediscover NACK err=%1 (%2)").arg(rsp.err_code).arg(nackErrToString(rsp.err_code));
+          } else {
+            details << QString("rediscover ACK seq=%1").arg(rsp.seq);
+          }
+        } else {
+          success = false;
+          details << "timeout waiting for rediscover ACK";
+        }
+        tcpSocket_->disconnectFromHost();
+      }
+    }
+
+    const QString detailsJoined = details.join(" || ");
+    if (success) {
+      ackLabel_->setText("CAN action: bring-up + rediscovery SUCCESS");
+      appendLog(QString("CAN action success: %1").arg(detailsJoined));
+    } else {
+      ackLabel_->setText("CAN action: bring-up + rediscovery FAILED");
+      appendLog(QString("CAN action failed: %1").arg(detailsJoined));
+    }
+  }
+
   void updateMotionUnits(QComboBox *motionTypeBox, QLabel *unitsLabel) {
     if (!motionTypeBox || !unitsLabel) return;
     switch (motionTypeBox->currentData().toInt()) {
@@ -573,6 +676,7 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     sendButton_ = new QPushButton("Send", cmdGroup);
+    canBringupButton_ = new QPushButton("Bring up CAN + discover/connect", cmdGroup);
 
     cmdForm->addRow("Server IP", serverIpBox_);
     cmdForm->addRow("Control Port", portSpin_);
@@ -580,6 +684,7 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow("Command", commandBox_);
     cmdForm->addRow("Payload", payloadStack_);
     cmdForm->addRow(sendButton_);
+    cmdForm->addRow(canBringupButton_);
 
     auto *statusGroup = new QGroupBox("Status", panel);
     auto *statusLayout = new QVBoxLayout(statusGroup);
@@ -787,6 +892,7 @@ class DiagnosticsWindow : public QMainWindow {
   QComboBox *commandBox_{};
   QStackedWidget *payloadStack_{};
   QPushButton *sendButton_{};
+  QPushButton *canBringupButton_{};
 
   QComboBox *cuStateBox_{};
   QComboBox *selfLevActionBox_{};
