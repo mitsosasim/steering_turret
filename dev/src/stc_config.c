@@ -101,23 +101,52 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->tlmh_tx_priority = 70;
   cfg->tlml_tx_priority = 60;
 
-  cfg->turret_az_axis = -1;
-  cfg->turret_el_axis = -1;
+  cfg->num_axes = (int)STC_AXIS_COUNT;
+  cfg->turret_az_axis = 0;
+  cfg->turret_el_axis = 1;
+  cfg->sut_count = STC_MAX_SUT;
+  cfg->mirror_count = STC_MAX_MIRROR;
 
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
-    cfg->axis_node_id[i] = 1;
+    cfg->axis_node_id[i] = (int)(i + 1);
     cfg->axis_counts_per_rev[i] = 4096.0;
-    cfg->axis_gear_ratio[i] = 1.0;
     cfg->axis_vel_is_rpm[i] = 0;
-    cfg->axis_min_deg[i] = -180.0;
-    cfg->axis_max_deg[i] = 180.0;
-    cfg->axis_max_speed_deg_s[i] = 90.0;
     cfg->axis_storage_deg[i] = 0.0;
     cfg->axis_pp_profile_vel[i] = 500;
-    cfg->axis_diag_cat[i] = 0;
-    cfg->axis_diag_subcat[i] = 0;
+    cfg->axis_diag_cat[i] = 0x06;
+    cfg->axis_diag_subcat[i] = 0x3F;
+
+    if (i == 0) {
+      cfg->axis_gear_ratio[i] = 100.0;
+      cfg->axis_min_deg[i] = -140.0;
+      cfg->axis_max_deg[i] = 140.0;
+      cfg->axis_max_speed_deg_s[i] = 45.0;
+    } else if (i == 1) {
+      cfg->axis_gear_ratio[i] = 20.0;
+      cfg->axis_min_deg[i] = -5.0;
+      cfg->axis_max_deg[i] = 180.0;
+      cfg->axis_max_speed_deg_s[i] = 45.0;
+    } else if (i < 10) {
+      cfg->axis_gear_ratio[i] = 20.0;
+      cfg->axis_min_deg[i] = -35.0;
+      cfg->axis_max_deg[i] = 35.0;
+      cfg->axis_max_speed_deg_s[i] = 45.0;
+    } else {
+      cfg->axis_gear_ratio[i] = 20.0;
+      cfg->axis_min_deg[i] = -12.5;
+      cfg->axis_max_deg[i] = 18.5;
+      cfg->axis_max_speed_deg_s[i] = 45.0;
+    }
   }
-  for (size_t i = 0; i < 8; i++) cfg->motor_status_map[i] = -1;
+
+  for (size_t i = 0; i < STC_MAX_SUT; i++) {
+    cfg->sut_az_axis[i] = (int)(2 + i);
+    cfg->sut_el_axis[i] = (int)(10 + i);
+  }
+  for (size_t i = 0; i < STC_MAX_MIRROR; i++) {
+    cfg->mirror_axis[i] = (int)(10 + i);
+  }
+  for (size_t i = 0; i < 8; i++) cfg->motor_status_map[i] = (int8_t)(2 + i);
 }
 
 bool load_config(const char* path, stc_config_t* cfg) {
