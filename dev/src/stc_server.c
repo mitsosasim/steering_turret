@@ -353,7 +353,9 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
     case STC_CMD_MIRROR:
     case STC_CMD_SUT:
     case STC_CMD_RESET:
+    case STC_CMD_DELLOG:
     case STC_CMD_FACTORY:
+    case STC_CMD_SELFTEST:
     case STC_CMD_SHUTDOWN:
     case STC_CMD_CONFIG:
     case STC_CMD_MANUALPOS:
@@ -501,8 +503,14 @@ static void print_cmd(const stc_icd_cmd_t* c) {
     case STC_CMD_RESET:
       STC_LOG_DEBUG("  RESET");
       break;
+    case STC_CMD_DELLOG:
+      STC_LOG_DEBUG("  DELLOG");
+      break;
     case STC_CMD_FACTORY:
       STC_LOG_DEBUG("  FACTORY");
+      break;
+    case STC_CMD_SELFTEST:
+      STC_LOG_DEBUG("  SELFTEST");
       break;
     case STC_CMD_SHUTDOWN:
       STC_LOG_DEBUG("  SHUTDOWN");
@@ -2398,9 +2406,13 @@ int main(int argc, char** argv) {
               stc_action_make_simple(&act, ACTION_RESET, 0xFFFFFFFFu);
               has_action = 1;
             }
+          } else if (cmd.cmd_id == STC_CMD_DELLOG) {
+            has_action = 0; /* ACK/no-op placeholder */
           } else if (cmd.cmd_id == STC_CMD_FACTORY) {
             stc_action_make_simple(&act, ACTION_FACTORY, 0u);
             has_action = 1;
+          } else if (cmd.cmd_id == STC_CMD_SELFTEST) {
+            has_action = 0; /* ACK/no-op placeholder */
           } else if (cmd.cmd_id == STC_CMD_SHUTDOWN) {
             stc_action_make_simple(&act, ACTION_SHUTDOWN, 0u);
             has_action = 1;

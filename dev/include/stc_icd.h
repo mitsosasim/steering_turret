@@ -10,7 +10,7 @@
  * Project decisions:
  * - MIRROR cmd_id = 0x0007
  * - MANUALPOS supports both float(16B) and double(32B); prefer double
- * - Response magic = "RESP"
+ * - Wire magics follow ICD: "TCMD" and "TRSP"
  */
 
 #include <stdint.h>
@@ -39,8 +39,8 @@ typedef enum stc_icd_rc_e {
 /* ----------------------------- Config (magic, strictness) ----------------------------- */
 
 typedef struct stc_icd_cfg_s {
-  uint8_t cmd_magic[4];   /* default: {'C','M','D','\0'} */
-  uint8_t rsp_magic[4];   /* default: {'R','E','S','P'} */
+  uint8_t cmd_magic[4];   /* default: {'T','C','M','D'} */
+  uint8_t rsp_magic[4];   /* default: {'T','R','S','P'} */
   uint8_t tlmh_magic[4];  /* default: {'T','L','M','H'} */
   uint8_t tlml_magic[4];  /* default: {'T','L','M','L'} */
 
@@ -66,9 +66,9 @@ typedef enum stc_cmd_id_e {
   STC_CMD_SUT             = 0x0008,
   /* 0x0009 unused */
   STC_CMD_RESET           = 0x000A,
-  /* 0x000B unused */
+  STC_CMD_DELLOG          = 0x000B,
   STC_CMD_FACTORY         = 0x000C,
-  /* 0x000D unused */
+  STC_CMD_SELFTEST        = 0x000D,
   STC_CMD_SHUTDOWN        = 0x000E,
   STC_CMD_CONFIG          = 0x000F,
   STC_CMD_MANUALPOS       = 0x0010,
@@ -88,7 +88,7 @@ typedef enum stc_motion_type_e {
 /* ----------------------------- TCP CMD frame ----------------------------- */
 /*
  * Canonical encoding we implement:
- *   magic[4]        = "CMD\0"
+ *   magic[4]        = "TCMD"
  *   version         u8
  *   controller_id   u8
  *   cmd_id          u16 LE
@@ -183,7 +183,7 @@ stc_icd_rc_t stc_icd_cmd_pack(const stc_icd_cfg_t* cfg,
 /* ----------------------------- TCP RSP frame ----------------------------- */
 /*
  * Canonical encoding we implement:
- *   magic[4]      = "RESP"
+ *   magic[4]      = "TRSP"
  *   version       u8
  *   cmd_id        u16 LE
  *   seq           u16 LE

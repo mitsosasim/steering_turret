@@ -13,6 +13,7 @@
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QSpinBox>
+#include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
 #include <QtNetwork/QHostAddress>
@@ -20,14 +21,11 @@
 #include <QtNetwork/QUdpSocket>
 #include <QtCore/QDateTime>
 #include <QtCore/QTime>
-#include <QtCore/QRandomGenerator>
 #include <QtCore/QTimer>
 
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 extern "C" {
 #include "stc_icd.h"
@@ -48,14 +46,34 @@ QString stateToString(uint8_t state) {
     default: return QString("UNKNOWN(%1)").arg(state);
   }
 }
+
+enum class UiCommand {
+  CuState,
+  SelfLev,
+  Ibit,
+  Storage,
+  Laser,
+  Turret,
+  Sut,
+  Reset,
+  DelLog,
+  Factory,
+  SelfTest,
+  Shutdown,
+  Config,
+  ManualPos,
+  PosMode,
+  ReqSwVersion,
+  ReqHwInfo,
+  ReqWorkTime
+};
 }
 
 class DiagnosticsWindow : public QMainWindow {
-
  public:
   DiagnosticsWindow() {
     setWindowTitle("STC Diagnostics Console");
-    resize(1200, 800);
+    resize(1300, 840);
 
     tcpSocket_ = new QTcpSocket(this);
     udpHigh_ = new QUdpSocket(this);
@@ -65,16 +83,15 @@ class DiagnosticsWindow : public QMainWindow {
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
-
     root->addWidget(buildTopPanel());
     root->addWidget(buildAxisPanel(), 1);
     root->addWidget(buildLogPanel(), 1);
-
     setCentralWidget(central);
 
     initAxisTable();
 
     connect(sendButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendCommand);
+    connect(commandBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, &DiagnosticsWindow::onCommandSelectionChanged);
     connect(udpHigh_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processHighTelemetry);
     connect(udpLow_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processLowTelemetry);
     connect(simModeBox_, &QCheckBox::toggled, this, &DiagnosticsWindow::onSimModeChanged);
@@ -87,45 +104,165 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     simTimer_ = new QTimer(this);
-    simTimer_->setInterval(10);
+    simTimer_->setInterval(20);
     connect(simTimer_, &QTimer::timeout, this, &DiagnosticsWindow::tickSimulation);
 
+    onCommandSelectionChanged(commandBox_->currentIndex());
     appendLog("Diagnostics GUI initialized.");
   }
 
  private:
+  void onCommandSelectionChanged(int index) {
+    payloadStack_->setCurrentIndex(index);
+  }
+
+  UiCommand currentUiCommand() const {
+    return static_cast<UiCommand>(commandBox_->currentData().toInt());
+  }
+
+  void makeHeader(stc_icd_cmd_t *cmd) {
+    std::memcpy(cmd->magic, cfg_.cmd_magic, sizeof(cmd->magic));
+    cmd->version = cfg_.protocol_version_default;
+    cmd->controller_id = static_cast<uint8_t>(controllerIdSpin_->value());
+    cmd->seq = nextSeq_++;
+    cmd->timestamp_ms = static_cast<uint64_t>(QDateTime::currentMSecsSinceEpoch());
+  }
+
+  bool buildCommandFromUi(stc_icd_cmd_t *cmd) {
+    makeHeader(cmd);
+    cmd->payload_decoded = 1;
+
+    switch (currentUiCommand()) {
+      case UiCommand::CuState:
+        cmd->cmd_id = STC_CMD_CU_STATE;
+        cmd->u.cu_state.state = static_cast<uint8_t>(cuStateBox_->currentData().toInt());
+        cmd->payload_size = 1;
+        return true;
+      case UiCommand::SelfLev:
+        cmd->cmd_id = STC_CMD_SELFLEV;
+        cmd->u.selflev.v = static_cast<uint8_t>(selfLevActionBox_->currentData().toInt());
+        cmd->payload_size = 1;
+        return true;
+      case UiCommand::Ibit:
+        cmd->cmd_id = STC_CMD_IBIT;
+        cmd->u.ibit.v = static_cast<uint8_t>(ibitActionBox_->currentData().toInt());
+        cmd->payload_size = 1;
+        return true;
+      case UiCommand::Storage:
+        cmd->cmd_id = STC_CMD_STORAGE;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::Laser:
+        cmd->cmd_id = STC_CMD_LASER;
+        cmd->u.laser.id = static_cast<uint8_t>(laserIdSpin_->value());
+        cmd->u.laser.on_off = static_cast<uint8_t>(laserActionBox_->currentData().toInt());
+        cmd->payload_size = 2;
+        return true;
+      case UiCommand::Turret:
+        cmd->cmd_id = STC_CMD_TURRET;
+        cmd->u.turret.motion_type = static_cast<uint8_t>(turretTypeBox_->currentData().toInt());
+        cmd->u.turret.az = static_cast<float>(turretAzSpin_->value());
+        cmd->u.turret.el = static_cast<float>(turretElSpin_->value());
+        cmd->payload_size = 9;
+        return true;
+      case UiCommand::Sut:
+        cmd->cmd_id = STC_CMD_SUT;
+        cmd->u.sut.id = static_cast<uint8_t>(sutIdBox_->currentData().toInt());
+        cmd->u.sut.motion_type = static_cast<uint8_t>(sutTypeBox_->currentData().toInt());
+        cmd->u.sut.az = static_cast<float>(sutAzSpin_->value());
+        cmd->u.sut.el = static_cast<float>(sutElSpin_->value());
+        cmd->payload_size = 10;
+        return true;
+      case UiCommand::Reset:
+        cmd->cmd_id = STC_CMD_RESET;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::DelLog:
+        cmd->cmd_id = STC_CMD_DELLOG;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::Factory:
+        cmd->cmd_id = STC_CMD_FACTORY;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::SelfTest:
+        cmd->cmd_id = STC_CMD_SELFTEST;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::Shutdown:
+        cmd->cmd_id = STC_CMD_SHUTDOWN;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::Config:
+        cmd->cmd_id = STC_CMD_CONFIG;
+        cmd->payload_decoded = 0;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::ManualPos:
+        cmd->cmd_id = STC_CMD_MANUALPOS;
+        cmd->u.manualpos.lat = manualLatSpin_->value();
+        cmd->u.manualpos.lon = manualLonSpin_->value();
+        cmd->u.manualpos.alt = manualAltSpin_->value();
+        cmd->u.manualpos.heading = manualHeadingSpin_->value();
+        cmd->u.manualpos.encoded_as_double = 1;
+        cmd->payload_size = 32;
+        return true;
+      case UiCommand::PosMode:
+        cmd->cmd_id = STC_CMD_POSMODE;
+        cmd->u.posmode.v = static_cast<uint8_t>(posModeBox_->currentData().toInt());
+        cmd->payload_size = 1;
+        return true;
+      case UiCommand::ReqSwVersion:
+        cmd->cmd_id = STC_CMD_REQ_SW_VERSION;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::ReqHwInfo:
+        cmd->cmd_id = STC_CMD_REQ_HW_INFO;
+        cmd->payload_size = 0;
+        return true;
+      case UiCommand::ReqWorkTime:
+        cmd->cmd_id = STC_CMD_REQ_WORK_TIME;
+        cmd->payload_size = 0;
+        return true;
+    }
+    return false;
+  }
+
+  void applySimulationCommand(const stc_icd_cmd_t &cmd) {
+    if (cmd.cmd_id == STC_CMD_TURRET) {
+      simTargetVel_[0] = cmd.u.turret.az;
+      simTargetVel_[1] = cmd.u.turret.el;
+    } else if (cmd.cmd_id == STC_CMD_SUT) {
+      const int id = cmd.u.sut.id;
+      if (id == 0xFF) {
+        for (int s = 0; s < 8; ++s) {
+          int base = 2 + s * 2;
+          simTargetVel_[base] = cmd.u.sut.az;
+          simTargetVel_[base + 1] = cmd.u.sut.el;
+        }
+      } else if (id >= 1 && id <= 8) {
+        int base = 2 + (id - 1) * 2;
+        simTargetVel_[base] = cmd.u.sut.az;
+        simTargetVel_[base + 1] = cmd.u.sut.el;
+      }
+    } else if (cmd.cmd_id == STC_CMD_SELFLEV || cmd.cmd_id == STC_CMD_IBIT || cmd.cmd_id == STC_CMD_STORAGE) {
+      simTargetVel_.fill(0.0);
+    }
+  }
+
   void sendCommand() {
     stc_icd_cmd_t cmd{};
-    std::memcpy(cmd.magic, cfg_.cmd_magic, sizeof(cmd.magic));
-    cmd.version = cfg_.protocol_version_default;
-    cmd.controller_id = static_cast<uint8_t>(controllerIdSpin_->value());
-    cmd.seq = nextSeq_++;
-    cmd.timestamp_ms = static_cast<uint64_t>(QDateTime::currentMSecsSinceEpoch());
+    if (!buildCommandFromUi(&cmd)) {
+      QMessageBox::warning(this, "Command error", "Unable to build command payload.");
+      return;
+    }
 
-    const int cmdIdx = commandBox_->currentIndex();
-    if (cmdIdx == 0 || cmdIdx == 1 || cmdIdx == 2) {
-      cmd.cmd_id = STC_CMD_CU_STATE;
-      cmd.payload_decoded = 1;
-      cmd.u.cu_state.state = static_cast<uint8_t>(cmdIdx);  // OFF/SAFE/OPER
-      cmd.payload_size = 1;
-    } else if (cmdIdx == 3 || cmdIdx == 4) {
-      cmd.cmd_id = STC_CMD_SELFLEV;
-      cmd.payload_decoded = 1;
-      cmd.u.selflev.v = static_cast<uint8_t>(cmdIdx == 3 ? 1 : 0);
-      cmd.payload_size = 1;
-    } else if (cmdIdx == 5 || cmdIdx == 6) {
-      cmd.cmd_id = STC_CMD_IBIT;
-      cmd.payload_decoded = 1;
-      cmd.u.ibit.v = static_cast<uint8_t>(cmdIdx == 5 ? 1 : 0);
-      cmd.payload_size = 1;
-    } else {
-      cmd.cmd_id = STC_CMD_TURRET;
-      cmd.payload_decoded = 1;
-      cmd.u.turret.motion_type = STC_MOTION_SPEED;
-      const float speed = static_cast<float>(speedSpin_->value());
-      cmd.u.turret.az = directionCwBox_->isChecked() ? speed : -speed;
-      cmd.u.turret.el = static_cast<float>(elSpin_->value());
-      cmd.payload_size = 9;
+    if (simModeBox_->isChecked()) {
+      applySimulationCommand(cmd);
+      appendLog(QString("Simulation apply id=0x%1 seq=%2")
+                  .arg(cmd.cmd_id, 4, 16, QChar('0'))
+                  .arg(cmd.seq));
+      return;
     }
 
     uint8_t packet[20 + STC_ICD_MAX_PAYLOAD]{};
@@ -147,9 +284,9 @@ class DiagnosticsWindow : public QMainWindow {
       appendLog(QString("TCP write failed: %1").arg(tcpSocket_->errorString()));
     } else {
       appendLog(QString("Sent command id=0x%1 seq=%2 bytes=%3")
-                    .arg(cmd.cmd_id, 4, 16, QChar('0'))
-                    .arg(cmd.seq)
-                    .arg(packetLen));
+                  .arg(cmd.cmd_id, 4, 16, QChar('0'))
+                  .arg(cmd.seq)
+                  .arg(packetLen));
     }
     tcpSocket_->disconnectFromHost();
   }
@@ -159,13 +296,11 @@ class DiagnosticsWindow : public QMainWindow {
       QByteArray packet;
       packet.resize(static_cast<int>(udpHigh_->pendingDatagramSize()));
       udpHigh_->readDatagram(packet.data(), packet.size());
-
       stc_tlmh_t tlm{};
       if (stc_icd_tlmh_parse(&cfg_, reinterpret_cast<const uint8_t*>(packet.constData()), static_cast<size_t>(packet.size()), &tlm) != STC_ICD_OK) {
         appendLog("Dropped malformed TLMH datagram.");
         continue;
       }
-
       for (int i = 0; i < kAxisCount; ++i) {
         axisTable_->item(i, 1)->setText(QString::number(tlm.position[i], 'f', 3));
         axisTable_->item(i, 2)->setText(QString::number(tlm.rates[i], 'f', 3));
@@ -180,24 +315,17 @@ class DiagnosticsWindow : public QMainWindow {
       QByteArray packet;
       packet.resize(static_cast<int>(udpLow_->pendingDatagramSize()));
       udpLow_->readDatagram(packet.data(), packet.size());
-
       stc_tlml_t tlm{};
       if (stc_icd_tlml_parse(&cfg_, reinterpret_cast<const uint8_t*>(packet.constData()), static_cast<size_t>(packet.size()), &tlm) != STC_ICD_OK) {
         appendLog("Dropped malformed TLML datagram.");
         continue;
       }
-
       stateLabel_->setText(QString("State: %1").arg(stateToString(tlm.state)));
       lowSeqLabel_->setText(QString("Low-rate seq: %1").arg(tlm.seq));
-      envLabel_->setText(QString("Temp %1 C, Hum %2 %, Press %3 hPa")
+      envLabel_->setText(QString("Temp %1 C, Hum %2 %%, Press %3 hPa")
                           .arg(tlm.temperature_c, 0, 'f', 1)
                           .arg(tlm.humidity_pct, 0, 'f', 1)
                           .arg(tlm.pressure_hpa, 0, 'f', 1));
-      if (tlm.error_count > 0) {
-        appendLog(QString("TLML errors count=%1 first=0x%2")
-                    .arg(tlm.error_count)
-                    .arg(tlm.errors[0], 8, 16, QChar('0')));
-      }
     }
   }
 
@@ -215,19 +343,17 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void tickSimulation() {
-    simTimeSec_ += 0.01;
+    const double dt = 0.02;
     for (int i = 0; i < kAxisCount; ++i) {
-      const double phase = simTimeSec_ + (0.15 * static_cast<double>(i));
-      const double pos = 10.0 * std::sin(phase);
-      const double vel = 10.0 * std::cos(phase);
-      const double tgt = speedSpin_->value();
-      axisTable_->item(i, 1)->setText(QString::number(pos, 'f', 3));
-      axisTable_->item(i, 2)->setText(QString::number(vel, 'f', 3));
-      axisTable_->item(i, 3)->setText(QString::number(tgt, 'f', 3));
+      const double dv = simTargetVel_[i] - simVel_[i];
+      simVel_[i] += dv * 0.25;
+      simPos_[i] += simVel_[i] * dt;
+      axisTable_->item(i, 1)->setText(QString::number(simPos_[i], 'f', 3));
+      axisTable_->item(i, 2)->setText(QString::number(simVel_[i], 'f', 3));
+      axisTable_->item(i, 3)->setText(QString::number(simTargetVel_[i], 'f', 3));
     }
   }
 
- private:
   QWidget* buildTopPanel() {
     auto *panel = new QWidget(this);
     auto *layout = new QHBoxLayout(panel);
@@ -248,20 +374,29 @@ class DiagnosticsWindow : public QMainWindow {
     controllerIdSpin_->setValue(11);
 
     commandBox_ = new QComboBox(cmdGroup);
-    commandBox_->addItems({"CU: OFF", "CU: SAFE", "CU: OPER", "SELFLEV Start", "SELFLEV Stop",
-                           "IBIT Start", "IBIT Stop", "Move Turret"});
+    commandBox_->addItem("CU State", static_cast<int>(UiCommand::CuState));
+    commandBox_->addItem("SelfLev", static_cast<int>(UiCommand::SelfLev));
+    commandBox_->addItem("IBIT", static_cast<int>(UiCommand::Ibit));
+    commandBox_->addItem("Storage", static_cast<int>(UiCommand::Storage));
+    commandBox_->addItem("Laser", static_cast<int>(UiCommand::Laser));
+    commandBox_->addItem("Turret", static_cast<int>(UiCommand::Turret));
+    commandBox_->addItem("SUT", static_cast<int>(UiCommand::Sut));
+    commandBox_->addItem("Reset", static_cast<int>(UiCommand::Reset));
+    commandBox_->addItem("DelLog", static_cast<int>(UiCommand::DelLog));
+    commandBox_->addItem("Factory", static_cast<int>(UiCommand::Factory));
+    commandBox_->addItem("SelfTest", static_cast<int>(UiCommand::SelfTest));
+    commandBox_->addItem("Shutdown", static_cast<int>(UiCommand::Shutdown));
+    commandBox_->addItem("Config", static_cast<int>(UiCommand::Config));
+    commandBox_->addItem("ManualPos", static_cast<int>(UiCommand::ManualPos));
+    commandBox_->addItem("PosMode", static_cast<int>(UiCommand::PosMode));
+    commandBox_->addItem("ReqSwVersion", static_cast<int>(UiCommand::ReqSwVersion));
+    commandBox_->addItem("ReqHwInfo", static_cast<int>(UiCommand::ReqHwInfo));
+    commandBox_->addItem("ReqWorkTime", static_cast<int>(UiCommand::ReqWorkTime));
 
-    speedSpin_ = new QDoubleSpinBox(cmdGroup);
-    speedSpin_->setRange(0.0, 1000.0);
-    speedSpin_->setDecimals(2);
-    speedSpin_->setValue(10.0);
-
-    elSpin_ = new QDoubleSpinBox(cmdGroup);
-    elSpin_->setRange(-90.0, 90.0);
-    elSpin_->setDecimals(2);
-
-    directionCwBox_ = new QCheckBox("CW direction", cmdGroup);
-    directionCwBox_->setChecked(true);
+    payloadStack_ = new QStackedWidget(cmdGroup);
+    for (int i = 0; i < commandBox_->count(); ++i) {
+      payloadStack_->addWidget(buildPayloadPage(static_cast<UiCommand>(commandBox_->itemData(i).toInt()), cmdGroup));
+    }
 
     sendButton_ = new QPushButton("Send", cmdGroup);
 
@@ -269,9 +404,7 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow("Control Port", portSpin_);
     cmdForm->addRow("Controller ID", controllerIdSpin_);
     cmdForm->addRow("Command", commandBox_);
-    cmdForm->addRow("Speed", speedSpin_);
-    cmdForm->addRow("Elevation", elSpin_);
-    cmdForm->addRow("Direction", directionCwBox_);
+    cmdForm->addRow("Payload", payloadStack_);
     cmdForm->addRow(sendButton_);
 
     auto *statusGroup = new QGroupBox("Status", panel);
@@ -287,9 +420,104 @@ class DiagnosticsWindow : public QMainWindow {
     statusLayout->addWidget(envLabel_);
     statusLayout->addWidget(simModeBox_);
 
-    layout->addWidget(cmdGroup, 2);
+    layout->addWidget(cmdGroup, 3);
     layout->addWidget(statusGroup, 1);
     return panel;
+  }
+
+  QWidget* buildPayloadPage(UiCommand c, QWidget *parent) {
+    auto *w = new QWidget(parent);
+    auto *f = new QFormLayout(w);
+    switch (c) {
+      case UiCommand::CuState:
+        cuStateBox_ = new QComboBox(w);
+        cuStateBox_->addItem("OFF", 0);
+        cuStateBox_->addItem("SAFE", 1);
+        cuStateBox_->addItem("OPER", 2);
+        f->addRow("state", cuStateBox_);
+        break;
+      case UiCommand::SelfLev:
+        selfLevActionBox_ = new QComboBox(w);
+        selfLevActionBox_->addItem("Start", 1);
+        selfLevActionBox_->addItem("Stop", 0);
+        f->addRow("action", selfLevActionBox_);
+        break;
+      case UiCommand::Ibit:
+        ibitActionBox_ = new QComboBox(w);
+        ibitActionBox_->addItem("Start", 1);
+        ibitActionBox_->addItem("Stop", 0);
+        f->addRow("action", ibitActionBox_);
+        break;
+      case UiCommand::Laser:
+        laserIdSpin_ = new QSpinBox(w);
+        laserIdSpin_->setRange(1, 8);
+        laserActionBox_ = new QComboBox(w);
+        laserActionBox_->addItem("Off", 0);
+        laserActionBox_->addItem("On", 1);
+        f->addRow("id", laserIdSpin_);
+        f->addRow("action", laserActionBox_);
+        break;
+      case UiCommand::Turret:
+        turretTypeBox_ = new QComboBox(w);
+        turretTypeBox_->addItem("Relative", 0);
+        turretTypeBox_->addItem("Absolute", 1);
+        turretTypeBox_->addItem("Rate", 2);
+        turretAzSpin_ = new QDoubleSpinBox(w);
+        turretAzSpin_->setRange(-720.0, 720.0);
+        turretAzSpin_->setDecimals(3);
+        turretElSpin_ = new QDoubleSpinBox(w);
+        turretElSpin_->setRange(-720.0, 720.0);
+        turretElSpin_->setDecimals(3);
+        f->addRow("type", turretTypeBox_);
+        f->addRow("azimuth", turretAzSpin_);
+        f->addRow("elevation", turretElSpin_);
+        break;
+      case UiCommand::Sut:
+        sutIdBox_ = new QComboBox(w);
+        sutIdBox_->addItem("All", 0xFF);
+        for (int id = 1; id <= 8; ++id) sutIdBox_->addItem(QString::number(id), id);
+        sutTypeBox_ = new QComboBox(w);
+        sutTypeBox_->addItem("Relative", 0);
+        sutTypeBox_->addItem("Absolute", 1);
+        sutTypeBox_->addItem("Rate", 2);
+        sutAzSpin_ = new QDoubleSpinBox(w);
+        sutAzSpin_->setRange(-720.0, 720.0);
+        sutAzSpin_->setDecimals(3);
+        sutElSpin_ = new QDoubleSpinBox(w);
+        sutElSpin_->setRange(-720.0, 720.0);
+        sutElSpin_->setDecimals(3);
+        f->addRow("id", sutIdBox_);
+        f->addRow("type", sutTypeBox_);
+        f->addRow("azimuth", sutAzSpin_);
+        f->addRow("elevation", sutElSpin_);
+        break;
+      case UiCommand::ManualPos:
+        manualLatSpin_ = new QDoubleSpinBox(w);
+        manualLatSpin_->setRange(-90.0, 90.0);
+        manualLatSpin_->setDecimals(8);
+        manualLonSpin_ = new QDoubleSpinBox(w);
+        manualLonSpin_->setRange(-180.0, 180.0);
+        manualLonSpin_->setDecimals(8);
+        manualAltSpin_ = new QDoubleSpinBox(w);
+        manualAltSpin_->setRange(-1000.0, 20000.0);
+        manualHeadingSpin_ = new QDoubleSpinBox(w);
+        manualHeadingSpin_->setRange(-360.0, 360.0);
+        f->addRow("lat", manualLatSpin_);
+        f->addRow("lon", manualLonSpin_);
+        f->addRow("alt", manualAltSpin_);
+        f->addRow("heading", manualHeadingSpin_);
+        break;
+      case UiCommand::PosMode:
+        posModeBox_ = new QComboBox(w);
+        posModeBox_->addItem("0", 0);
+        posModeBox_->addItem("1", 1);
+        f->addRow("mode", posModeBox_);
+        break;
+      default:
+        f->addRow(new QLabel("No payload", w));
+        break;
+    }
+    return w;
   }
 
   QWidget* buildAxisPanel() {
@@ -321,6 +549,9 @@ class DiagnosticsWindow : public QMainWindow {
       axisTable_->setItem(i, 3, new QTableWidgetItem("0.000"));
       axisTable_->setItem(i, 4, new QTableWidgetItem("HW"));
     }
+    simPos_.fill(0.0);
+    simVel_.fill(0.0);
+    simTargetVel_.fill(0.0);
   }
 
   void appendLog(const QString &line) {
@@ -338,10 +569,26 @@ class DiagnosticsWindow : public QMainWindow {
   QSpinBox *portSpin_{};
   QSpinBox *controllerIdSpin_{};
   QComboBox *commandBox_{};
-  QDoubleSpinBox *speedSpin_{};
-  QDoubleSpinBox *elSpin_{};
-  QCheckBox *directionCwBox_{};
+  QStackedWidget *payloadStack_{};
   QPushButton *sendButton_{};
+
+  QComboBox *cuStateBox_{};
+  QComboBox *selfLevActionBox_{};
+  QComboBox *ibitActionBox_{};
+  QSpinBox *laserIdSpin_{};
+  QComboBox *laserActionBox_{};
+  QComboBox *turretTypeBox_{};
+  QDoubleSpinBox *turretAzSpin_{};
+  QDoubleSpinBox *turretElSpin_{};
+  QComboBox *sutIdBox_{};
+  QComboBox *sutTypeBox_{};
+  QDoubleSpinBox *sutAzSpin_{};
+  QDoubleSpinBox *sutElSpin_{};
+  QDoubleSpinBox *manualLatSpin_{};
+  QDoubleSpinBox *manualLonSpin_{};
+  QDoubleSpinBox *manualAltSpin_{};
+  QDoubleSpinBox *manualHeadingSpin_{};
+  QComboBox *posModeBox_{};
 
   QLabel *stateLabel_{};
   QLabel *highSeqLabel_{};
@@ -354,7 +601,10 @@ class DiagnosticsWindow : public QMainWindow {
 
   stc_icd_cfg_t cfg_{};
   uint16_t nextSeq_ = 1;
-  double simTimeSec_ = 0.0;
+
+  std::array<double, kAxisCount> simPos_{};
+  std::array<double, kAxisCount> simVel_{};
+  std::array<double, kAxisCount> simTargetVel_{};
 };
 
 int main(int argc, char *argv[]) {
