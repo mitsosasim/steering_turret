@@ -326,7 +326,51 @@ class DiagnosticsWindow : public QMainWindow {
                           .arg(tlm.temperature_c, 0, 'f', 1)
                           .arg(tlm.humidity_pct, 0, 'f', 1)
                           .arg(tlm.pressure_hpa, 0, 'f', 1));
+
+      const int bitrateKbps = static_cast<int>(tlm.laser_status[0]) * 10 + static_cast<int>(tlm.laser_status[1]);
+      const int connectedDevices = static_cast<int>(tlm.laser_status[2]);
+      const int discoveredDevices = static_cast<int>(tlm.laser_status[3]);
+      const int scanMaxNode = static_cast<int>(tlm.laser_status[4]);
+      const int restartMs = (static_cast<int>(tlm.laser_status[5]) << 8) | static_cast<int>(tlm.laser_status[6]);
+      const bool canOk = tlm.laser_status[7] != 0;
+
+      connectionLabel_->setText(QString("CAN %1 | if-speed %2 kbps | restart %3 ms | connected %4 | discovered %5 | scan<=%6")
+                                  .arg(canOk ? "UP" : "DOWN")
+                                  .arg(bitrateKbps)
+                                  .arg(restartMs)
+                                  .arg(connectedDevices)
+                                  .arg(discoveredDevices)
+                                  .arg(scanMaxNode));
+
+      updateDeviceSelectors(connectedDevices, discoveredDevices);
     }
+  }
+
+  void updateDeviceSelectors(int connectedDevices, int discoveredDevices) {
+    const int availableSut = qBound(0, connectedDevices > 2 ? (connectedDevices - 2) / 2 : 0, 8);
+    if (sutIdBox_) {
+      const int prev = sutIdBox_->currentData().toInt();
+      sutIdBox_->clear();
+      sutIdBox_->addItem("All", 0xFF);
+      for (int id = 1; id <= availableSut; ++id) {
+        sutIdBox_->addItem(QString::number(id), id);
+      }
+      int idx = sutIdBox_->findData(prev);
+      if (idx < 0) idx = 0;
+      sutIdBox_->setCurrentIndex(idx);
+      sutIdBox_->setEnabled(availableSut > 0);
+    }
+
+    if (turretTypeBox_) {
+      turretTypeBox_->setEnabled(connectedDevices >= 2);
+      turretAzSpin_->setEnabled(connectedDevices >= 2);
+      turretElSpin_->setEnabled(connectedDevices >= 2);
+    }
+
+    availabilityLabel_->setText(QString("Selectable devices: turret %1, SUT %2")
+                                  .arg(connectedDevices >= 2 ? "enabled" : "disabled")
+                                  .arg(availableSut));
+    Q_UNUSED(discoveredDevices);
   }
 
   void onSimModeChanged(bool enabled) {
@@ -413,11 +457,15 @@ class DiagnosticsWindow : public QMainWindow {
     highSeqLabel_ = new QLabel("High-rate seq: -", statusGroup);
     lowSeqLabel_ = new QLabel("Low-rate seq: -", statusGroup);
     envLabel_ = new QLabel("Temp -, Hum -, Press -", statusGroup);
+    connectionLabel_ = new QLabel("CAN -", statusGroup);
+    availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
     simModeBox_ = new QCheckBox("Simulation mode", statusGroup);
     statusLayout->addWidget(stateLabel_);
     statusLayout->addWidget(highSeqLabel_);
     statusLayout->addWidget(lowSeqLabel_);
     statusLayout->addWidget(envLabel_);
+    statusLayout->addWidget(connectionLabel_);
+    statusLayout->addWidget(availabilityLabel_);
     statusLayout->addWidget(simModeBox_);
 
     layout->addWidget(cmdGroup, 3);
@@ -594,6 +642,8 @@ class DiagnosticsWindow : public QMainWindow {
   QLabel *highSeqLabel_{};
   QLabel *lowSeqLabel_{};
   QLabel *envLabel_{};
+  QLabel *connectionLabel_{};
+  QLabel *availabilityLabel_{};
   QCheckBox *simModeBox_{};
 
   QTableWidget *axisTable_{};

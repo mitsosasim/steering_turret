@@ -232,6 +232,13 @@ typedef struct {
 
   // --- runtime flags
   int can_ok;
+  uint8_t axis_available[STC_AXIS_COUNT];
+  uint8_t can_discovered_nodes[16];
+  uint8_t can_connected_devices;
+  uint8_t can_discovered_devices;
+  uint16_t can_bitrate_kbps;
+  uint16_t can_restart_ms;
+  uint8_t can_scan_max_node;
   uint64_t last_rx_ms[STC_AXIS_COUNT];
   uint8_t axis_fault_active[STC_AXIS_COUNT];
   uint8_t axis_enabled[STC_AXIS_COUNT];
@@ -772,10 +779,108 @@ static int create_thread_with_sched(pthread_t* thread,
 
 typedef struct {
   const char* can_if;
+  int can_bitrate;
+  int can_restart_ms;
+  int can_scan_max_node;
   shared_t* sh;
   actionq_t* q;
 } can_worker_arg_t;
 
+
+
+static int run_systemf(const char* cmd) {
+  if (!cmd || !cmd[0]) return -1;
+  int rc = system(cmd);
+  if (rc != 0) {
+    STC_LOG_WARN("command failed (%d): %s", rc, cmd);
+  }
+  return rc;
+}
+
+static void can_interface_startup(const can_worker_arg_t* a) {
+  if (!a || !a->can_if || !a->can_if[0]) return;
+
+  char cmd[256];
+  (void)snprintf(cmd, sizeof(cmd), "ip link set %s down >/dev/null 2>&1", a->can_if);
+  (void)run_systemf(cmd);
+
+  if (a->can_bitrate > 0) {
+    if (a->can_restart_ms > 0) {
+      (void)snprintf(cmd,
+                     sizeof(cmd),
+                     "ip link set %s up type can bitrate %d restart-ms %d >/dev/null 2>&1",
+                     a->can_if,
+                     a->can_bitrate,
+                     a->can_restart_ms);
+    } else {
+      (void)snprintf(cmd,
+                     sizeof(cmd),
+                     "ip link set %s up type can bitrate %d >/dev/null 2>&1",
+                     a->can_if,
+                     a->can_bitrate);
+    }
+  } else {
+    (void)snprintf(cmd, sizeof(cmd), "ip link set %s up >/dev/null 2>&1", a->can_if);
+  }
+  (void)run_systemf(cmd);
+
+  STC_LOG_INFO("CAN startup: if=%s bitrate=%dkbps restart_ms=%d", a->can_if, a->can_bitrate, a->can_restart_ms);
+}
+
+static int can_discovery_scan(can_worker_arg_t* a) {
+  if (!a || !a->sh) return 0;
+
+  uint8_t discovered[16] = {0};
+  int discovered_count = 0;
+  int scan_max = a->can_scan_max_node;
+  if (scan_max < 1) scan_max = 1;
+  if (scan_max > 127) scan_max = 127;
+
+  for (int node = 1; node <= scan_max; node++) {
+    pd4c_ctx_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    int rc = pd4c_open(&tmp, a->can_if, (uint8_t)node);
+    if (rc != PD4C_OK) continue;
+
+    (void)pd4c_nmt_start(&tmp);
+    pd4c_telemetry_t t;
+    memset(&t, 0, sizeof(t));
+    int present = 0;
+    for (int k = 0; k < 2; k++) {
+      if (pd4c_poll(&tmp, 40) == PD4C_OK) {
+        t = *pd4c_telem(&tmp);
+        if (t.have_hb || t.have_tpdo1 || t.have_tpdo2 || t.have_tpdo3) {
+          present = 1;
+          break;
+        }
+      }
+    }
+
+    if (!present) {
+      uint16_t statusword = 0;
+      uint8_t mode = 0;
+      if (pd4c_sdo_read_u16(&tmp, 0x6041, 0x00, &statusword) == PD4C_OK ||
+          pd4c_sdo_read_u8(&tmp, 0x6061, 0x00, &mode) == PD4C_OK) {
+        present = 1;
+      }
+    }
+
+    if (present && discovered_count < (int)(sizeof(discovered) / sizeof(discovered[0]))) {
+      discovered[discovered_count++] = (uint8_t)node;
+    }
+
+    pd4c_close(&tmp);
+  }
+
+  pthread_mutex_lock(&a->sh->mtx);
+  memset(a->sh->d.can_discovered_nodes, 0, sizeof(a->sh->d.can_discovered_nodes));
+  memcpy(a->sh->d.can_discovered_nodes, discovered, (size_t)discovered_count);
+  a->sh->d.can_discovered_devices = (uint8_t)discovered_count;
+  pthread_mutex_unlock(&a->sh->mtx);
+
+  STC_LOG_INFO("CAN discovery complete: discovered=%d scan_max=%d", discovered_count, scan_max);
+  return discovered_count;
+}
 static void copy_pd4c_telem_into_shared(shared_t* sh, size_t axis, const pd4c_telemetry_t* t, uint64_t now_ms) {
   // Caller holds sh->mtx
   axis_telem_update(&sh->d.telem[axis],
@@ -942,6 +1047,9 @@ static void* can_worker_thread(void* arg) {
   sim_init(sim_cfg, STC_AXIS_COUNT);
   STC_LOG_INFO("Simulation mode active: CAN hardware access disabled");
 #else
+  can_interface_startup(a);
+  (void)can_discovery_scan(a);
+
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     uint8_t node_id;
     pthread_mutex_lock(&a->sh->mtx);
@@ -968,6 +1076,11 @@ static void* can_worker_thread(void* arg) {
 
   pthread_mutex_lock(&a->sh->mtx);
   a->sh->d.can_ok = any_connected;
+  a->sh->d.can_connected_devices = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    a->sh->d.axis_available[axis] = axis_connected[axis] ? 1u : 0u;
+    if (axis_connected[axis]) a->sh->d.can_connected_devices++;
+  }
   pthread_mutex_unlock(&a->sh->mtx);
 
   const uint64_t maintenance_period_ms = 10;
@@ -1621,6 +1734,12 @@ static void* tlml_tx_thread(void* arg) {
     }
     memcpy(motor_map, a->sh->d.motor_map, sizeof(motor_map));
     uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
+    uint16_t can_bitrate_kbps = a->sh->d.can_bitrate_kbps;
+    uint16_t can_restart_ms = a->sh->d.can_restart_ms;
+    uint8_t can_scan_max_node = a->sh->d.can_scan_max_node;
+    uint8_t can_connected_devices = a->sh->d.can_connected_devices;
+    uint8_t can_discovered_devices = a->sh->d.can_discovered_devices;
+    uint8_t can_ok = a->sh->d.can_ok ? 1u : 0u;
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = noww;
@@ -1646,6 +1765,14 @@ static void* tlml_tx_thread(void* arg) {
     }
 
     memset(m.laser_status, 0, sizeof(m.laser_status));
+    m.laser_status[0] = (uint8_t)(can_bitrate_kbps / 10u);
+    m.laser_status[1] = (uint8_t)(can_bitrate_kbps % 10u);
+    m.laser_status[2] = can_connected_devices;
+    m.laser_status[3] = can_discovered_devices;
+    m.laser_status[4] = can_scan_max_node;
+    m.laser_status[5] = (uint8_t)((can_restart_ms >> 8) & 0xFFu);
+    m.laser_status[6] = (uint8_t)(can_restart_ms & 0xFFu);
+    m.laser_status[7] = can_ok;
 
     enum {
       STC_DIAG_ERR_AXIS_FAULT = 0x0001,
@@ -1689,7 +1816,8 @@ static void* tlml_tx_thread(void* arg) {
 /* ----------------------------- TCP server loop ----------------------------- */
 
 static void usage(const char* p) {
-  STC_LOG_ERROR("Usage: %s [--tcp-port 7000] [--can can0] [--node 1]\n"
+  STC_LOG_ERROR("Usage: %s [--tcp-port 7000] [--can can0] [--node 1] [--can-bitrate 1000] [--can-restart-ms 100]\n"
+          "          [--can-scan-max-node 32]\n"
           "          [--config dev/config/stc_default.ini]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
@@ -1706,6 +1834,9 @@ static void usage(const char* p) {
 
 typedef struct {
   const char* can_if;
+  int can_bitrate;
+  int can_restart_ms;
+  int can_scan_max_node;
   int node_id;
   int tcp_port;
   const char* tlmh_ip;
@@ -1772,6 +1903,9 @@ int main(int argc, char** argv) {
 
   runtime_net_t net = {
     .can_if = "can0",
+    .can_bitrate = 1000,
+    .can_restart_ms = 100,
+    .can_scan_max_node = 32,
     .node_id = 1,
     .tcp_port = 7000,
     .tlmh_ip = "127.0.0.1",
@@ -1824,10 +1958,17 @@ int main(int argc, char** argv) {
     sh.d.last_rx_ms[axis] = sh.d.boot_ms;
     sh.d.axis_enabled[axis] = 0;
     sh.d.axis_fault_active[axis] = 0;
+    sh.d.axis_available[axis] = 0;
   }
+  sh.d.can_bitrate_kbps = (uint16_t)((net.can_bitrate > 0) ? net.can_bitrate : 0);
+  sh.d.can_restart_ms = (uint16_t)((net.can_restart_ms > 0) ? net.can_restart_ms : 0);
+  sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--can") && i + 1 < argc) net.can_if = argv[++i];
+    else if (!strcmp(argv[i], "--can-bitrate") && i + 1 < argc) net.can_bitrate = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--can-restart-ms") && i + 1 < argc) net.can_restart_ms = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--can-scan-max-node") && i + 1 < argc) net.can_scan_max_node = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--node") && i + 1 < argc) {
       net.node_id = atoi(argv[++i]);
       legacy_cli_mode = 1;
@@ -2012,7 +2153,7 @@ int main(int argc, char** argv) {
   actionq_init(&q);
 
   // CAN worker thread
-  can_worker_arg_t carg = { .can_if = net.can_if, .sh = &sh, .q = &q };
+  can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .sh = &sh, .q = &q };
   if (create_thread_with_sched(&th_can,
                                "can_worker_thread",
                                can_worker_thread,
