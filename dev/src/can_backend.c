@@ -1,9 +1,12 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "motion_backend.h"
 
 #include "pd4c.h"
 #include "stc_log.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
