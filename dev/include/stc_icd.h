@@ -201,13 +201,16 @@ typedef enum stc_rsp_result_e {
 } stc_rsp_result_t;
 
 typedef enum stc_nack_err_e {
-  STC_ERR_NO_ERROR            = 0,
-  STC_ERR_CLIENT_UNKNOWN      = 1,
-  STC_ERR_PROTOCOL_MISMATCH   = 2,
-  STC_ERR_SYNTAX_ERROR        = 3,
-  STC_ERR_VALUE_OUT_OF_RANGE  = 4,
-  STC_ERR_NOT_ALLOWED_STATE   = 5,
-  STC_ERR_INSUFFICIENT_RES    = 6
+  STC_ERR_NO_ERROR                    = 0x0000,
+  STC_ERR_CLIENT_UNKNOWN              = 0x0001,
+  STC_ERR_PROTOCOL_MISMATCH           = 0x0002,
+  STC_ERR_SYNTAX_ERROR                = 0x0003,
+  STC_ERR_VALUE_OUT_OF_RANGE          = 0x0004,
+  STC_ERR_NOT_ALLOWED_STATE           = 0x0005,
+  STC_ERR_INSUFFICIENT_RES            = 0x0006,
+  STC_ERR_TIMEOUT                     = 0x0007,
+  STC_ERR_COMMAND_NOT_IMPLEMENTED     = 0x0008,
+  STC_ERR_GENERIC                     = 0x00FF
 } stc_nack_err_t;
 
 
