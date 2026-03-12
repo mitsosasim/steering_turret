@@ -396,8 +396,10 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
     case STC_CMD_REQ_WORK_TIME:
       break;
     default:
-      return STC_ERR_SYNTAX_ERROR;
+      return STC_ERR_COMMAND_NOT_IMPLEMENTED;
   }
+
+  if (c->cmd_id == STC_CMD_CONFIG) return STC_ERR_COMMAND_NOT_IMPLEMENTED;
 
   // payload decoding must be consistent (for known payload-bearing commands)
   if (c->payload_size > 0 && c->payload_decoded == 0) {
@@ -1857,7 +1859,7 @@ int main(int argc, char** argv) {
         rsp.cmd_id = (uint16_t)(hdr[6] | ((uint16_t)hdr[7] << 8));
         rsp.seq = (uint16_t)(hdr[8] | ((uint16_t)hdr[9] << 8));
         rsp.result = STC_RSP_NACK;
-        rsp.err_code = STC_ERR_SYNTAX_ERROR;
+        rsp.err_code = STC_ERR_VALUE_OUT_OF_RANGE;
         rsp.payload_size = 0;
         uint8_t out[64];
         size_t out_len = 0;
@@ -1887,12 +1889,14 @@ int main(int argc, char** argv) {
 
       if (prc != STC_ICD_OK) {
         // classify error
-        stc_nack_err_t ec = STC_ERR_SYNTAX_ERROR;
+        stc_nack_err_t ec = STC_ERR_GENERIC;
         int magic_ok = (hdr[0] == cfg.cmd_magic[0] && hdr[1] == cfg.cmd_magic[1] &&
                         hdr[2] == cfg.cmd_magic[2] && hdr[3] == cfg.cmd_magic[3]);
         if (!magic_ok) ec = STC_ERR_PROTOCOL_MISMATCH;
         else if (hdr[4] != cfg.protocol_version_default) ec = STC_ERR_PROTOCOL_MISMATCH;
         else if (!is_allowed_controller(hdr[5], &sh.d)) ec = STC_ERR_CLIENT_UNKNOWN;
+        else if (cmd_id < STC_CMD_CU_STATE || cmd_id > STC_CMD_REQ_WORK_TIME || cmd_id == 0x0009) ec = STC_ERR_COMMAND_NOT_IMPLEMENTED;
+        else ec = STC_ERR_SYNTAX_ERROR;
 
         stc_icd_rsp_t rsp;
         memset(&rsp, 0, sizeof(rsp));
@@ -1900,7 +1904,7 @@ int main(int argc, char** argv) {
         rsp.cmd_id = cmd_id;
         rsp.seq = seq;
         rsp.result = STC_RSP_NACK;
-        rsp.err_code = (uint8_t)ec;
+        rsp.err_code = ec;
         rsp.payload_size = 0;
 
         uint8_t out[64];
@@ -2159,7 +2163,7 @@ int main(int argc, char** argv) {
         rsp.err_code = 0;
       } else {
         rsp.result = STC_RSP_NACK;
-        rsp.err_code = (uint8_t)v;
+        rsp.err_code = v;
       }
 
       if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_SW_VERSION) {

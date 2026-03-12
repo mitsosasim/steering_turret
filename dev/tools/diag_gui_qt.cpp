@@ -62,6 +62,9 @@ QString nackErrToString(uint16_t errCode) {
     case STC_ERR_VALUE_OUT_OF_RANGE: return "Value out of range";
     case STC_ERR_NOT_ALLOWED_STATE: return "Command not allowed in current state";
     case STC_ERR_INSUFFICIENT_RES: return "Insufficient resources";
+    case STC_ERR_TIMEOUT: return "Timeout";
+    case STC_ERR_COMMAND_NOT_IMPLEMENTED: return "Command not implemented";
+    case STC_ERR_GENERIC: return "Generic error";
     default: return QString("Unknown err_code=%1").arg(errCode);
   }
 }
