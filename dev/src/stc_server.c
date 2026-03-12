@@ -385,8 +385,6 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
       return STC_ERR_SYNTAX_ERROR;
   }
 
-  if (c->cmd_id == STC_CMD_CONFIG) return STC_ERR_SYNTAX_ERROR;
-
   // payload decoding must be consistent (for known payload-bearing commands)
   if (c->payload_size > 0 && c->payload_decoded == 0) {
     return STC_ERR_SYNTAX_ERROR;
@@ -1943,6 +1941,9 @@ int main(int argc, char** argv) {
             sh.d.has_manualpos = 1;
           } else if (cmd.cmd_id == STC_CMD_POSMODE) {
             sh.d.posmode = cmd.u.posmode.v;
+          } else if (cmd.cmd_id == STC_CMD_CONFIG) {
+            /* ACK-only placeholder: no state mutation until CONFIG schema is defined. */
+            has_action = 0;
           } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
             if (!stc_state_can_move(sh.d.st_state)) {
               v = STC_ERR_NOT_ALLOWED_STATE;
