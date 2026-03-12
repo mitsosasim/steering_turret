@@ -37,7 +37,7 @@ static void hexdump_line(const uint8_t* b, size_t n) {
   printf("\n");
 }
 
-static int open_mcast_rx(const char* mcast_ip, int port, const char* ifname) {
+static int open_mcast_rx(const char* group_or_ip, int port, const char* ifname) {
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) return -1;
 
@@ -47,10 +47,20 @@ static int open_mcast_rx(const char* mcast_ip, int port, const char* ifname) {
   (void)setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(yes));
 #endif
 
+  struct in_addr parsed_addr;
+  if (inet_pton(AF_INET, group_or_ip, &parsed_addr) != 1) {
+    close(fd);
+    errno = EINVAL;
+    return -1;
+  }
+
+  const uint32_t addr_be = ntohl(parsed_addr.s_addr);
+  const int is_multicast = (addr_be >= 0xE0000000u && addr_be <= 0xEFFFFFFFu);
+
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_addr.s_addr = is_multicast ? htonl(INADDR_ANY) : parsed_addr.s_addr;
   addr.sin_port = htons((uint16_t)port);
 
   if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
@@ -58,30 +68,28 @@ static int open_mcast_rx(const char* mcast_ip, int port, const char* ifname) {
     return -1;
   }
 
-  struct ip_mreqn mreq;
-  memset(&mreq, 0, sizeof(mreq));
-  if (inet_pton(AF_INET, mcast_ip, &mreq.imr_multiaddr) != 1) {
-    close(fd);
-    errno = EINVAL;
-    return -1;
-  }
+  if (is_multicast) {
+    struct ip_mreqn mreq;
+    memset(&mreq, 0, sizeof(mreq));
+    mreq.imr_multiaddr = parsed_addr;
 
-  // default: kernel chooses interface for multicast
-  mreq.imr_address.s_addr = htonl(INADDR_ANY);
+    // default: kernel chooses interface for multicast
+    mreq.imr_address.s_addr = htonl(INADDR_ANY);
 
-  if (ifname && ifname[0]) {
-    unsigned int idx = if_nametoindex(ifname);
-    if (idx == 0) {
+    if (ifname && ifname[0]) {
+      unsigned int idx = if_nametoindex(ifname);
+      if (idx == 0) {
+        close(fd);
+        errno = ENODEV;
+        return -1;
+      }
+      mreq.imr_ifindex = (int)idx;
+    }
+
+    if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
       close(fd);
-      errno = ENODEV;
       return -1;
     }
-    mreq.imr_ifindex = (int)idx;
-  }
-
-  if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-    close(fd);
-    return -1;
   }
 
   // reduce packet loss risk
