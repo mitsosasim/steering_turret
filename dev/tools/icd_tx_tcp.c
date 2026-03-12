@@ -151,7 +151,7 @@ static void usage(const char* prog) {
     "  mirror <id|all(255)> <rel|abs|speed> <elev>\n"
     "  sut <id|all(255)> <rel|abs|speed> <az> <el>\n"
     "  reset | factory | shutdown\n"
-    "  manualpos <lat> <lon> <alt> <heading> [--float]\n"
+    "  manualpos <lat> <lon> <alt> <heading>\n"
     "  posmode <gps|manual|0|1>\n"
     "  req_sw\n"
     "\n"
@@ -290,6 +290,8 @@ int main(int argc, char** argv) {
     c.u.manualpos.lon = 24.456;
     c.u.manualpos.alt = 120.0;
     c.u.manualpos.heading = 270.0;
+    c.u.manualpos.encoded_as_double = 1;
+    c.payload_size = 32;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
 
@@ -449,19 +451,8 @@ int main(int argc, char** argv) {
     c.u.manualpos.lon = atof(argv[5]);
     c.u.manualpos.alt = atof(argv[6]);
     c.u.manualpos.heading = atof(argv[7]);
-
-    int force_float = 0;
-    if (argc >= 9 && !strcmp(argv[8], "--float")) force_float = 1;
-    if (force_float) {
-      // override to 16B float encoding via raw payload
-      c.payload_decoded = 0;
-      c.payload_size = 16;
-      float f;
-      memcpy(&f, &((float){(float)c.u.manualpos.lat}), 4); memcpy(&c.payload_raw[0], &f, 4);
-      memcpy(&f, &((float){(float)c.u.manualpos.lon}), 4); memcpy(&c.payload_raw[4], &f, 4);
-      memcpy(&f, &((float){(float)c.u.manualpos.alt}), 4); memcpy(&c.payload_raw[8], &f, 4);
-      memcpy(&f, &((float){(float)c.u.manualpos.heading}), 4); memcpy(&c.payload_raw[12], &f, 4);
-    }
+    c.u.manualpos.encoded_as_double = 1;
+    c.payload_size = 32;
 
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
