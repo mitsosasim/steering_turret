@@ -100,6 +100,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->can_worker_priority = 80;
   cfg->tlmh_tx_priority = 70;
   cfg->tlml_tx_priority = 60;
+  cfg->controller_id_strict_legacy = 0;
 
   cfg->num_axes = (int)STC_AXIS_COUNT;
   cfg->turret_az_axis = 0;
@@ -269,6 +270,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->tlmh_tx_priority) != 0) goto parse_error;
       } else if (strcmp(key, "tlml_tx_priority") == 0) {
         if (parse_int(value, &cfg->tlml_tx_priority) != 0) goto parse_error;
+      } else if (strcmp(key, "controller_id_strict_legacy") == 0) {
+        if (parse_int(value, &cfg->controller_id_strict_legacy) != 0) goto parse_error;
       } else {
         recognized = false;
       }

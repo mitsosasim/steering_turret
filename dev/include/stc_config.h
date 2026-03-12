@@ -27,6 +27,8 @@ typedef struct stc_config_s {
   int can_worker_priority;
   int tlmh_tx_priority;
   int tlml_tx_priority;
+  // 0 (default): allow compatibility controller_id 0x01 + legacy ICD IDs; 1: legacy IDs only.
+  int controller_id_strict_legacy;
 
   int num_axes;
   int axis_node_id[STC_AXIS_COUNT];
