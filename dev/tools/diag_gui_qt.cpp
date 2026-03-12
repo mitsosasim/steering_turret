@@ -34,9 +34,9 @@ extern "C" {
 }
 
 namespace {
-constexpr uint16_t kDefaultControlPort = 7001;
-constexpr uint16_t kDefaultTlmHighPort = 7002;
-constexpr uint16_t kDefaultTlmLowPort = 7003;
+constexpr uint16_t kDefaultControlPort = 7000;
+constexpr uint16_t kDefaultTlmHighPort = 6010;
+constexpr uint16_t kDefaultTlmLowPort = 6020;
 constexpr int kAxisCount = static_cast<int>(STC_ICD_AXES_COUNT);
 
 QString stateToString(uint8_t state) {
