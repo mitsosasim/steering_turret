@@ -260,6 +260,9 @@ typedef struct {
   // --- active CU telemetry destination (authoritative while connected)
   struct in_addr active_cu_addr;
   int active_cu_connected;
+
+  // --- controller-id acceptance policy
+  int controller_id_strict_legacy;
 } shared_data_t;
 
 typedef struct {
@@ -342,22 +345,33 @@ static void on_sig(int s) {
 
 /* ----------------------------- ICD validation ----------------------------- */
 
-static int is_allowed_controller(uint8_t cid) {
-  // ICD list: 11, 13, 15, 21
-  return (cid == 11 || cid == 13 || cid == 15 || cid == 21);
+static int is_allowed_controller(uint8_t cid, const shared_data_t* sh) {
+  const int strict_legacy = (sh != NULL) ? (sh->controller_id_strict_legacy != 0) : 0;
+
+  /*
+   * Effective policy for CMD.controller_id:
+   *  - Compatibility mode (default): accept 0x01 to support legacy/bridged producers,
+   *    plus legacy ICD IDs {11, 13, 15, 21}.
+   *  - Strict legacy mode: accept only the ICD legacy IDs {11, 13, 15, 21}.
+   *
+   * This keeps GUI/tool producers and server-side validation aligned, while allowing
+   * integrators to tighten validation through config when required.
+   */
+  if (cid == 11 || cid == 13 || cid == 15 || cid == 21) return 1;
+  if (!strict_legacy && cid == 0x01) return 1;
+  return 0;
 }
 
 static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
                                        const shared_data_t* sh,
                                        const stc_icd_cmd_t* c) {
-  (void)sh;
   // magic
   if (!(c->magic[0] == cfg->cmd_magic[0] && c->magic[1] == cfg->cmd_magic[1] &&
         c->magic[2] == cfg->cmd_magic[2] && c->magic[3] == cfg->cmd_magic[3])) {
     return STC_ERR_PROTOCOL_MISMATCH;
   }
   if (c->version != cfg->protocol_version_default) return STC_ERR_PROTOCOL_MISMATCH;
-  if (!is_allowed_controller(c->controller_id)) return STC_ERR_CLIENT_UNKNOWN;
+  if (!is_allowed_controller(c->controller_id, sh)) return STC_ERR_CLIENT_UNKNOWN;
 
   // known cmd_id set
   switch (c->cmd_id) {
@@ -1395,6 +1409,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.mirror_count = cfg->mirror_count;
   memcpy(sh->d.mirror_axis, cfg->mirror_axis, sizeof(sh->d.mirror_axis));
   memcpy(sh->d.motor_map, cfg->motor_status_map, sizeof(sh->d.motor_map));
+  sh->d.controller_id_strict_legacy = cfg->controller_id_strict_legacy ? 1 : 0;
 }
 
 int main(int argc, char** argv) {
@@ -1874,7 +1889,7 @@ int main(int argc, char** argv) {
                         hdr[2] == cfg.cmd_magic[2] && hdr[3] == cfg.cmd_magic[3]);
         if (!magic_ok) ec = STC_ERR_PROTOCOL_MISMATCH;
         else if (hdr[4] != cfg.protocol_version_default) ec = STC_ERR_PROTOCOL_MISMATCH;
-        else if (!is_allowed_controller(hdr[5])) ec = STC_ERR_CLIENT_UNKNOWN;
+        else if (!is_allowed_controller(hdr[5], &sh.d)) ec = STC_ERR_CLIENT_UNKNOWN;
 
         stc_icd_rsp_t rsp;
         memset(&rsp, 0, sizeof(rsp));
