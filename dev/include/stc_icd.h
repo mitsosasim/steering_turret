@@ -207,7 +207,10 @@ typedef enum stc_nack_err_e {
   STC_ERR_SYNTAX_ERROR        = 3,
   STC_ERR_VALUE_OUT_OF_RANGE  = 4,
   STC_ERR_NOT_ALLOWED_STATE   = 5,
-  STC_ERR_INSUFFICIENT_RES    = 6
+  STC_ERR_INSUFFICIENT_RES    = 6,
+  STC_ERR_TIMEOUT             = 0x0007,
+  STC_ERR_COMMAND_NOT_IMPLEMENTED = 0x0008,
+  STC_ERR_GENERIC             = 0x00FF
 } stc_nack_err_t;
 
 
