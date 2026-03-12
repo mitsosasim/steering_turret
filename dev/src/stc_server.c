@@ -350,7 +350,6 @@ static int is_allowed_controller(uint8_t cid) {
 static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
                                        const shared_data_t* sh,
                                        const stc_icd_cmd_t* c) {
-  (void)sh;
   // magic
   if (!(c->magic[0] == cfg->cmd_magic[0] && c->magic[1] == cfg->cmd_magic[1] &&
         c->magic[2] == cfg->cmd_magic[2] && c->magic[3] == cfg->cmd_magic[3])) {
@@ -386,6 +385,11 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
   }
 
   if (c->cmd_id == STC_CMD_CONFIG) return STC_ERR_SYNTAX_ERROR;
+
+  if ((c->cmd_id == STC_CMD_MANUALPOS || c->cmd_id == STC_CMD_POSMODE) &&
+      !(sh->st_state == STC_STATE_SAFE || sh->st_state == STC_STATE_OPER)) {
+    return STC_ERR_NOT_ALLOWED_STATE;
+  }
 
   // payload decoding must be consistent (for known payload-bearing commands)
   if (c->payload_size > 0 && c->payload_decoded == 0) {
@@ -1936,13 +1940,21 @@ int main(int argc, char** argv) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             }
           } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
-            sh.d.lat = cmd.u.manualpos.lat;
-            sh.d.lon = cmd.u.manualpos.lon;
-            sh.d.alt = cmd.u.manualpos.alt;
-            sh.d.heading = cmd.u.manualpos.heading;
-            sh.d.has_manualpos = 1;
+            if (sh.d.st_state == STC_STATE_SAFE || sh.d.st_state == STC_STATE_OPER) {
+              sh.d.lat = cmd.u.manualpos.lat;
+              sh.d.lon = cmd.u.manualpos.lon;
+              sh.d.alt = cmd.u.manualpos.alt;
+              sh.d.heading = cmd.u.manualpos.heading;
+              sh.d.has_manualpos = 1;
+            } else {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            }
           } else if (cmd.cmd_id == STC_CMD_POSMODE) {
-            sh.d.posmode = cmd.u.posmode.v;
+            if (sh.d.st_state == STC_STATE_SAFE || sh.d.st_state == STC_STATE_OPER) {
+              sh.d.posmode = cmd.u.posmode.v;
+            } else {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            }
           } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
             if (!stc_state_can_move(sh.d.st_state)) {
               v = STC_ERR_NOT_ALLOWED_STATE;
