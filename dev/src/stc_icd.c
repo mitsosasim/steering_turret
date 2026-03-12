@@ -157,25 +157,14 @@ static stc_icd_rc_t decode_cmd_payload(stc_icd_cmd_t* out) {
       return STC_ICD_OK;
 
     case STC_CMD_MANUALPOS:
-      /* support 4xdouble (32B) or 4xfloat (16B) */
-      if (n == 32) {
-        out->u.manualpos.lat = rd_f64_le(&p[0]);
-        out->u.manualpos.lon = rd_f64_le(&p[8]);
-        out->u.manualpos.alt = rd_f64_le(&p[16]);
-        out->u.manualpos.heading = rd_f64_le(&p[24]);
-        out->u.manualpos.encoded_as_double = 1;
-        out->payload_decoded = 1;
-        return STC_ICD_OK;
-      } else if (n == 16) {
-        out->u.manualpos.lat = (double)rd_f32_le(&p[0]);
-        out->u.manualpos.lon = (double)rd_f32_le(&p[4]);
-        out->u.manualpos.alt = (double)rd_f32_le(&p[8]);
-        out->u.manualpos.heading = (double)rd_f32_le(&p[12]);
-        out->u.manualpos.encoded_as_double = 0;
-        out->payload_decoded = 1;
-        return STC_ICD_OK;
-      }
-      return STC_ICD_EPROTO;
+      if (n != 32) return STC_ICD_EPROTO;
+      out->u.manualpos.lat = rd_f64_le(&p[0]);
+      out->u.manualpos.lon = rd_f64_le(&p[8]);
+      out->u.manualpos.alt = rd_f64_le(&p[16]);
+      out->u.manualpos.heading = rd_f64_le(&p[24]);
+      out->u.manualpos.encoded_as_double = 1;
+      out->payload_decoded = 1;
+      return STC_ICD_OK;
 
     case STC_CMD_CONFIG:
     default:

@@ -70,7 +70,7 @@ Examples:
 ./build/icd_tx_tcp 127.0.0.1 7001 cu_state 2
 ./build/icd_tx_tcp 127.0.0.1 7001 laser 1 1
 ./build/icd_tx_tcp 127.0.0.1 7001 turret speed 10.0 0.0
-./build/icd_tx_tcp 127.0.0.1 7001 manualpos 37.5665 126.9780 45.0 90.0 --float
+./build/icd_tx_tcp 127.0.0.1 7001 manualpos 37.5665 126.9780 45.0 90.0
 ```
 
 ### Telemetry receiver (`tlm_rx_udp`)

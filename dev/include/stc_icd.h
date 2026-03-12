@@ -9,7 +9,7 @@
  *
  * Project decisions:
  * - MIRROR cmd_id = 0x0007
- * - MANUALPOS supports both float(16B) and double(32B); prefer double
+ * - MANUALPOS uses strict 4xdouble (32B) encoding
  * - Wire magics follow ICD: "TCMD" and "TRSP"
  */
 
@@ -133,12 +133,12 @@ typedef struct stc_cmd_payload_u8_s {
 } stc_cmd_payload_u8_t;
 
 typedef struct stc_cmd_payload_manualpos_s {
-  /* accept float or double encoding; store as double always */
+  /* strict wire encoding: 4xdouble (lat, lon, alt, heading), 32 bytes total */
   double lat;
   double lon;
   double alt;
   double heading;
-  int encoded_as_double; /* 1 if payload was 4xdouble (32B), 0 if 4xfloat (16B) */
+  int encoded_as_double; /* always 1 for valid MANUALPOS payloads */
 } stc_cmd_payload_manualpos_t;
 
 typedef struct stc_icd_cmd_s {
