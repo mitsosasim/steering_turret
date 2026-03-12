@@ -419,6 +419,11 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
     if (c->u.laser.id < 1 || c->u.laser.id > 8) return STC_ERR_VALUE_OUT_OF_RANGE;
     if (c->u.laser.on_off > 1) return STC_ERR_VALUE_OUT_OF_RANGE;
   }
+  if (c->cmd_id == STC_CMD_MANUALPOS || c->cmd_id == STC_CMD_POSMODE) {
+    if (sh->st_state != STC_STATE_SAFE && sh->st_state != STC_STATE_OPER) {
+      return STC_ERR_NOT_ALLOWED_STATE;
+    }
+  }
 
   return STC_ERR_NO_ERROR;
 }
@@ -1949,13 +1954,21 @@ int main(int argc, char** argv) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             }
           } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
-            sh.d.lat = cmd.u.manualpos.lat;
-            sh.d.lon = cmd.u.manualpos.lon;
-            sh.d.alt = cmd.u.manualpos.alt;
-            sh.d.heading = cmd.u.manualpos.heading;
-            sh.d.has_manualpos = 1;
+            if (sh.d.st_state != STC_STATE_SAFE && sh.d.st_state != STC_STATE_OPER) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            } else {
+              sh.d.lat = cmd.u.manualpos.lat;
+              sh.d.lon = cmd.u.manualpos.lon;
+              sh.d.alt = cmd.u.manualpos.alt;
+              sh.d.heading = cmd.u.manualpos.heading;
+              sh.d.has_manualpos = 1;
+            }
           } else if (cmd.cmd_id == STC_CMD_POSMODE) {
-            sh.d.posmode = cmd.u.posmode.v;
+            if (sh.d.st_state != STC_STATE_SAFE && sh.d.st_state != STC_STATE_OPER) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            } else {
+              sh.d.posmode = cmd.u.posmode.v;
+            }
           } else if (cmd.cmd_id == STC_CMD_CONFIG) {
             /* ACK-only placeholder: no state mutation until CONFIG schema is defined. */
             has_action = 0;
