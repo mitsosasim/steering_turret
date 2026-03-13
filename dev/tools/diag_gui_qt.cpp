@@ -21,6 +21,7 @@
 #include <QtNetwork/QTcpSocket>
 #include <QtNetwork/QUdpSocket>
 #include <QtCore/QDateTime>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
 #include <QtCore/QHash>
 #include <QtCore/QRegularExpression>
@@ -687,22 +688,95 @@ class DiagnosticsWindow : public QMainWindow {
         if (wrote != static_cast<qint64>(packetLen) || !tcpSocket_->waitForBytesWritten(800)) {
           success = false;
           details << QString("rediscover command write failed: %1").arg(tcpSocket_->errorString());
-        } else if (tcpSocket_->waitForReadyRead(1200)) {
-          const QByteArray rspPacket = tcpSocket_->readAll();
-          stc_icd_rsp_t rsp{};
-          const stc_icd_rc_t rc = stc_icd_rsp_parse(&cfg_, reinterpret_cast<const uint8_t*>(rspPacket.constData()), static_cast<size_t>(rspPacket.size()), &rsp);
-          if (rc != STC_ICD_OK) {
-            success = false;
-            details << "rediscover response decode failed";
-          } else if (rsp.result != STC_RSP_ACK) {
-            success = false;
-            details << QString("rediscover NACK err=%1 (%2)").arg(rsp.err_code).arg(nackErrToString(rsp.err_code));
-          } else {
-            details << QString("rediscover ACK seq=%1").arg(rsp.seq);
-          }
         } else {
-          success = false;
-          details << "timeout waiting for rediscover ACK";
+          const QByteArray rspMagic(reinterpret_cast<const char*>(cfg_.rsp_magic), 4);
+          QByteArray rxBuf;
+          int parsedFrames = 0;
+          qint64 rawBytes = 0;
+          stc_icd_rc_t finalRc = STC_ICD_EPROTO;
+          stc_icd_rsp_t finalRsp{};
+          bool gotFinalRsp = false;
+          QElapsedTimer rspTimer;
+          rspTimer.start();
+          constexpr int kRediscoverTimeoutMs = 1200;
+
+          while (rspTimer.elapsed() < kRediscoverTimeoutMs && !gotFinalRsp) {
+            const int remainingMs = kRediscoverTimeoutMs - static_cast<int>(rspTimer.elapsed());
+            if (!tcpSocket_->waitForReadyRead(qMax(1, remainingMs))) {
+              continue;
+            }
+
+            const QByteArray chunk = tcpSocket_->readAll();
+            if (chunk.isEmpty()) {
+              continue;
+            }
+            rawBytes += chunk.size();
+            rxBuf.append(chunk);
+
+            while (true) {
+              if (rxBuf.size() < kRspHeaderSize) {
+                finalRc = STC_ICD_EPROTO;
+                break;
+              }
+
+              if (std::memcmp(rxBuf.constData(), cfg_.rsp_magic, 4) != 0) {
+                const int markerPos = rxBuf.indexOf(rspMagic, 1);
+                if (markerPos >= 0) {
+                  rxBuf.remove(0, markerPos);
+                } else {
+                  rxBuf.remove(0, 1);
+                }
+                finalRc = STC_ICD_EPROTO;
+                continue;
+              }
+
+              const uint16_t payloadSize = static_cast<uint16_t>(static_cast<uint8_t>(rxBuf[12])) |
+                                           (static_cast<uint16_t>(static_cast<uint8_t>(rxBuf[13])) << 8);
+              if (payloadSize > STC_ICD_MAX_PAYLOAD) {
+                rxBuf.remove(0, 1);
+                finalRc = STC_ICD_EBUFS;
+                continue;
+              }
+
+              const int frameLen = kRspHeaderSize + payloadSize;
+              if (rxBuf.size() < frameLen) {
+                finalRc = STC_ICD_EPROTO;
+                break;
+              }
+
+              stc_icd_rsp_t rsp{};
+              const stc_icd_rc_t rc = stc_icd_rsp_parse(&cfg_, reinterpret_cast<const uint8_t*>(rxBuf.constData()), static_cast<size_t>(frameLen), &rsp);
+              if (rc != STC_ICD_OK) {
+                rxBuf.remove(0, 1);
+                finalRc = rc;
+                continue;
+              }
+
+              rxBuf.remove(0, frameLen);
+              parsedFrames++;
+              finalRc = rc;
+              if (rsp.cmd_id == STC_CMD_SELFTEST) {
+                finalRsp = rsp;
+                gotFinalRsp = true;
+                break;
+              }
+            }
+          }
+
+          details << QString("rediscover parse stats: received %1 bytes, parsed %2 frame(s), final rc=%3")
+                        .arg(rawBytes)
+                        .arg(parsedFrames)
+                        .arg(static_cast<int>(finalRc));
+
+          if (!gotFinalRsp) {
+            success = false;
+            details << "timeout waiting for rediscover ACK";
+          } else if (finalRsp.result != STC_RSP_ACK) {
+            success = false;
+            details << QString("rediscover NACK err=%1 (%2)").arg(finalRsp.err_code).arg(nackErrToString(finalRsp.err_code));
+          } else {
+            details << QString("rediscover ACK seq=%1").arg(finalRsp.seq);
+          }
         }
         tcpSocket_->disconnectFromHost();
       }
