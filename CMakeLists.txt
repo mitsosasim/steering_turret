@@ -178,6 +178,18 @@ if(BUILD_DIAG_GUI)
     target_include_directories(diag_gui_qt PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
     target_compile_options(diag_gui_qt PRIVATE -Wall -Wextra)
     target_link_libraries(diag_gui_qt PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network m)
+    install(TARGETS diag_gui_qt RUNTIME DESTINATION bin)
+    install(CODE [[
+      execute_process(COMMAND /sbin/setcap cap_net_admin+ep "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/diag_gui_qt"
+                      RESULT_VARIABLE SETCAP_RESULT
+                      OUTPUT_VARIABLE SETCAP_STDOUT
+                      ERROR_VARIABLE SETCAP_STDERR)
+      if(SETCAP_RESULT EQUAL 0)
+        message(STATUS "Granted cap_net_admin to diag_gui_qt")
+      else()
+        message(WARNING "Failed to grant cap_net_admin to diag_gui_qt: ${SETCAP_STDERR}${SETCAP_STDOUT}")
+      endif()
+    ]])
   else()
     message(STATUS "Qt6 not found: skipping diag_gui_qt target")
   endif()

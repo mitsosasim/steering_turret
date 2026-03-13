@@ -105,3 +105,12 @@ Run:
 ```bash
 ./build/diag_gui_qt
 ```
+
+For deployments under `/opt/stc/bin`, prefer assigning only the needed net-admin capability instead of running the GUI as root:
+
+```bash
+sudo setcap cap_net_admin+ep /opt/stc/bin/diag_gui_qt
+getcap /opt/stc/bin/diag_gui_qt
+```
+
+The GUI now performs a startup capability probe and logs a warning if `CAP_NET_ADMIN` is missing.
