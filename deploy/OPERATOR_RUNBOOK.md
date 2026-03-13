@@ -10,6 +10,7 @@ Two deployment models are supported:
      - `CAP_SYS_NICE` for RT scheduler policy/priority.
      - `CAP_NET_RAW` for SocketCAN raw access on `can0`.
    - Enforced through `CapabilityBoundingSet=` + `AmbientCapabilities=` in `deploy/stc_server.service`.
+   - For the Qt diagnostics GUI (`diag_gui_qt`), assign file capability `cap_net_admin+ep` to the binary so CAN link bring-up can run without full root.
 
 2. **Root service**
    - Service runs as `root`.
@@ -63,3 +64,6 @@ It blocks startup if any of the following fail:
 - For deterministic timing, apply CPU isolation and affinity guidance in `deploy/CPU_AFFINITY.md`.
 - Re-run preflight manually during maintenance windows:
   - `/opt/stc/deploy/stc_preflight.sh can0`
+- For GUI CAN bring-up on deployed systems, prefer capability-based setup:
+  - `setcap cap_net_admin+ep /opt/stc/bin/diag_gui_qt`
+  - `getcap /opt/stc/bin/diag_gui_qt`

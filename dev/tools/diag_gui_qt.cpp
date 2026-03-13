@@ -21,7 +21,9 @@
 #include <QtNetwork/QTcpSocket>
 #include <QtNetwork/QUdpSocket>
 #include <QtCore/QDateTime>
+#include <QtCore/QFile>
 #include <QtCore/QHash>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QTime>
 #include <QtCore/QTimer>
 #include <QtCore/QProcess>
@@ -29,6 +31,10 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+
+#ifdef __linux__
+#include <linux/capability.h>
+#endif
 
 extern "C" {
 #include "stc_icd.h"
@@ -177,6 +183,7 @@ class DiagnosticsWindow : public QMainWindow {
 
     onCommandSelectionChanged(commandBox_->currentIndex());
     appendLog("Diagnostics GUI initialized.");
+    runCapabilityStartupCheck();
   }
 
  private:
@@ -711,6 +718,58 @@ class DiagnosticsWindow : public QMainWindow {
     }
   }
 
+  void runCapabilityStartupCheck() {
+    if (startupCapabilityCheckDone_) return;
+    startupCapabilityCheckDone_ = true;
+
+    auto runCmd = [](const QString &program, const QStringList &args) {
+      QProcess proc;
+      proc.start(program, args);
+      if (!proc.waitForStarted(1000)) {
+        return QString("failed to start %1").arg(program);
+      }
+      if (!proc.waitForFinished(3000)) {
+        proc.kill();
+        proc.waitForFinished(500);
+        return QString("timeout running %1 %2").arg(program, args.join(' '));
+      }
+      QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+      const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+      if (!err.isEmpty()) {
+        if (!out.isEmpty()) out += " | ";
+        out += err;
+      }
+      return out.isEmpty() ? QString("ok") : out;
+    };
+
+    const QString canProbe = runCmd("/sbin/ip", {"link", "show", "can0"});
+    appendLog(QString("Startup probe: /sbin/ip link show can0 => %1").arg(canProbe));
+
+    bool hasNetAdmin = false;
+#ifdef __linux__
+    QFile statusFile("/proc/self/status");
+    if (statusFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+      const QString status = QString::fromUtf8(statusFile.readAll());
+      const QRegularExpression rx("^CapEff:\\s*([0-9A-Fa-f]+)$", QRegularExpression::MultilineOption);
+      const QRegularExpressionMatch match = rx.match(status);
+      if (match.hasMatch()) {
+        bool ok = false;
+        const quint64 capEff = match.captured(1).toULongLong(&ok, 16);
+        if (ok) {
+          hasNetAdmin = (capEff & (1ULL << CAP_NET_ADMIN)) != 0;
+          appendLog(QString("Startup capability probe: CapEff=0x%1").arg(QString::number(capEff, 16)));
+        }
+      }
+    }
+#endif
+
+    if (!hasNetAdmin) {
+      appendLog("Missing CAP_NET_ADMIN; CAN bring-up will fail.");
+    } else {
+      appendLog("CAP_NET_ADMIN present; CAN bring-up is permitted.");
+    }
+  }
+
   void updateMotionUnits(QComboBox *motionTypeBox, QLabel *unitsLabel) {
     if (!motionTypeBox || !unitsLabel) return;
     switch (motionTypeBox->currentData().toInt()) {
@@ -1078,6 +1137,7 @@ class DiagnosticsWindow : public QMainWindow {
   uint16_t nextSeq_ = 1;
   uint8_t currentState_ = 0;
   bool tcpConnected_ = false;
+  bool startupCapabilityCheckDone_ = false;
   QByteArray rspBuffer_;
   QHash<uint16_t, QString> pendingCommands_;
 
