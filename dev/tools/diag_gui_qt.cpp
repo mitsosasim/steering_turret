@@ -21,6 +21,7 @@
 #include <QtNetwork/QTcpSocket>
 #include <QtNetwork/QUdpSocket>
 #include <QtCore/QDateTime>
+#include <QtCore/QHash>
 #include <QtCore/QTime>
 #include <QtCore/QTimer>
 #include <QtCore/QProcess>
@@ -37,6 +38,7 @@ namespace {
 constexpr uint16_t kDefaultControlPort = 7000;
 constexpr uint16_t kDefaultTlmHighPort = 6010;
 constexpr uint16_t kDefaultTlmLowPort = 6020;
+constexpr int kRspHeaderSize = 14;
 constexpr int kAxisCount = static_cast<int>(STC_ICD_AXES_COUNT);
 
 QString stateToString(uint8_t state) {
@@ -149,13 +151,25 @@ class DiagnosticsWindow : public QMainWindow {
     connect(udpLow_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processLowTelemetry);
     connect(simModeBox_, &QCheckBox::toggled, this, &DiagnosticsWindow::onSimModeChanged);
     connect(canBringupButton_, &QPushButton::clicked, this, &DiagnosticsWindow::bringUpCanAndConnect);
+    connect(reconnectButton_, &QPushButton::clicked, this, [this]() {
+      tcpSocket_->abort();
+      tcpConnected_ = false;
+      updateTcpStatusLabel();
+      ensureTcpConnected();
+    });
+    connect(tlmHighPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
+    connect(tlmLowPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
+    connect(tcpSocket_, &QTcpSocket::connected, this, &DiagnosticsWindow::onTcpConnected);
+    connect(tcpSocket_, &QTcpSocket::disconnected, this, &DiagnosticsWindow::onTcpDisconnected);
+    connect(tcpSocket_, &QTcpSocket::readyRead, this, &DiagnosticsWindow::onTcpReadyRead);
+    connect(tcpSocket_, &QTcpSocket::errorOccurred, this, &DiagnosticsWindow::onTcpError);
 
-    if (!udpHigh_->bind(QHostAddress::AnyIPv4, kDefaultTlmHighPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
-      appendLog(QString("Failed binding high telemetry socket: %1").arg(udpHigh_->errorString()));
-    }
-    if (!udpLow_->bind(QHostAddress::AnyIPv4, kDefaultTlmLowPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
-      appendLog(QString("Failed binding low telemetry socket: %1").arg(udpLow_->errorString()));
-    }
+    connectTimer_ = new QTimer(this);
+    connectTimer_->setInterval(1000);
+    connect(connectTimer_, &QTimer::timeout, this, &DiagnosticsWindow::ensureTcpConnected);
+
+    bindTelemetrySockets();
+    connectTimer_->start();
 
     simTimer_ = new QTimer(this);
     simTimer_->setInterval(20);
@@ -290,6 +304,94 @@ class DiagnosticsWindow : public QMainWindow {
     return false;
   }
 
+  void bindTelemetrySockets() {
+    const quint16 highPort = static_cast<quint16>(tlmHighPortSpin_ ? tlmHighPortSpin_->value() : kDefaultTlmHighPort);
+    const quint16 lowPort = static_cast<quint16>(tlmLowPortSpin_ ? tlmLowPortSpin_->value() : kDefaultTlmLowPort);
+
+    if (udpHigh_->isOpen()) udpHigh_->close();
+    if (udpLow_->isOpen()) udpLow_->close();
+
+    const auto flags = QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint;
+    if (!udpHigh_->bind(QHostAddress::AnyIPv4, highPort, flags)) {
+      appendLog(QString("Failed binding high telemetry socket on %1: %2").arg(highPort).arg(udpHigh_->errorString()));
+    }
+    if (!udpLow_->bind(QHostAddress::AnyIPv4, lowPort, flags)) {
+      appendLog(QString("Failed binding low telemetry socket on %1: %2").arg(lowPort).arg(udpLow_->errorString()));
+    }
+  }
+
+  QString commandName(uint16_t cmdId) const {
+    for (const auto &spec : kCommandSpecs) {
+      if (spec.cmdId == cmdId) return QString::fromLatin1(spec.label);
+    }
+    return QString("0x%1").arg(cmdId, 4, 16, QChar('0'));
+  }
+
+  void updateTcpStatusLabel() {
+    tcpStatusLabel_->setText(QString("CU TCP: %1").arg(tcpConnected_ ? "CONNECTED" : "DISCONNECTED"));
+  }
+
+  void ensureTcpConnected() {
+    if (simModeBox_->isChecked() || tcpConnected_ || tcpSocket_->state() == QAbstractSocket::ConnectingState) {
+      return;
+    }
+    const QString host = serverIpBox_->currentText().trimmed();
+    if (host.isEmpty()) return;
+    tcpSocket_->connectToHost(host, static_cast<quint16>(portSpin_->value()));
+  }
+
+  void onTcpConnected() {
+    tcpConnected_ = true;
+    updateTcpStatusLabel();
+    appendLog(QString("CU TCP connected to %1:%2").arg(tcpSocket_->peerAddress().toString()).arg(tcpSocket_->peerPort()));
+  }
+
+  void onTcpDisconnected() {
+    tcpConnected_ = false;
+    updateTcpStatusLabel();
+    appendLog("CU TCP disconnected.");
+  }
+
+  void onTcpError(QAbstractSocket::SocketError) {
+    appendLog(QString("CU TCP error: %1").arg(tcpSocket_->errorString()));
+    tcpConnected_ = false;
+    updateTcpStatusLabel();
+  }
+
+  void onTcpReadyRead() {
+    rspBuffer_.append(tcpSocket_->readAll());
+    while (rspBuffer_.size() >= kRspHeaderSize) {
+      const uint16_t payloadSize = static_cast<uint16_t>(static_cast<uint8_t>(rspBuffer_[12])) |
+                                   (static_cast<uint16_t>(static_cast<uint8_t>(rspBuffer_[13])) << 8);
+      const int frameLen = kRspHeaderSize + payloadSize;
+      if (rspBuffer_.size() < frameLen) break;
+      const QByteArray frame = rspBuffer_.left(frameLen);
+      rspBuffer_.remove(0, frameLen);
+
+      stc_icd_rsp_t rsp{};
+      const stc_icd_rc_t rc = stc_icd_rsp_parse(&cfg_, reinterpret_cast<const uint8_t*>(frame.constData()), static_cast<size_t>(frame.size()), &rsp);
+      if (rc != STC_ICD_OK) {
+        appendLog("Received undecodable response frame.");
+        continue;
+      }
+
+      const bool ack = rsp.result == STC_RSP_ACK;
+      const QString errText = nackErrToString(rsp.err_code);
+      ackLabel_->setText(QString("Last response: %1 | %2 (0x%3) seq=%4 | err_code=%5 (%6) | payload=%7B")
+                           .arg(ack ? "ACK" : "NACK")
+                           .arg(commandName(rsp.cmd_id))
+                           .arg(rsp.cmd_id, 4, 16, QChar('0'))
+                           .arg(rsp.seq)
+                           .arg(rsp.err_code)
+                           .arg(errText)
+                           .arg(rsp.payload_size));
+      const QString sentText = pendingCommands_.contains(rsp.seq)
+                                ? pendingCommands_.take(rsp.seq)
+                                : QString("cmd=0x%1").arg(rsp.cmd_id, 4, 16, QChar('0'));
+      appendLog(QString("%1 seq=%2 (%3)").arg(ack ? "ACK" : "NACK").arg(rsp.seq).arg(sentText));
+    }
+  }
+
   void applySimulationCommand(const stc_icd_cmd_t &cmd) {
     if (cmd.cmd_id == STC_CMD_TURRET) {
       simTargetVel_[0] = cmd.u.turret.az;
@@ -332,6 +434,12 @@ class DiagnosticsWindow : public QMainWindow {
       return;
     }
 
+    if (!tcpConnected_) {
+      appendLog("Command not sent: CU TCP link is disconnected.");
+      ensureTcpConnected();
+      return;
+    }
+
     uint8_t packet[20 + STC_ICD_MAX_PAYLOAD]{};
     size_t packetLen = 0;
     if (stc_icd_cmd_pack(&cfg_, &cmd, packet, sizeof(packet), &packetLen) != STC_ICD_OK) {
@@ -339,52 +447,19 @@ class DiagnosticsWindow : public QMainWindow {
       return;
     }
 
-    tcpSocket_->abort();
-    tcpSocket_->connectToHost(serverIpBox_->currentText(), static_cast<quint16>(portSpin_->value()));
-    if (!tcpSocket_->waitForConnected(500)) {
-      appendLog(QString("TCP connect failed: %1").arg(tcpSocket_->errorString()));
+    pendingCommands_.insert(cmd.seq, commandName(cmd.cmd_id));
+    const qint64 wrote = tcpSocket_->write(reinterpret_cast<const char*>(packet), static_cast<qint64>(packetLen));
+    if (wrote != static_cast<qint64>(packetLen)) {
+      appendLog(QString("TCP write failed: %1").arg(tcpSocket_->errorString()));
+      pendingCommands_.remove(cmd.seq);
       return;
     }
 
-    const qint64 wrote = tcpSocket_->write(reinterpret_cast<const char*>(packet), static_cast<qint64>(packetLen));
-    if (wrote != static_cast<qint64>(packetLen) || !tcpSocket_->waitForBytesWritten(500)) {
-      appendLog(QString("TCP write failed: %1").arg(tcpSocket_->errorString()));
-    } else {
-      appendLog(QString("Sent command id=0x%1 seq=%2 bytes=%3")
-                  .arg(cmd.cmd_id, 4, 16, QChar('0'))
-                  .arg(cmd.seq)
-                  .arg(packetLen));
-    }
-
-    if (tcpSocket_->waitForReadyRead(800)) {
-      const QByteArray rspPacket = tcpSocket_->readAll();
-      stc_icd_rsp_t rsp{};
-      const stc_icd_rc_t rc = stc_icd_rsp_parse(&cfg_, reinterpret_cast<const uint8_t*>(rspPacket.constData()), static_cast<size_t>(rspPacket.size()), &rsp);
-      if (rc == STC_ICD_OK) {
-        const bool ack = rsp.result == STC_RSP_ACK;
-        const QString resultText = ack ? "ACK" : "NACK";
-        const QString errorText = nackErrToString(rsp.err_code);
-        ackLabel_->setText(QString("Last response: %1 | cmd=0x%2 seq=%3 | err_code=%4 (%5) | payload=%6B")
-                              .arg(resultText)
-                              .arg(rsp.cmd_id, 4, 16, QChar('0'))
-                              .arg(rsp.seq)
-                              .arg(rsp.err_code)
-                              .arg(errorText)
-                              .arg(rsp.payload_size));
-        if (!ack) {
-          appendLog(QString("NACK cmd=0x%1 seq=%2 err_code=%3: %4")
-                      .arg(rsp.cmd_id, 4, 16, QChar('0'))
-                      .arg(rsp.seq)
-                      .arg(rsp.err_code)
-                      .arg(errorText));
-        }
-      } else {
-        ackLabel_->setText("Last response: unable to decode response frame");
-      }
-    } else {
-      ackLabel_->setText("Last response: timeout waiting for ACK/NACK");
-    }
-    tcpSocket_->disconnectFromHost();
+    appendLog(QString("Sent command %1 id=0x%2 seq=%3 bytes=%4")
+                .arg(commandName(cmd.cmd_id))
+                .arg(cmd.cmd_id, 4, 16, QChar('0'))
+                .arg(cmd.seq)
+                .arg(packetLen));
   }
 
   void processHighTelemetry() {
@@ -403,6 +478,15 @@ class DiagnosticsWindow : public QMainWindow {
         axisTable_->item(i, 3)->setText(QString::number(tlm.acceleration[i], 'f', 3));
       }
       highSeqLabel_->setText(QString("High-rate seq: %1").arg(tlm.seq));
+      tlmhPanel_->setPlainText(QString("seq=%1\nts=%2\naxis0 pos=%3 vel=%4 acc=%5\naxis1 pos=%6 vel=%7 acc=%8")
+                                 .arg(tlm.seq)
+                                 .arg(tlm.timestamp_ms)
+                                 .arg(tlm.position[0], 0, 'f', 3)
+                                 .arg(tlm.rates[0], 0, 'f', 3)
+                                 .arg(tlm.acceleration[0], 0, 'f', 3)
+                                 .arg(tlm.position[1], 0, 'f', 3)
+                                 .arg(tlm.rates[1], 0, 'f', 3)
+                                 .arg(tlm.acceleration[1], 0, 'f', 3));
     }
   }
 
@@ -441,6 +525,22 @@ class DiagnosticsWindow : public QMainWindow {
 
       updateDeviceSelectors(connectedDevices, discoveredDevices);
       updateCommandAvailability();
+
+      QStringList errors;
+      for (int i = 0; i < static_cast<int>(tlm.error_count); ++i) {
+        errors << QString("0x%1").arg(tlm.errors[i], 8, 16, QChar('0'));
+      }
+      tlmlPanel_->setPlainText(QString("seq=%1\nts=%2\nstate=%3\nuptime=%4 s\nlat=%5 lon=%6 alt=%7 heading=%8\nerrors(%9): %10")
+                                 .arg(tlm.seq)
+                                 .arg(tlm.timestamp_ms)
+                                 .arg(stateToString(tlm.state))
+                                 .arg(tlm.uptime_sec)
+                                 .arg(tlm.lat, 0, 'f', 6)
+                                 .arg(tlm.lon, 0, 'f', 6)
+                                 .arg(tlm.alt_m, 0, 'f', 2)
+                                 .arg(tlm.heading_deg, 0, 'f', 2)
+                                 .arg(tlm.error_count)
+                                 .arg(errors.join(", ")));
     }
   }
 
@@ -499,10 +599,12 @@ class DiagnosticsWindow : public QMainWindow {
     }
     if (enabled) {
       simTimer_->start();
+      if (tcpSocket_->state() != QAbstractSocket::UnconnectedState) tcpSocket_->disconnectFromHost();
       appendLog("Simulation mode ON.");
     } else {
       simTimer_->stop();
       appendLog("Simulation mode OFF.");
+      ensureTcpConnected();
     }
     modeLabel_->setText(QString("Server mode: %1").arg(enabled ? "SIM" : "HW"));
     updateCommandAvailability();
@@ -679,14 +781,25 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     sendButton_ = new QPushButton("Send", cmdGroup);
+    reconnectButton_ = new QPushButton("Reconnect CU link", cmdGroup);
     canBringupButton_ = new QPushButton("Bring up CAN + discover/connect", cmdGroup);
+
+    tlmHighPortSpin_ = new QSpinBox(cmdGroup);
+    tlmHighPortSpin_->setRange(1, 65535);
+    tlmHighPortSpin_->setValue(kDefaultTlmHighPort);
+    tlmLowPortSpin_ = new QSpinBox(cmdGroup);
+    tlmLowPortSpin_->setRange(1, 65535);
+    tlmLowPortSpin_->setValue(kDefaultTlmLowPort);
 
     cmdForm->addRow("Server IP", serverIpBox_);
     cmdForm->addRow("Control Port", portSpin_);
+    cmdForm->addRow("TLM high UDP", tlmHighPortSpin_);
+    cmdForm->addRow("TLM low UDP", tlmLowPortSpin_);
     cmdForm->addRow("Controller ID", controllerIdSpin_);
     cmdForm->addRow("Command", commandBox_);
     cmdForm->addRow("Payload", payloadStack_);
     cmdForm->addRow(sendButton_);
+    cmdForm->addRow(reconnectButton_);
     cmdForm->addRow(canBringupButton_);
 
     auto *statusGroup = new QGroupBox("Status", panel);
@@ -697,6 +810,7 @@ class DiagnosticsWindow : public QMainWindow {
     highSeqLabel_ = new QLabel("High-rate seq: -", statusGroup);
     lowSeqLabel_ = new QLabel("Low-rate seq: -", statusGroup);
     envLabel_ = new QLabel("Temp -, Hum -, Press -", statusGroup);
+    tcpStatusLabel_ = new QLabel("CU TCP: DISCONNECTED", statusGroup);
     connectionLabel_ = new QLabel("CAN -", statusGroup);
     availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
     ackLabel_ = new QLabel("Last response: -", statusGroup);
@@ -707,6 +821,7 @@ class DiagnosticsWindow : public QMainWindow {
     statusLayout->addWidget(highSeqLabel_);
     statusLayout->addWidget(lowSeqLabel_);
     statusLayout->addWidget(envLabel_);
+    statusLayout->addWidget(tcpStatusLabel_);
     statusLayout->addWidget(connectionLabel_);
     statusLayout->addWidget(availabilityLabel_);
     statusLayout->addWidget(ackLabel_);
@@ -845,8 +960,26 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   QWidget* buildAxisPanel() {
-    auto *group = new QGroupBox("Axes", this);
+    auto *group = new QGroupBox("Telemetry", this);
     auto *layout = new QVBoxLayout(group);
+
+    auto *split = new QHBoxLayout();
+    auto *highGroup = new QGroupBox("TLMH (high-rate)", group);
+    auto *highLayout = new QVBoxLayout(highGroup);
+    tlmhPanel_ = new QPlainTextEdit(highGroup);
+    tlmhPanel_->setReadOnly(true);
+    highLayout->addWidget(tlmhPanel_);
+
+    auto *lowGroup = new QGroupBox("TLML (low-rate)", group);
+    auto *lowLayout = new QVBoxLayout(lowGroup);
+    tlmlPanel_ = new QPlainTextEdit(lowGroup);
+    tlmlPanel_->setReadOnly(true);
+    lowLayout->addWidget(tlmlPanel_);
+
+    split->addWidget(highGroup);
+    split->addWidget(lowGroup);
+    layout->addLayout(split);
+
     axisTable_ = new QTableWidget(group);
     axisTable_->setColumnCount(5);
     axisTable_->setHorizontalHeaderLabels({"Axis", "Position", "Velocity", "Target", "Type"});
@@ -876,6 +1009,8 @@ class DiagnosticsWindow : public QMainWindow {
     simPos_.fill(0.0);
     simVel_.fill(0.0);
     simTargetVel_.fill(0.0);
+    tlmhPanel_->setPlainText("Waiting for TLMH...");
+    tlmlPanel_->setPlainText("Waiting for TLML...");
   }
 
   void appendLog(const QString &line) {
@@ -888,6 +1023,7 @@ class DiagnosticsWindow : public QMainWindow {
   QUdpSocket *udpHigh_{};
   QUdpSocket *udpLow_{};
   QTimer *simTimer_{};
+  QTimer *connectTimer_{};
 
   QComboBox *serverIpBox_{};
   QSpinBox *portSpin_{};
@@ -895,6 +1031,7 @@ class DiagnosticsWindow : public QMainWindow {
   QComboBox *commandBox_{};
   QStackedWidget *payloadStack_{};
   QPushButton *sendButton_{};
+  QPushButton *reconnectButton_{};
   QPushButton *canBringupButton_{};
 
   QComboBox *cuStateBox_{};
@@ -926,17 +1063,26 @@ class DiagnosticsWindow : public QMainWindow {
   QLabel *highSeqLabel_{};
   QLabel *lowSeqLabel_{};
   QLabel *envLabel_{};
+  QLabel *tcpStatusLabel_{};
   QLabel *connectionLabel_{};
   QLabel *availabilityLabel_{};
   QLabel *ackLabel_{};
   QCheckBox *simModeBox_{};
 
+  QPlainTextEdit *tlmhPanel_{};
+  QPlainTextEdit *tlmlPanel_{};
   QTableWidget *axisTable_{};
   QPlainTextEdit *logEdit_{};
 
   stc_icd_cfg_t cfg_{};
   uint16_t nextSeq_ = 1;
   uint8_t currentState_ = 0;
+  bool tcpConnected_ = false;
+  QByteArray rspBuffer_;
+  QHash<uint16_t, QString> pendingCommands_;
+
+  QSpinBox *tlmHighPortSpin_{};
+  QSpinBox *tlmLowPortSpin_{};
 
   std::array<double, kAxisCount> simPos_{};
   std::array<double, kAxisCount> simVel_{};
