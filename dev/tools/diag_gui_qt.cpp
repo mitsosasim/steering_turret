@@ -12,6 +12,7 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTableWidget>
@@ -145,8 +146,7 @@ class DiagnosticsWindow : public QMainWindow {
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
-    root->addWidget(buildTopPanel());
-    root->addWidget(buildAxisPanel(), 1);
+    root->addWidget(buildTopPanel(), 3);
     root->addWidget(buildLogPanel(), 1);
     setCentralWidget(central);
 
@@ -884,21 +884,37 @@ class DiagnosticsWindow : public QMainWindow {
   QWidget* buildTopPanel() {
     auto *panel = new QWidget(this);
     auto *layout = new QHBoxLayout(panel);
+    layout->setSpacing(10);
 
-    auto *cmdGroup = new QGroupBox("Command Input", panel);
+    auto *leftColumn = new QWidget(panel);
+    auto *leftColumnLayout = new QVBoxLayout(leftColumn);
+    leftColumnLayout->setContentsMargins(0, 0, 0, 0);
+    leftColumnLayout->setSpacing(10);
+
+    auto *cmdGroup = new QGroupBox("Command Input", leftColumn);
     auto *cmdForm = new QFormLayout(cmdGroup);
+    cmdForm->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+    cmdForm->setHorizontalSpacing(12);
+    cmdForm->setVerticalSpacing(8);
+
+    constexpr int kInputWidth = 240;
+    constexpr int kButtonWidth = 220;
+    constexpr int kButtonHeight = 28;
 
     serverIpBox_ = new QComboBox(cmdGroup);
     serverIpBox_->setEditable(true);
     serverIpBox_->addItem("127.0.0.1");
+    serverIpBox_->setMaximumWidth(kInputWidth);
 
     portSpin_ = new QSpinBox(cmdGroup);
     portSpin_->setRange(1, 65535);
     portSpin_->setValue(kDefaultControlPort);
+    portSpin_->setMaximumWidth(kInputWidth);
 
     controllerIdSpin_ = new QSpinBox(cmdGroup);
     controllerIdSpin_->setRange(0, 255);
     controllerIdSpin_->setValue(11);
+    controllerIdSpin_->setMaximumWidth(kInputWidth);
 
     commandBox_ = new QComboBox(cmdGroup);
     for (const auto &spec : kCommandSpecs) {
@@ -907,8 +923,10 @@ class DiagnosticsWindow : public QMainWindow {
         commandBox_->setItemData(commandBox_->count() - 1, 0, Qt::UserRole - 1);
       }
     }
+    commandBox_->setMaximumWidth(kInputWidth);
 
     payloadStack_ = new QStackedWidget(cmdGroup);
+    payloadStack_->setMaximumWidth(kInputWidth);
     for (int i = 0; i < commandBox_->count(); ++i) {
       payloadStack_->addWidget(buildPayloadPage(static_cast<UiCommand>(commandBox_->itemData(i).toInt()), cmdGroup));
     }
@@ -916,13 +934,20 @@ class DiagnosticsWindow : public QMainWindow {
     sendButton_ = new QPushButton("Send", cmdGroup);
     reconnectButton_ = new QPushButton("Reconnect CU link", cmdGroup);
     canBringupButton_ = new QPushButton("Bring up CAN + discover/connect", cmdGroup);
+    for (QPushButton *button : {sendButton_, reconnectButton_, canBringupButton_}) {
+      button->setMaximumWidth(kButtonWidth);
+      button->setMinimumHeight(kButtonHeight);
+      button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
 
     tlmHighPortSpin_ = new QSpinBox(cmdGroup);
     tlmHighPortSpin_->setRange(1, 65535);
     tlmHighPortSpin_->setValue(kDefaultTlmHighPort);
+    tlmHighPortSpin_->setMaximumWidth(kInputWidth);
     tlmLowPortSpin_ = new QSpinBox(cmdGroup);
     tlmLowPortSpin_->setRange(1, 65535);
     tlmLowPortSpin_->setValue(kDefaultTlmLowPort);
+    tlmLowPortSpin_->setMaximumWidth(kInputWidth);
 
     cmdForm->addRow("Server IP", serverIpBox_);
     cmdForm->addRow("Control Port", portSpin_);
@@ -934,9 +959,12 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow(sendButton_);
     cmdForm->addRow(reconnectButton_);
     cmdForm->addRow(canBringupButton_);
+    leftColumnLayout->addWidget(cmdGroup);
 
-    auto *statusGroup = new QGroupBox("Status", panel);
-    auto *statusLayout = new QVBoxLayout(statusGroup);
+    auto *statusGroup = new QGroupBox("Status", leftColumn);
+    auto *statusLayout = new QGridLayout(statusGroup);
+    statusLayout->setHorizontalSpacing(20);
+    statusLayout->setVerticalSpacing(8);
     stateLabel_ = new QLabel("State: UNKNOWN", statusGroup);
     modeLabel_ = new QLabel("Server mode: HW", statusGroup);
     inventoryLabel_ = new QLabel("Inventory: discovered -, connected -, SUT -", statusGroup);
@@ -948,20 +976,28 @@ class DiagnosticsWindow : public QMainWindow {
     availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
     ackLabel_ = new QLabel("Last response: -", statusGroup);
     simModeBox_ = new QCheckBox("Simulation mode", statusGroup);
-    statusLayout->addWidget(stateLabel_);
-    statusLayout->addWidget(modeLabel_);
-    statusLayout->addWidget(inventoryLabel_);
-    statusLayout->addWidget(highSeqLabel_);
-    statusLayout->addWidget(lowSeqLabel_);
-    statusLayout->addWidget(envLabel_);
-    statusLayout->addWidget(tcpStatusLabel_);
-    statusLayout->addWidget(connectionLabel_);
-    statusLayout->addWidget(availabilityLabel_);
-    statusLayout->addWidget(ackLabel_);
-    statusLayout->addWidget(simModeBox_);
 
-    layout->addWidget(cmdGroup, 3);
-    layout->addWidget(statusGroup, 1);
+    for (QLabel *label : {stateLabel_, modeLabel_, inventoryLabel_, highSeqLabel_, lowSeqLabel_, envLabel_,
+                          tcpStatusLabel_, connectionLabel_, availabilityLabel_, ackLabel_}) {
+      label->setWordWrap(true);
+    }
+
+    statusLayout->addWidget(stateLabel_, 0, 0);
+    statusLayout->addWidget(modeLabel_, 0, 1);
+    statusLayout->addWidget(inventoryLabel_, 1, 0);
+    statusLayout->addWidget(availabilityLabel_, 1, 1);
+    statusLayout->addWidget(highSeqLabel_, 2, 0);
+    statusLayout->addWidget(lowSeqLabel_, 2, 1);
+    statusLayout->addWidget(envLabel_, 3, 0);
+    statusLayout->addWidget(connectionLabel_, 3, 1);
+    statusLayout->addWidget(tcpStatusLabel_, 4, 0);
+    statusLayout->addWidget(ackLabel_, 4, 1);
+    statusLayout->addWidget(simModeBox_, 5, 0, 1, 2);
+
+    leftColumnLayout->addWidget(statusGroup);
+
+    layout->addWidget(leftColumn, 2);
+    layout->addWidget(buildAxisPanel(), 3);
     return panel;
   }
 
@@ -1096,17 +1132,19 @@ class DiagnosticsWindow : public QMainWindow {
     auto *group = new QGroupBox("Telemetry", this);
     auto *layout = new QVBoxLayout(group);
 
-    auto *split = new QHBoxLayout();
+    auto *split = new QVBoxLayout();
     auto *highGroup = new QGroupBox("TLMH (high-rate)", group);
     auto *highLayout = new QVBoxLayout(highGroup);
     tlmhPanel_ = new QPlainTextEdit(highGroup);
     tlmhPanel_->setReadOnly(true);
+    tlmhPanel_->setMinimumHeight(100);
     highLayout->addWidget(tlmhPanel_);
 
     auto *lowGroup = new QGroupBox("TLML (low-rate)", group);
     auto *lowLayout = new QVBoxLayout(lowGroup);
     tlmlPanel_ = new QPlainTextEdit(lowGroup);
     tlmlPanel_->setReadOnly(true);
+    tlmlPanel_->setMinimumHeight(100);
     lowLayout->addWidget(tlmlPanel_);
 
     split->addWidget(highGroup);
