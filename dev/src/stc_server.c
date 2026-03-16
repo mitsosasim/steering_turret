@@ -1402,6 +1402,15 @@ typedef struct {
   runtime_sched_t sched;
 } runtime_net_t;
 
+typedef struct {
+  int has_tlmh_ip;
+  int has_tlmh_port;
+  int has_tlmh_hz;
+  int has_tlml_ip;
+  int has_tlml_port;
+  int has_tlml_hz;
+} cli_override_flags_t;
+
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   memset(sh->d.axis_expected, 0, sizeof(sh->d.axis_expected));
   for (int i = 0; i < cfg->num_axes && i < (int)STC_AXIS_COUNT; i++) {
@@ -1484,6 +1493,8 @@ int main(int argc, char** argv) {
   };
   const char* config_path = NULL;
   int legacy_cli_mode = 0;
+  cli_override_flags_t cli_overrides;
+  memset(&cli_overrides, 0, sizeof(cli_overrides));
 
   stc_config_t parsed_cfg;
   stc_config_set_defaults(&parsed_cfg);
@@ -1578,30 +1589,36 @@ int main(int argc, char** argv) {
     }
     else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) {
       net.tlmh_ip = argv[++i];
+      cli_overrides.has_tlmh_ip = 1;
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--tlmh-port") && i + 1 < argc) {
       net.tlmh_port = atoi(argv[++i]);
+      cli_overrides.has_tlmh_port = 1;
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--tlmh-hz") && i + 1 < argc) {
       net.tlmh_hz = atoi(argv[++i]);
       if (net.tlmh_hz < 1) net.tlmh_hz = 1;
       net.tlmh_period_ns = telemetry_rate_hz_to_period_ns(net.tlmh_hz, 10000000L);
+      cli_overrides.has_tlmh_hz = 1;
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--tlml-ip") && i + 1 < argc) {
       net.tlml_ip = argv[++i];
+      cli_overrides.has_tlml_ip = 1;
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--tlml-port") && i + 1 < argc) {
       net.tlml_port = atoi(argv[++i]);
+      cli_overrides.has_tlml_port = 1;
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--tlml-hz") && i + 1 < argc) {
       net.tlml_hz = atoi(argv[++i]);
       if (net.tlml_hz < 1) net.tlml_hz = 1;
       net.tlml_period_ns = telemetry_rate_hz_to_period_ns(net.tlml_hz, 100000000L);
+      cli_overrides.has_tlml_hz = 1;
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--diag-port") && i + 1 < argc) {
@@ -1667,6 +1684,54 @@ int main(int argc, char** argv) {
     net.tlml_period_ns = telemetry_interval_ms_to_period_ns(parsed_cfg.tlml_interval_ms, 100000000L);
     net.tlmh_hz = telemetry_interval_ms_to_rate_hz(parsed_cfg.tlmh_interval_ms, 100);
     net.tlml_hz = telemetry_interval_ms_to_rate_hz(parsed_cfg.tlml_interval_ms, 10);
+
+    if (cli_overrides.has_tlmh_ip) {
+      for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) {
+          net.tlmh_ip = argv[i + 1];
+        }
+      }
+    }
+    if (cli_overrides.has_tlmh_port) {
+      for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--tlmh-port") && i + 1 < argc) {
+          net.tlmh_port = atoi(argv[i + 1]);
+        }
+      }
+    }
+    if (cli_overrides.has_tlmh_hz) {
+      for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--tlmh-hz") && i + 1 < argc) {
+          net.tlmh_hz = atoi(argv[i + 1]);
+          if (net.tlmh_hz < 1) net.tlmh_hz = 1;
+          net.tlmh_period_ns = telemetry_rate_hz_to_period_ns(net.tlmh_hz, 10000000L);
+        }
+      }
+    }
+    if (cli_overrides.has_tlml_ip) {
+      for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--tlml-ip") && i + 1 < argc) {
+          net.tlml_ip = argv[i + 1];
+        }
+      }
+    }
+    if (cli_overrides.has_tlml_port) {
+      for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--tlml-port") && i + 1 < argc) {
+          net.tlml_port = atoi(argv[i + 1]);
+        }
+      }
+    }
+    if (cli_overrides.has_tlml_hz) {
+      for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--tlml-hz") && i + 1 < argc) {
+          net.tlml_hz = atoi(argv[i + 1]);
+          if (net.tlml_hz < 1) net.tlml_hz = 1;
+          net.tlml_period_ns = telemetry_rate_hz_to_period_ns(net.tlml_hz, 100000000L);
+        }
+      }
+    }
+
     net.sched.rt_enabled = parsed_cfg.rt_enabled ? 1 : 0;
     net.sched.rt_strict = parsed_cfg.rt_strict ? 1 : 0;
     net.sched.sched_policy = parsed_cfg.rt_sched_policy;
