@@ -208,32 +208,62 @@ int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   return 0;
 }
 
+int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
+  struct motion_backend* b = (struct motion_backend*)backend;
+  if (!b) return -1;
+
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if ((axes_mask & (1u << axis)) == 0 || !b->axis_connected[axis]) continue;
+
+    const int8_t mode = (b->axis_mode[axis] != MTR_MODE_NONE)
+      ? (int8_t)b->axis_mode[axis]
+      : (int8_t)MTR_MODE_PP;
+
+    const int rc = pd4c_ds402_fault_reset(&b->ctx[axis], mode, b->cfg.ds402_timeout_ms);
+    if (rc == PD4C_OK) {
+      b->axis_last_seen_ms[axis] = mono_ms();
+      b->axis_enabled[axis] = 0;
+    } else {
+      STC_LOG_WARN("axis=%zu fault reset failed rc=%d", axis, rc);
+    }
+  }
+
+  return 0;
+}
+
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !snapshot) return -1;
   uint64_t now = mono_ms();
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!b->axis_connected[axis]) continue;
-    if (pd4c_poll(&b->ctx[axis], 0) == PD4C_OK) {
-      const pd4c_telemetry_t* t = pd4c_telem(&b->ctx[axis]);
-      b->snap.pos_raw[axis] = t->pos_actual;
-      b->snap.vel_raw[axis] = t->vel_actual;
-      b->snap.status_word[axis] = t->statusword;
-      b->snap.mode_display[axis] = t->mode_display;
-      b->axis_last_seen_ms[axis] = now;
-      if (axis == 0) {
-        b->snap.hb_state = (uint8_t)t->hb_state;
-        b->snap.have_hb = t->have_hb ? 1 : 0;
-        b->snap.have_emcy = t->have_emcy ? 1 : 0;
-        b->snap.emcy_code = t->emcy_error_code;
-        b->snap.emcy_reg = t->emcy_error_reg;
-        b->snap.ts_tpdo1_ms = t->ts_tpdo1_ms;
-        b->snap.ts_tpdo2_ms = t->ts_tpdo2_ms;
-        b->snap.ts_tpdo3_ms = t->ts_tpdo3_ms;
-        b->snap.ts_hb_ms = t->ts_hb_ms;
-        b->snap.ts_emcy_ms = t->ts_emcy_ms;
+
+    int poll_rc = 0;
+    do {
+      poll_rc = pd4c_poll(&b->ctx[axis], 0);
+      if (poll_rc >= PD4C_OK) {
+        const pd4c_telemetry_t* t = pd4c_telem(&b->ctx[axis]);
+        b->snap.pos_raw[axis] = t->pos_actual;
+        b->snap.vel_raw[axis] = t->vel_actual;
+        b->snap.status_word[axis] = t->statusword;
+        b->snap.mode_display[axis] = t->mode_display;
+        b->axis_last_seen_ms[axis] = now;
+        if (axis == 0) {
+          b->snap.hb_state = (uint8_t)t->hb_state;
+          b->snap.have_hb = t->have_hb ? 1 : 0;
+          b->snap.have_emcy = t->have_emcy ? 1 : 0;
+          b->snap.emcy_code = t->emcy_error_code;
+          b->snap.emcy_reg = t->emcy_error_reg;
+          b->snap.ts_tpdo1_ms = t->ts_tpdo1_ms;
+          b->snap.ts_tpdo2_ms = t->ts_tpdo2_ms;
+          b->snap.ts_tpdo3_ms = t->ts_tpdo3_ms;
+          b->snap.ts_hb_ms = t->ts_hb_ms;
+          b->snap.ts_emcy_ms = t->ts_emcy_ms;
+        }
       }
-    } else if (b->cfg.pp_sdo_diag) {
+    } while (poll_rc >= PD4C_OK && poll_rc != PD4C_ETIMEDOUT);
+
+    if (poll_rc == PD4C_ETIMEDOUT && b->cfg.pp_sdo_diag) {
       const uint64_t elapsed_since_check_ms = now - b->axis_last_healthcheck_ms[axis];
       if (elapsed_since_check_ms >= b->cfg.can_timeout_ms && verify_node_responsive(&b->ctx[axis], b->cfg.can_timeout_ms)) {
         b->axis_last_seen_ms[axis] = now;
