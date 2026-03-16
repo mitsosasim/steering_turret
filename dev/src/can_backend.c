@@ -42,6 +42,14 @@ static int ensure_enabled(struct motion_backend* b, size_t axis, mtr_mode_t mode
   return rc;
 }
 
+static int verify_node_responsive(pd4c_ctx_t* ctx, uint32_t timeout_ms) {
+  if (!ctx) return 0;
+  uint32_t vendor_id = 0;
+  int effective_timeout_ms = (timeout_ms > 0 && timeout_ms <= INT32_MAX) ? (int)timeout_ms : 500;
+  pd4c_set_sdo_timeout(ctx, effective_timeout_ms);
+  return pd4c_sdo_read_u32(ctx, 0x1018u, 0x01u, &vendor_id) == PD4C_OK;
+}
+
 int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
   if (!cfg || !out_backend) return -1;
   struct motion_backend* b = (struct motion_backend*)calloc(1, sizeof(*b));
@@ -54,13 +62,19 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
     uint8_t node_id = cfg->axis_node_id[axis];
     if (!node_id) continue;
     int rc = pd4c_open(&b->ctx[axis], cfg->can_if, node_id);
-    if (rc == PD4C_OK) {
-      (void)pd4c_nmt_start(&b->ctx[axis]);
-      b->axis_connected[axis] = 1;
-      b->snap.axis_available[axis] = 1;
-      b->snap.can_connected_devices++;
-      b->snap.last_rx_ms[axis] = mono_ms();
+    if (rc != PD4C_OK) continue;
+
+    (void)pd4c_nmt_start(&b->ctx[axis]);
+    if (!verify_node_responsive(&b->ctx[axis], cfg->can_timeout_ms)) {
+      STC_LOG_WARN("CAN node %u (axis %zu) opened but failed liveness verification; closing context.", node_id, axis);
+      pd4c_close(&b->ctx[axis]);
+      continue;
     }
+
+    b->axis_connected[axis] = 1;
+    b->snap.axis_available[axis] = 1;
+    b->snap.can_connected_devices++;
+    b->snap.last_rx_ms[axis] = mono_ms();
   }
   b->snap.can_ok = 1;
   *out_backend = b;
