@@ -39,6 +39,13 @@ static int node_in_discovery_list(const motion_snapshot_t* snap, uint8_t node_id
   return 0;
 }
 
+static int bounded_scan_max(int configured_scan_max) {
+  int scan_max = configured_scan_max;
+  if (scan_max < 1) scan_max = 1;
+  if (scan_max > 127) scan_max = 127;
+  return scan_max;
+}
+
 static uint64_t mono_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -68,14 +75,14 @@ static int discover_responsive_nodes(struct motion_backend* b) {
   if (!b) return 0;
 
   int responsive_count = 0;
-  int scan_max = b->cfg.can_scan_max_node;
-  if (scan_max < 1) scan_max = 1;
-  if (scan_max > 127) scan_max = 127;
+  const int scan_max = bounded_scan_max(b->cfg.can_scan_max_node);
 
   memset(b->snap.can_discovered_nodes, 0, sizeof(b->snap.can_discovered_nodes));
   for (int node = 1; node <= scan_max; node++) {
     pd4c_ctx_t tmp;
     memset(&tmp, 0, sizeof(tmp));
+
+    STC_LOG_INFO("probe open node=%d", node);
     if (pd4c_open(&tmp, b->cfg.can_if, (uint8_t)node) != PD4C_OK) continue;
 
     (void)pd4c_nmt_start(&tmp);
@@ -128,7 +135,11 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
     b->axis_last_seen_ms[axis] = mono_ms();
     b->axis_last_healthcheck_ms[axis] = b->axis_last_seen_ms[axis];
     b->snap.last_rx_ms[axis] = b->axis_last_seen_ms[axis];
+    b->snap.last_rx_ms[axis] = mono_ms();
+    STC_LOG_INFO("connected axis=%zu node=%u", axis, node_id);
   }
+  STC_LOG_INFO("discovery summary: scanned %d, responsive %u, connected %u",
+    bounded_scan_max(b->cfg.can_scan_max_node), b->snap.can_discovered_devices, b->snap.can_connected_devices);
   b->snap.can_ok = 1;
   *out_backend = b;
   return 0;
@@ -146,7 +157,10 @@ void motion_backend_stop(motion_backend_t* backend) {
 int motion_backend_discover(motion_backend_t* backend) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
-  return discover_responsive_nodes(b);
+  const int responsive_count = discover_responsive_nodes(b);
+  STC_LOG_INFO("discovery summary: scanned %d, responsive %d, connected %u",
+    bounded_scan_max(b->cfg.can_scan_max_node), responsive_count, b->snap.can_connected_devices);
+  return responsive_count;
 }
 
 int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
