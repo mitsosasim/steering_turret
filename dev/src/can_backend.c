@@ -23,6 +23,8 @@ struct motion_backend {
   int axis_connected[STC_AXIS_COUNT];
   int axis_enabled[STC_AXIS_COUNT];
   mtr_mode_t axis_mode[STC_AXIS_COUNT];
+  uint64_t axis_last_seen_ms[STC_AXIS_COUNT];
+  uint64_t axis_last_healthcheck_ms[STC_AXIS_COUNT];
   motion_snapshot_t snap;
 };
 
@@ -54,6 +56,7 @@ static int ensure_enabled(struct motion_backend* b, size_t axis, mtr_mode_t mode
   if (b->axis_enabled[axis] && b->axis_mode[axis] == mode) return PD4C_OK;
   int rc = pd4c_ds402_enable_operation(&b->ctx[axis], (int8_t)mode, b->cfg.ds402_timeout_ms);
   if (rc == PD4C_OK) {
+    b->axis_last_seen_ms[axis] = mono_ms();
     b->axis_enabled[axis] = 1;
     b->axis_mode[axis] = mode;
   }
@@ -129,6 +132,9 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
     b->axis_connected[axis] = 1;
     b->snap.axis_available[axis] = 1;
     b->snap.can_connected_devices++;
+    b->axis_last_seen_ms[axis] = mono_ms();
+    b->axis_last_healthcheck_ms[axis] = b->axis_last_seen_ms[axis];
+    b->snap.last_rx_ms[axis] = b->axis_last_seen_ms[axis];
     b->snap.last_rx_ms[axis] = mono_ms();
     STC_LOG_INFO("connected axis=%zu node=%u", axis, node_id);
   }
@@ -165,7 +171,9 @@ int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, 
     if (ensure_enabled(b, axis, MTR_MODE_PP) != PD4C_OK) continue;
     int32_t target_counts = axis_deg_to_counts(&b->cfg.axis_cfg[axis], targets_deg[axis]);
     uint16_t pv = b->cfg.axis_cfg[axis].pp_profile_vel;
-    (void)pd4c_pp_move(&b->ctx[axis], target_counts, pv, 0, b->cfg.ds402_timeout_ms);
+    if (pd4c_pp_move(&b->ctx[axis], target_counts, pv, 0, b->cfg.ds402_timeout_ms) == PD4C_OK) {
+      b->axis_last_seen_ms[axis] = mono_ms();
+    }
   }
   return 0;
 }
@@ -180,7 +188,9 @@ int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, co
     int32_t tv_raw = axis_deg_s_to_target_vel_units(&b->cfg.axis_cfg[axis], speeds_deg_s[axis], &clipped);
     if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
     if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
-    (void)pd4c_rpdo3_send_target_velocity(&b->ctx[axis], (int16_t)tv_raw);
+    if (pd4c_rpdo3_send_target_velocity(&b->ctx[axis], (int16_t)tv_raw) == PD4C_OK) {
+      b->axis_last_seen_ms[axis] = mono_ms();
+    }
   }
   return 0;
 }
@@ -190,7 +200,9 @@ int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   if (!b) return -1;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if ((axes_mask & (1u << axis)) == 0 || !b->axis_connected[axis]) continue;
-    (void)pd4c_ds402_quick_stop(&b->ctx[axis], (int8_t)b->axis_mode[axis]);
+    if (pd4c_ds402_quick_stop(&b->ctx[axis], (int8_t)b->axis_mode[axis]) == PD4C_OK) {
+      b->axis_last_seen_ms[axis] = mono_ms();
+    }
     b->axis_enabled[axis] = 0;
   }
   return 0;
@@ -208,7 +220,7 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
       b->snap.vel_raw[axis] = t->vel_actual;
       b->snap.status_word[axis] = t->statusword;
       b->snap.mode_display[axis] = t->mode_display;
-      b->snap.last_rx_ms[axis] = now;
+      b->axis_last_seen_ms[axis] = now;
       if (axis == 0) {
         b->snap.hb_state = (uint8_t)t->hb_state;
         b->snap.have_hb = t->have_hb ? 1 : 0;
@@ -221,7 +233,14 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
         b->snap.ts_hb_ms = t->ts_hb_ms;
         b->snap.ts_emcy_ms = t->ts_emcy_ms;
       }
+    } else if (b->cfg.pp_sdo_diag) {
+      const uint64_t elapsed_since_check_ms = now - b->axis_last_healthcheck_ms[axis];
+      if (elapsed_since_check_ms >= b->cfg.can_timeout_ms && verify_node_responsive(&b->ctx[axis], b->cfg.can_timeout_ms)) {
+        b->axis_last_seen_ms[axis] = now;
+        b->axis_last_healthcheck_ms[axis] = now;
+      }
     }
+    b->snap.last_rx_ms[axis] = b->axis_last_seen_ms[axis];
   }
   *snapshot = b->snap;
   return 0;

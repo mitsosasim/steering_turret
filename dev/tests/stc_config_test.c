@@ -154,6 +154,7 @@ static void test_accept_valid_config(void) {
       "tlml_port = 6020\n"
       "tlmh_interval_ms = 10\n"
       "tlml_interval_ms = 100\n"
+      "strict_stale_policy = 1\n"
       "\n"
       "[Axis0]\n"
       "node_id = 1\n"
@@ -181,6 +182,7 @@ static void test_accept_valid_config(void) {
   stc_config_t cfg;
   write_tmp_config(cfg_text, path, sizeof(path));
   expect_true(load_config(path, &cfg), "expected valid config to pass");
+  expect_true(cfg.strict_stale_policy == 1, "expected strict_stale_policy to parse");
   unlink(path);
 }
 
