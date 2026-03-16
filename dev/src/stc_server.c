@@ -235,6 +235,7 @@ typedef struct {
   // --- runtime flags
   int can_ok;
   uint8_t axis_available[STC_AXIS_COUNT];
+  uint8_t axis_expected[STC_AXIS_COUNT];
   uint8_t can_discovered_nodes[16];
   uint8_t can_connected_devices;
   uint8_t can_discovered_devices;
@@ -1254,6 +1255,7 @@ static void* tlml_tx_thread(void* arg) {
     bool saturated[STC_AXIS_COUNT] = {false};
     uint8_t axis_fault_active[STC_AXIS_COUNT] = {0};
     uint8_t axis_enabled[STC_AXIS_COUNT] = {0};
+    uint8_t axis_expected[STC_AXIS_COUNT] = {0};
     uint64_t last_rx_ms[STC_AXIS_COUNT] = {0};
     uint8_t diag_cat[STC_AXIS_COUNT] = {0};
     uint8_t diag_subcat[STC_AXIS_COUNT] = {0};
@@ -1263,6 +1265,7 @@ static void* tlml_tx_thread(void* arg) {
       saturated[i] = a->sh->d.saturated[i];
       axis_fault_active[i] = a->sh->d.axis_fault_active[i];
       axis_enabled[i] = a->sh->d.axis_enabled[i];
+      axis_expected[i] = a->sh->d.axis_expected[i];
       last_rx_ms[i] = a->sh->d.last_rx_ms[i];
       diag_cat[i] = a->sh->d.diag_cat[i];
       diag_subcat[i] = a->sh->d.diag_subcat[i];
@@ -1318,7 +1321,8 @@ static void* tlml_tx_thread(void* arg) {
 
     m.error_count = 0;
     for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
-      const int stale = (elapsed_ms_nonnegative(nowm, last_rx_ms[i]) > can_timeout_ms);
+      const int expected = axis_expected[i] ? 1 : 0;
+      const int stale = expected && (elapsed_ms_nonnegative(nowm, last_rx_ms[i]) > can_timeout_ms);
       if (axis_fault_active[i]) {
         m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_FAULT);
       }
@@ -1388,8 +1392,10 @@ typedef struct {
 } runtime_net_t;
 
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
+  memset(sh->d.axis_expected, 0, sizeof(sh->d.axis_expected));
   for (int i = 0; i < cfg->num_axes && i < (int)STC_AXIS_COUNT; i++) {
     sh->d.axis_node_id[i] = (uint8_t)cfg->axis_node_id[i];
+    sh->d.axis_expected[i] = (cfg->axis_node_id[i] > 0) ? 1u : 0u;
     sh->d.cfg[i].counts_per_rev = cfg->axis_counts_per_rev[i];
     sh->d.cfg[i].gear_ratio = cfg->axis_gear_ratio[i];
     sh->d.cfg[i].vel_raw_units = cfg->axis_vel_is_rpm[i] ? AXIS_VEL_RAW_RPM : AXIS_VEL_RAW_DEG_PER_SEC;
