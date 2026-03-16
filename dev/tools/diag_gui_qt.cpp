@@ -166,6 +166,14 @@ class DiagnosticsWindow : public QMainWindow {
     });
     connect(tlmHighPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(tlmLowPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
+    connect(mirrorIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+      if (!mirrorIdBox_) return;
+      preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
+    });
+    connect(sutIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+      if (!sutIdBox_) return;
+      preferredSutId_ = sutIdBox_->currentData().toInt();
+    });
     connect(tcpSocket_, &QTcpSocket::connected, this, &DiagnosticsWindow::onTcpConnected);
     connect(tcpSocket_, &QTcpSocket::disconnected, this, &DiagnosticsWindow::onTcpDisconnected);
     connect(tcpSocket_, &QTcpSocket::readyRead, this, &DiagnosticsWindow::onTcpReadyRead);
@@ -555,15 +563,17 @@ class DiagnosticsWindow : public QMainWindow {
   void updateDeviceSelectors(int connectedDevices, int discoveredDevices) {
     const int availableSut = qBound(0, connectedDevices > 2 ? (connectedDevices - 2) / 2 : 0, 8);
     if (sutIdBox_) {
-      const int prev = sutIdBox_->currentData().toInt();
+      int desired = preferredSutId_;
+      if (desired < 0) desired = sutIdBox_->currentData().toInt();
       sutIdBox_->clear();
       sutIdBox_->addItem("All", 0xFF);
       for (int id = 1; id <= availableSut; ++id) {
         sutIdBox_->addItem(QString::number(id), id);
       }
-      int idx = sutIdBox_->findData(prev);
+      int idx = sutIdBox_->findData(desired);
       if (idx < 0) idx = 0;
       sutIdBox_->setCurrentIndex(idx);
+      preferredSutId_ = sutIdBox_->currentData().toInt();
       sutIdBox_->setEnabled(availableSut > 0);
     }
 
@@ -579,16 +589,18 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     if (mirrorIdBox_) {
-      const int prev = mirrorIdBox_->currentData().toInt();
+      int desired = preferredMirrorId_;
+      if (desired < 0) desired = mirrorIdBox_->currentData().toInt();
       mirrorIdBox_->clear();
       mirrorIdBox_->addItem("All", 0xFF);
       const int maxMirror = simModeBox_->isChecked() ? 8 : discoveredDevices;
       for (int id = 1; id <= maxMirror; ++id) {
         mirrorIdBox_->addItem(QString::number(id), id);
       }
-      int idx = mirrorIdBox_->findData(prev);
+      int idx = mirrorIdBox_->findData(desired);
       if (idx < 0) idx = 0;
       mirrorIdBox_->setCurrentIndex(idx);
+      preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
       mirrorIdBox_->setEnabled(maxMirror > 0 || simModeBox_->isChecked());
     }
 
@@ -1220,6 +1232,8 @@ class DiagnosticsWindow : public QMainWindow {
 
   QSpinBox *tlmHighPortSpin_{};
   QSpinBox *tlmLowPortSpin_{};
+  int preferredMirrorId_{0xFF};
+  int preferredSutId_{0xFF};
 
   std::array<double, kAxisCount> simPos_{};
   std::array<double, kAxisCount> simVel_{};
