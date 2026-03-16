@@ -32,30 +32,6 @@ static uint64_t mono_ms(void) {
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 }
 
-static int run_systemf(const char* cmd) {
-  if (!cmd || !cmd[0]) return -1;
-  int rc = system(cmd);
-  if (rc != 0) STC_LOG_WARN("command failed (%d): %s", rc, cmd);
-  return rc;
-}
-
-static void can_interface_startup(const motion_backend_cfg_t* c) {
-  if (!c || !c->can_if || !c->can_if[0]) return;
-  char cmd[256];
-  (void)snprintf(cmd, sizeof(cmd), "ip link set %s down >/dev/null 2>&1", c->can_if);
-  (void)run_systemf(cmd);
-  if (c->can_bitrate > 0) {
-    if (c->can_restart_ms > 0) {
-      (void)snprintf(cmd, sizeof(cmd), "ip link set %s up type can bitrate %d restart-ms %d >/dev/null 2>&1", c->can_if, c->can_bitrate, c->can_restart_ms);
-    } else {
-      (void)snprintf(cmd, sizeof(cmd), "ip link set %s up type can bitrate %d >/dev/null 2>&1", c->can_if, c->can_bitrate);
-    }
-  } else {
-    (void)snprintf(cmd, sizeof(cmd), "ip link set %s up >/dev/null 2>&1", c->can_if);
-  }
-  (void)run_systemf(cmd);
-}
-
 static int ensure_enabled(struct motion_backend* b, size_t axis, mtr_mode_t mode) {
   if (b->axis_enabled[axis] && b->axis_mode[axis] == mode) return PD4C_OK;
   int rc = pd4c_ds402_enable_operation(&b->ctx[axis], (int8_t)mode, b->cfg.ds402_timeout_ms);
@@ -71,7 +47,8 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   struct motion_backend* b = (struct motion_backend*)calloc(1, sizeof(*b));
   if (!b) return -1;
   b->cfg = *cfg;
-  can_interface_startup(cfg);
+  STC_LOG_INFO("CAN backend assumes interface '%s' is preconfigured externally (manual canup/systemd); skipping interface setup commands.",
+    (cfg->can_if && cfg->can_if[0]) ? cfg->can_if : "(unset)");
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     uint8_t node_id = cfg->axis_node_id[axis];
