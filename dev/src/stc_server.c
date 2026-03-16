@@ -926,6 +926,9 @@ static void* can_worker_thread(void* arg) {
           }
           break;
         }
+        case ACTION_CLEAR_ERRORS:
+          (void)motion_backend_clear_faults(backend, act.axes_mask);
+          break;
         case ACTION_RESET:
           (void)motion_backend_quick_stop(backend, act.axes_mask);
           memset(axis_enabled, 0, sizeof(axis_enabled));
@@ -2213,7 +2216,8 @@ int main(int argc, char** argv) {
               has_action = 1;
             }
           } else if (cmd.cmd_id == STC_CMD_DELLOG) {
-            has_action = 0; /* ACK/no-op placeholder */
+            stc_action_make_simple(&act, ACTION_CLEAR_ERRORS, 0xFFFFFFFFu);
+            has_action = 1;
           } else if (cmd.cmd_id == STC_CMD_FACTORY) {
             stc_action_make_simple(&act, ACTION_FACTORY, 0u);
             has_action = 1;

@@ -164,6 +164,7 @@ class DiagnosticsWindow : public QMainWindow {
       updateTcpStatusLabel();
       ensureTcpConnected();
     });
+    connect(clearErrorsButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendClearErrors);
     connect(tlmHighPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(tlmLowPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(mirrorIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
@@ -428,6 +429,46 @@ class DiagnosticsWindow : public QMainWindow {
     } else if (cmd.cmd_id == STC_CMD_SELFLEV || cmd.cmd_id == STC_CMD_IBIT || cmd.cmd_id == STC_CMD_STORAGE) {
       simTargetVel_.fill(0.0);
     }
+  }
+
+  void sendClearErrors() {
+    if (simModeBox_->isChecked()) {
+      appendLog("Simulation mode: clear errors skipped.");
+      return;
+    }
+    if (!tcpConnected_) {
+      appendLog("Clear errors not sent: CU TCP link is disconnected.");
+      ensureTcpConnected();
+      return;
+    }
+
+    stc_icd_cmd_t cmd{};
+    cmd.magic = cfg_.magic;
+    cmd.version = cfg_.protocol_version_default;
+    cmd.controller_id = static_cast<uint8_t>(controllerIdSpin_->value());
+    cmd.cmd_id = STC_CMD_DELLOG;
+    cmd.seq = nextSeq_++;
+    cmd.timestamp_ms = static_cast<uint64_t>(QDateTime::currentMSecsSinceEpoch());
+    cmd.payload_size = 0;
+
+    uint8_t packet[20 + STC_ICD_MAX_PAYLOAD]{};
+    size_t packetLen = 0;
+    if (stc_icd_cmd_pack(&cfg_, &cmd, packet, sizeof(packet), &packetLen) != STC_ICD_OK) {
+      QMessageBox::warning(this, "Serialize error", "Failed to encode clear-errors command.");
+      return;
+    }
+
+    pendingCommands_.insert(cmd.seq, commandName(cmd.cmd_id));
+    const qint64 wrote = tcpSocket_->write(reinterpret_cast<const char*>(packet), static_cast<qint64>(packetLen));
+    if (wrote != static_cast<qint64>(packetLen)) {
+      appendLog(QString("TCP write failed: %1").arg(tcpSocket_->errorString()));
+      pendingCommands_.remove(cmd.seq);
+      return;
+    }
+
+    appendLog(QString("Sent clear-errors command id=0x%1 seq=%2")
+                .arg(cmd.cmd_id, 4, 16, QChar('0'))
+                .arg(cmd.seq));
   }
 
   void sendCommand() {
@@ -911,7 +952,8 @@ class DiagnosticsWindow : public QMainWindow {
     sendButton_ = new QPushButton("Send", cmdGroup);
     reconnectButton_ = new QPushButton("Reconnect CU link", cmdGroup);
     canBringupButton_ = new QPushButton("Rediscover/connect CAN devices", cmdGroup);
-    for (QPushButton *button : {sendButton_, reconnectButton_, canBringupButton_}) {
+    clearErrorsButton_ = new QPushButton("Clear motor faults (DELLOG)", cmdGroup);
+    for (QPushButton *button : {sendButton_, reconnectButton_, canBringupButton_, clearErrorsButton_}) {
       button->setMaximumWidth(kButtonWidth);
       button->setMinimumHeight(kButtonHeight);
       button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -936,6 +978,7 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow(sendButton_);
     cmdForm->addRow(reconnectButton_);
     cmdForm->addRow(canBringupButton_);
+    cmdForm->addRow(clearErrorsButton_);
     leftColumnLayout->addWidget(cmdGroup);
 
     auto *statusGroup = new QGroupBox("Status", leftColumn);
@@ -1181,6 +1224,7 @@ class DiagnosticsWindow : public QMainWindow {
   QPushButton *sendButton_{};
   QPushButton *reconnectButton_{};
   QPushButton *canBringupButton_{};
+  QPushButton *clearErrorsButton_{};
 
   QComboBox *cuStateBox_{};
   QComboBox *selfLevActionBox_{};

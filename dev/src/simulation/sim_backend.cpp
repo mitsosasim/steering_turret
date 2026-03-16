@@ -194,6 +194,17 @@ int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   return 0;
 }
 
+
+int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
+  motion_backend* b = reinterpret_cast<motion_backend*>(backend);
+  if (!b) return -1;
+  std::lock_guard<std::mutex> lock(b->mtx);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
+    if ((axes_mask & (1u << axis)) == 0) continue;
+    b->snap.status_word[axis] = 0x1237u;
+  }
+  return 0;
+}
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !snapshot) return -1;
