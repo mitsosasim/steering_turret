@@ -1377,6 +1377,7 @@ typedef struct {
   int can_bitrate;
   int can_restart_ms;
   int can_scan_max_node;
+  uint32_t can_timeout_ms;
   int node_id;
   int tcp_port;
   const char* tlmh_ip;
@@ -1449,6 +1450,7 @@ int main(int argc, char** argv) {
     .can_bitrate = 1000,
     .can_restart_ms = 100,
     .can_scan_max_node = 32,
+    .can_timeout_ms = 1000,
     .node_id = 1,
     .tcp_port = 7000,
     .tlmh_ip = "127.0.0.1",
@@ -1555,7 +1557,10 @@ int main(int argc, char** argv) {
     }
     else if (!strcmp(argv[i], "--ds402-timeout-ms") && i + 1 < argc) sh.d.ds402_timeout_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--pp-sdo-diag") && i + 1 < argc) sh.d.pp_sdo_diag = atoi(argv[++i]) ? 1 : 0;
-    else if (!strcmp(argv[i], "--can-timeout-ms") && i + 1 < argc) sh.d.can_timeout_ms = (uint32_t)atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--can-timeout-ms") && i + 1 < argc) {
+      net.can_timeout_ms = (uint32_t)atoi(argv[++i]);
+      sh.d.can_timeout_ms = net.can_timeout_ms;
+    }
     else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) {
       net.tlmh_ip = argv[++i];
       legacy_cli_mode = 1;
@@ -1653,6 +1658,10 @@ int main(int argc, char** argv) {
     net.sched.can_worker_priority = parsed_cfg.can_worker_priority;
     net.sched.tlmh_tx_priority = parsed_cfg.tlmh_tx_priority;
     net.sched.tlml_tx_priority = parsed_cfg.tlml_tx_priority;
+    net.can_scan_max_node = parsed_cfg.can_scan_max_node;
+    net.can_timeout_ms = (parsed_cfg.can_timeout_ms > 0) ? (uint32_t)parsed_cfg.can_timeout_ms : 0;
+    sh.d.can_timeout_ms = net.can_timeout_ms;
+    sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
 
     apply_config_to_shared(&sh, &parsed_cfg);
   } else {
@@ -1680,6 +1689,9 @@ int main(int argc, char** argv) {
     exit_code = 1;
     goto cleanup;
   }
+
+  sh.d.can_timeout_ms = net.can_timeout_ms;
+  sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
 
   signal(SIGINT, on_sig);
   signal(SIGTERM, on_sig);

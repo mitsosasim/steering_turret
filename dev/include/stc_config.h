@@ -20,6 +20,8 @@ typedef struct stc_config_s {
   int tlml_port;
   int tlmh_interval_ms;
   int tlml_interval_ms;
+  int can_scan_max_node;
+  int can_timeout_ms;
 
   int rt_enabled;
   int rt_strict;
