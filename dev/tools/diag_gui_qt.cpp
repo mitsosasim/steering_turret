@@ -443,7 +443,7 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     stc_icd_cmd_t cmd{};
-    cmd.magic = cfg_.magic;
+    std::memcpy(cmd.magic, cfg_.cmd_magic, sizeof(cmd.magic));
     cmd.version = cfg_.protocol_version_default;
     cmd.controller_id = static_cast<uint8_t>(controllerIdSpin_->value());
     cmd.cmd_id = STC_CMD_DELLOG;
