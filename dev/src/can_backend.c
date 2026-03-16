@@ -26,6 +26,17 @@ struct motion_backend {
   motion_snapshot_t snap;
 };
 
+static int node_in_discovery_list(const motion_snapshot_t* snap, uint8_t node_id) {
+  if (!snap || node_id == 0) return 0;
+  const int discovered = (int)snap->can_discovered_devices;
+  const int limit = (int)(sizeof(snap->can_discovered_nodes) / sizeof(snap->can_discovered_nodes[0]));
+  const int check = (discovered < limit) ? discovered : limit;
+  for (int i = 0; i < check; i++) {
+    if (snap->can_discovered_nodes[i] == node_id) return 1;
+  }
+  return 0;
+}
+
 static uint64_t mono_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -50,6 +61,35 @@ static int verify_node_responsive(pd4c_ctx_t* ctx, uint32_t timeout_ms) {
   return pd4c_sdo_read_u32(ctx, 0x1018u, 0x01u, &vendor_id) == PD4C_OK;
 }
 
+static int discover_responsive_nodes(struct motion_backend* b) {
+  if (!b) return 0;
+
+  int responsive_count = 0;
+  int scan_max = b->cfg.can_scan_max_node;
+  if (scan_max < 1) scan_max = 1;
+  if (scan_max > 127) scan_max = 127;
+
+  memset(b->snap.can_discovered_nodes, 0, sizeof(b->snap.can_discovered_nodes));
+  for (int node = 1; node <= scan_max; node++) {
+    pd4c_ctx_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    if (pd4c_open(&tmp, b->cfg.can_if, (uint8_t)node) != PD4C_OK) continue;
+
+    (void)pd4c_nmt_start(&tmp);
+    if (verify_node_responsive(&tmp, b->cfg.can_timeout_ms)) {
+      const int node_idx = responsive_count;
+      if (node_idx < (int)(sizeof(b->snap.can_discovered_nodes) / sizeof(b->snap.can_discovered_nodes[0]))) {
+        b->snap.can_discovered_nodes[node_idx] = (uint8_t)node;
+      }
+      responsive_count++;
+    }
+    pd4c_close(&tmp);
+  }
+
+  b->snap.can_discovered_devices = (uint8_t)responsive_count;
+  return responsive_count;
+}
+
 int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
   if (!cfg || !out_backend) return -1;
   struct motion_backend* b = (struct motion_backend*)calloc(1, sizeof(*b));
@@ -58,9 +98,17 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   STC_LOG_INFO("CAN backend assumes interface '%s' is preconfigured externally (manual canup/systemd); skipping interface setup commands.",
     (cfg->can_if && cfg->can_if[0]) ? cfg->can_if : "(unset)");
 
+  (void)discover_responsive_nodes(b);
+
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     uint8_t node_id = cfg->axis_node_id[axis];
     if (!node_id) continue;
+
+    if (!node_in_discovery_list(&b->snap, node_id)) {
+      STC_LOG_WARN("Configured axis %zu node %u was not discovered as responsive; skipping connection.", axis, node_id);
+      continue;
+    }
+
     int rc = pd4c_open(&b->ctx[axis], cfg->can_if, node_id);
     if (rc != PD4C_OK) continue;
 
@@ -93,31 +141,7 @@ void motion_backend_stop(motion_backend_t* backend) {
 int motion_backend_discover(motion_backend_t* backend) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
-  int discovered_count = 0;
-  int scan_max = b->cfg.can_scan_max_node;
-  if (scan_max < 1) scan_max = 1;
-  if (scan_max > 127) scan_max = 127;
-  memset(b->snap.can_discovered_nodes, 0, sizeof(b->snap.can_discovered_nodes));
-
-  for (int node = 1; node <= scan_max; node++) {
-    pd4c_ctx_t tmp;
-    memset(&tmp, 0, sizeof(tmp));
-    if (pd4c_open(&tmp, b->cfg.can_if, (uint8_t)node) != PD4C_OK) continue;
-    (void)pd4c_nmt_start(&tmp);
-    pd4c_telemetry_t t;
-    memset(&t, 0, sizeof(t));
-    int present = 0;
-    for (int k = 0; k < 2; k++) {
-      if (pd4c_poll(&tmp, 40) == PD4C_OK) {
-        t = *pd4c_telem(&tmp);
-        if (t.have_hb || t.have_tpdo1 || t.have_tpdo2 || t.have_tpdo3) { present = 1; break; }
-      }
-    }
-    if (present && discovered_count < 16) b->snap.can_discovered_nodes[discovered_count++] = (uint8_t)node;
-    pd4c_close(&tmp);
-  }
-  b->snap.can_discovered_devices = (uint8_t)discovered_count;
-  return discovered_count;
+  return discover_responsive_nodes(b);
 }
 
 int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
