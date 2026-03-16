@@ -210,6 +210,7 @@ typedef struct {
   int ds402_timeout_ms;
   int pp_sdo_diag;              // enable SDO snapshot before PP move
   uint32_t can_timeout_ms;
+  int strict_stale_policy;
 
   // --- software state / navigation
   stc_state_t st_state;
@@ -1255,6 +1256,7 @@ static void* tlml_tx_thread(void* arg) {
     bool saturated[STC_AXIS_COUNT] = {false};
     uint8_t axis_fault_active[STC_AXIS_COUNT] = {0};
     uint8_t axis_enabled[STC_AXIS_COUNT] = {0};
+    uint8_t axis_available[STC_AXIS_COUNT] = {0};
     uint8_t axis_expected[STC_AXIS_COUNT] = {0};
     uint64_t last_rx_ms[STC_AXIS_COUNT] = {0};
     uint8_t diag_cat[STC_AXIS_COUNT] = {0};
@@ -1265,6 +1267,7 @@ static void* tlml_tx_thread(void* arg) {
       saturated[i] = a->sh->d.saturated[i];
       axis_fault_active[i] = a->sh->d.axis_fault_active[i];
       axis_enabled[i] = a->sh->d.axis_enabled[i];
+      axis_available[i] = a->sh->d.axis_available[i];
       axis_expected[i] = a->sh->d.axis_expected[i];
       last_rx_ms[i] = a->sh->d.last_rx_ms[i];
       diag_cat[i] = a->sh->d.diag_cat[i];
@@ -1279,6 +1282,7 @@ static void* tlml_tx_thread(void* arg) {
     uint8_t can_connected_devices = a->sh->d.can_connected_devices;
     uint8_t can_discovered_devices = a->sh->d.can_discovered_devices;
     uint8_t can_ok = a->sh->d.can_ok ? 1u : 0u;
+    int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = noww;
@@ -1298,7 +1302,11 @@ static void* tlml_tx_thread(void* arg) {
       uint8_t flags = 0;
       if (axis_enabled[ax]) flags |= (1u << 0);
       if (axis_fault_active[ax]) flags |= (1u << 1);
-      if (elapsed_ms_nonnegative(nowm, last_rx_ms[ax]) > can_timeout_ms) flags |= (1u << 2);
+      const int expected = axis_expected[ax] ? 1 : 0;
+      const int connected = axis_available[ax] ? 1 : 0;
+      const int timed_out = elapsed_ms_nonnegative(nowm, last_rx_ms[ax]) > can_timeout_ms;
+      const int stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
+      if (stale) flags |= (1u << 2);
       if (saturated[ax]) flags |= (1u << 3);
       m.motor_status[j] = flags;
     }
@@ -1322,7 +1330,9 @@ static void* tlml_tx_thread(void* arg) {
     m.error_count = 0;
     for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
       const int expected = axis_expected[i] ? 1 : 0;
-      const int stale = expected && (elapsed_ms_nonnegative(nowm, last_rx_ms[i]) > can_timeout_ms);
+      const int connected = axis_available[i] ? 1 : 0;
+      const int timed_out = elapsed_ms_nonnegative(nowm, last_rx_ms[i]) > can_timeout_ms;
+      const int stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
       if (axis_fault_active[i]) {
         m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_FAULT);
       }
@@ -1367,7 +1377,7 @@ static void usage(const char* p) {
           "          [--tlml-ip 127.0.0.1 --tlml-port 6020 --tlml-hz 10]\n"
           "          [--rt-enabled 0|1] [--rt-strict 0|1] [--rt-policy fifo|rr|other]\n"
           "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n"
-          "          [--diag-port 0|PORT]\n",
+          "          [--diag-port 0|PORT] [--strict-stale-policy 0|1]\n",
           p);
 }
 
@@ -1422,6 +1432,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   memcpy(sh->d.mirror_axis, cfg->mirror_axis, sizeof(sh->d.mirror_axis));
   memcpy(sh->d.motor_map, cfg->motor_status_map, sizeof(sh->d.motor_map));
   sh->d.controller_id_strict_legacy = cfg->controller_id_strict_legacy ? 1 : 0;
+  sh->d.strict_stale_policy = cfg->strict_stale_policy ? 1 : 0;
 }
 
 int main(int argc, char** argv) {
@@ -1498,6 +1509,7 @@ int main(int argc, char** argv) {
   sh.d.ds402_timeout_ms = 2000;
   sh.d.pp_sdo_diag = 0;
   sh.d.can_timeout_ms = 1000;
+  sh.d.strict_stale_policy = 0;
   sh.d.st_state = STC_STATE_INIT;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     sh.d.last_rx_ms[axis] = sh.d.boot_ms;
@@ -1560,6 +1572,9 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--can-timeout-ms") && i + 1 < argc) {
       net.can_timeout_ms = (uint32_t)atoi(argv[++i]);
       sh.d.can_timeout_ms = net.can_timeout_ms;
+    }
+    else if (!strcmp(argv[i], "--strict-stale-policy") && i + 1 < argc) {
+      sh.d.strict_stale_policy = atoi(argv[++i]) ? 1 : 0;
     }
     else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) {
       net.tlmh_ip = argv[++i];
@@ -1662,6 +1677,7 @@ int main(int argc, char** argv) {
     net.can_timeout_ms = (parsed_cfg.can_timeout_ms > 0) ? (uint32_t)parsed_cfg.can_timeout_ms : 0;
     sh.d.can_timeout_ms = net.can_timeout_ms;
     sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
+    sh.d.strict_stale_policy = parsed_cfg.strict_stale_policy ? 1 : 0;
 
     apply_config_to_shared(&sh, &parsed_cfg);
   } else {
