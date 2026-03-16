@@ -620,50 +620,15 @@ class DiagnosticsWindow : public QMainWindow {
 
   void bringUpCanAndConnect() {
     if (simModeBox_->isChecked()) {
-      appendLog("CAN bring-up skipped in simulation mode.");
-      ackLabel_->setText("CAN action: skipped (simulation mode)");
+      appendLog("CAN rediscovery skipped in simulation mode.");
+      ackLabel_->setText("CAN rediscovery: skipped (simulation mode)");
       return;
     }
 
-    const QString iface = "can0";
-    appendLog(QString("CAN bring-up requested for %1").arg(iface));
-
-    auto runCmd = [this](const QString &program, const QStringList &args) {
-      QProcess proc;
-      proc.start(program, args);
-      if (!proc.waitForStarted(1000)) {
-        return QString("failed to start %1").arg(program);
-      }
-      if (!proc.waitForFinished(6000)) {
-        proc.kill();
-        proc.waitForFinished(500);
-        return QString("timeout running %1 %2").arg(program, args.join(' '));
-      }
-      QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
-      const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
-      if (!err.isEmpty()) {
-        if (!out.isEmpty()) out += " | ";
-        out += err;
-      }
-      if (out.isEmpty()) out = "ok";
-      return out;
-    };
+    appendLog("CAN rediscovery requested (SELFTEST exchange).");
 
     QStringList details;
     bool success = true;
-
-    const QString downOut = runCmd("/sbin/ip", {"link", "set", iface, "down"});
-    details << QString("ip link set %1 down => %2").arg(iface, downOut);
-
-    const int bitrate = 1000000;
-    const QString upOut = runCmd("/sbin/ip", {"link", "set", iface, "type", "can", "bitrate", QString::number(bitrate), "restart-ms", "100"});
-    details << QString("ip link set %1 type can bitrate %2 restart-ms 100 => %3").arg(iface).arg(bitrate).arg(upOut);
-
-    const QString up2Out = runCmd("/sbin/ip", {"link", "set", iface, "up"});
-    details << QString("ip link set %1 up => %2").arg(iface, up2Out);
-
-    const QString canDump = runCmd("/sbin/ip", {"-details", "link", "show", iface});
-    details << QString("ip -details link show %1 => %2").arg(iface, canDump);
 
     stc_icd_cmd_t cmd{};
     makeHeader(&cmd);
@@ -784,11 +749,11 @@ class DiagnosticsWindow : public QMainWindow {
 
     const QString detailsJoined = details.join(" || ");
     if (success) {
-      ackLabel_->setText("CAN action: bring-up + rediscovery SUCCESS");
-      appendLog(QString("CAN action success: %1").arg(detailsJoined));
+      ackLabel_->setText("CAN rediscovery: SUCCESS");
+      appendLog(QString("CAN rediscovery success: %1").arg(detailsJoined));
     } else {
-      ackLabel_->setText("CAN action: bring-up + rediscovery FAILED");
-      appendLog(QString("CAN action failed: %1").arg(detailsJoined));
+      ackLabel_->setText("CAN rediscovery: FAILED");
+      appendLog(QString("CAN rediscovery failed: %1").arg(detailsJoined));
     }
   }
 
@@ -838,9 +803,9 @@ class DiagnosticsWindow : public QMainWindow {
 #endif
 
     if (!hasNetAdmin) {
-      appendLog("Missing CAP_NET_ADMIN; CAN bring-up will fail.");
+      appendLog("CAP_NET_ADMIN is not present in this process.");
     } else {
-      appendLog("CAP_NET_ADMIN present; CAN bring-up is permitted.");
+      appendLog("CAP_NET_ADMIN is present in this process.");
     }
   }
 
@@ -933,7 +898,7 @@ class DiagnosticsWindow : public QMainWindow {
 
     sendButton_ = new QPushButton("Send", cmdGroup);
     reconnectButton_ = new QPushButton("Reconnect CU link", cmdGroup);
-    canBringupButton_ = new QPushButton("Bring up CAN + discover/connect", cmdGroup);
+    canBringupButton_ = new QPushButton("Rediscover/connect CAN devices", cmdGroup);
     for (QPushButton *button : {sendButton_, reconnectButton_, canBringupButton_}) {
       button->setMaximumWidth(kButtonWidth);
       button->setMinimumHeight(kButtonHeight);
