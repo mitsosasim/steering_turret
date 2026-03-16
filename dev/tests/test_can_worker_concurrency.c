@@ -2,7 +2,7 @@
 #include "../src/stc_server.c"
 #undef main
 
-#include <assert.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -94,17 +94,59 @@ int main(void) {
   pthread_t producer_thread;
   pthread_t telemetry_thread;
 
-  assert(pthread_create(&can_thread, NULL, can_worker_thread, &warg) == 0);
+  int rc = pthread_create(&can_thread, NULL, can_worker_thread, &warg);
+  if (rc != 0) {
+    fprintf(stderr, "pthread_create(can_worker_thread) failed rc=%d\n", rc);
+    pthread_mutex_destroy(&sh.mtx);
+    return EXIT_FAILURE;
+  }
 
   stress_ctx_t stress_ctx = {.sh = &sh, .q = &q};
-  assert(pthread_create(&producer_thread, NULL, action_producer_thread, &stress_ctx) == 0);
-  assert(pthread_create(&telemetry_thread, NULL, telemetry_updater_thread, &sh) == 0);
+  rc = pthread_create(&producer_thread, NULL, action_producer_thread, &stress_ctx);
+  if (rc != 0) {
+    fprintf(stderr, "pthread_create(action_producer_thread) failed rc=%d\n", rc);
+    atomic_store(&g_stop, 1);
+    (void)pthread_join(can_thread, NULL);
+    pthread_mutex_destroy(&sh.mtx);
+    return EXIT_FAILURE;
+  }
 
-  assert(pthread_join(producer_thread, NULL) == 0);
-  assert(pthread_join(telemetry_thread, NULL) == 0);
+  rc = pthread_create(&telemetry_thread, NULL, telemetry_updater_thread, &sh);
+  if (rc != 0) {
+    fprintf(stderr, "pthread_create(telemetry_updater_thread) failed rc=%d\n", rc);
+    (void)pthread_join(producer_thread, NULL);
+    atomic_store(&g_stop, 1);
+    (void)pthread_join(can_thread, NULL);
+    pthread_mutex_destroy(&sh.mtx);
+    return EXIT_FAILURE;
+  }
+
+  rc = pthread_join(producer_thread, NULL);
+  if (rc != 0) {
+    fprintf(stderr, "pthread_join(producer_thread) failed rc=%d\n", rc);
+    atomic_store(&g_stop, 1);
+    (void)pthread_join(telemetry_thread, NULL);
+    (void)pthread_join(can_thread, NULL);
+    pthread_mutex_destroy(&sh.mtx);
+    return EXIT_FAILURE;
+  }
+
+  rc = pthread_join(telemetry_thread, NULL);
+  if (rc != 0) {
+    fprintf(stderr, "pthread_join(telemetry_thread) failed rc=%d\n", rc);
+    atomic_store(&g_stop, 1);
+    (void)pthread_join(can_thread, NULL);
+    pthread_mutex_destroy(&sh.mtx);
+    return EXIT_FAILURE;
+  }
 
   atomic_store(&g_stop, 1);
-  assert(pthread_join(can_thread, NULL) == 0);
+  rc = pthread_join(can_thread, NULL);
+  if (rc != 0) {
+    fprintf(stderr, "pthread_join(can_thread) failed rc=%d\n", rc);
+    pthread_mutex_destroy(&sh.mtx);
+    return EXIT_FAILURE;
+  }
 
   pthread_mutex_destroy(&sh.mtx);
   printf("can_worker concurrency stress completed\n");
