@@ -29,10 +29,13 @@
 #include <QtCore/QTime>
 #include <QtCore/QTimer>
 #include <QtCore/QProcess>
+#include <QtCore/QSet>
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
+#include <vector>
 
 #ifdef __linux__
 #include <linux/capability.h>
@@ -143,6 +146,7 @@ class DiagnosticsWindow : public QMainWindow {
     udpLow_ = new QUdpSocket(this);
 
     cfg_ = stc_icd_parse_cfg_default();
+    loadBenchOverrides();
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
@@ -406,6 +410,77 @@ class DiagnosticsWindow : public QMainWindow {
                                 ? pendingCommands_.take(rsp.seq)
                                 : QString("cmd=0x%1").arg(rsp.cmd_id, 4, 16, QChar('0'));
       appendLog(QString("%1 seq=%2 (%3)").arg(ack ? "ACK" : "NACK").arg(rsp.seq).arg(sentText));
+
+      if (ack && rsp.cmd_id == STC_CMD_REQ_HW_INFO && rsp.payload_size > 0) {
+        const QString hwInfo = QString::fromUtf8(reinterpret_cast<const char*>(rsp.payload), rsp.payload_size).trimmed();
+        updateConfigFromHwInfoPayload(hwInfo);
+        updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
+      }
+    }
+  }
+
+  void loadBenchOverrides() {
+    const QString turretAxes = QString::fromLocal8Bit(qgetenv("STC_DIAG_TURRET_AXES"));
+    if (!turretAxes.trimmed().isEmpty()) {
+      configuredTurretAxes_ = parseIdList(turretAxes, 0, kAxisCount - 1);
+    }
+
+    const QString mirrorIds = QString::fromLocal8Bit(qgetenv("STC_DIAG_MIRROR_IDS"));
+    if (!mirrorIds.trimmed().isEmpty()) {
+      configuredMirrorIds_ = parseIdList(mirrorIds, 1, 255);
+    }
+
+    if (configuredMirrorIds_.isEmpty()) {
+      bool ok = false;
+      const int mirrorCount = QString::fromLocal8Bit(qgetenv("STC_DIAG_MIRROR_COUNT")).toInt(&ok);
+      if (ok && mirrorCount > 0) {
+        for (int id = 1; id <= qMin(mirrorCount, 255); ++id) configuredMirrorIds_.push_back(id);
+      }
+    }
+  }
+
+  std::vector<int> parseIdList(const QString &text, int minVal, int maxVal) const {
+    QSet<int> uniq;
+    for (const QString &piece : text.split(QRegularExpression("[\\s,;:]+"), Qt::SkipEmptyParts)) {
+      bool ok = false;
+      const int value = piece.toInt(&ok);
+      if (!ok || value < minVal || value > maxVal) continue;
+      uniq.insert(value);
+    }
+    std::vector<int> out;
+    out.reserve(static_cast<size_t>(uniq.size()));
+    for (const int value : uniq) out.push_back(value);
+    std::sort(out.begin(), out.end());
+    return out;
+  }
+
+  void updateConfigFromHwInfoPayload(const QString &hwInfo) {
+    if (hwInfo.isEmpty()) return;
+
+    const QRegularExpression turretRx("turret_axes\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression mirrorRx("mirror_ids\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression mirrorCountRx("mirror_count\\s*=\\s*(\\d+)", QRegularExpression::CaseInsensitiveOption);
+
+    const auto turretMatch = turretRx.match(hwInfo);
+    if (turretMatch.hasMatch()) {
+      const auto parsed = parseIdList(turretMatch.captured(1), 0, kAxisCount - 1);
+      if (!parsed.empty()) configuredTurretAxes_ = parsed;
+    }
+
+    const auto mirrorMatch = mirrorRx.match(hwInfo);
+    if (mirrorMatch.hasMatch()) {
+      const auto parsed = parseIdList(mirrorMatch.captured(1), 1, 255);
+      if (!parsed.empty()) configuredMirrorIds_ = parsed;
+    } else {
+      const auto countMatch = mirrorCountRx.match(hwInfo);
+      if (countMatch.hasMatch()) {
+        bool ok = false;
+        const int count = countMatch.captured(1).toInt(&ok);
+        if (ok && count > 0) {
+          configuredMirrorIds_.clear();
+          for (int id = 1; id <= qMin(count, 255); ++id) configuredMirrorIds_.push_back(id);
+        }
+      }
     }
   }
 
@@ -580,6 +655,8 @@ class DiagnosticsWindow : public QMainWindow {
                                   .arg(discoveredDevices)
                                   .arg(scanMaxNode));
 
+      lastConnectedDevices_ = connectedDevices;
+      lastDiscoveredDevices_ = discoveredDevices;
       updateDeviceSelectors(connectedDevices, discoveredDevices);
       updateCommandAvailability();
 
@@ -603,6 +680,15 @@ class DiagnosticsWindow : public QMainWindow {
 
   void updateDeviceSelectors(int connectedDevices, int discoveredDevices) {
     const int availableSut = qBound(0, connectedDevices > 2 ? (connectedDevices - 2) / 2 : 0, 8);
+    const int configuredTurretAxes = configuredTurretAxes_.empty() ? 2 : static_cast<int>(configuredTurretAxes_.size());
+    const bool turretSelectable = simModeBox_->isChecked() || configuredTurretAxes >= 1;
+
+    std::vector<int> selectableMirrorIds = configuredMirrorIds_;
+    if (selectableMirrorIds.empty()) {
+      for (int id = 1; id <= 8; ++id) selectableMirrorIds.push_back(id);
+    }
+    const bool mirrorSelectable = simModeBox_->isChecked() || !selectableMirrorIds.empty();
+
     if (sutIdBox_) {
       int desired = preferredSutId_;
       if (desired < 0) desired = sutIdBox_->currentData().toInt();
@@ -619,10 +705,9 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     if (turretTypeBox_) {
-      const bool turretAvailable = simModeBox_->isChecked() || (connectedDevices >= 2);
-      turretTypeBox_->setEnabled(turretAvailable);
-      turretAzSpin_->setEnabled(turretAvailable);
-      turretElSpin_->setEnabled(turretAvailable);
+      turretTypeBox_->setEnabled(turretSelectable);
+      turretAzSpin_->setEnabled(turretSelectable);
+      turretElSpin_->setEnabled(turretSelectable);
     }
 
     if (laserIdSpin_) {
@@ -634,20 +719,23 @@ class DiagnosticsWindow : public QMainWindow {
       if (desired < 0) desired = mirrorIdBox_->currentData().toInt();
       mirrorIdBox_->clear();
       mirrorIdBox_->addItem("All", 0xFF);
-      const int maxMirror = simModeBox_->isChecked() ? 8 : discoveredDevices;
-      for (int id = 1; id <= maxMirror; ++id) {
+      for (const int id : selectableMirrorIds) {
         mirrorIdBox_->addItem(QString::number(id), id);
       }
       int idx = mirrorIdBox_->findData(desired);
       if (idx < 0) idx = 0;
       mirrorIdBox_->setCurrentIndex(idx);
       preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
-      mirrorIdBox_->setEnabled(maxMirror > 0 || simModeBox_->isChecked());
+      mirrorIdBox_->setEnabled(mirrorSelectable);
     }
 
-    availabilityLabel_->setText(QString("Selectable devices: turret %1, SUT %2")
-                                  .arg(connectedDevices >= 2 ? "enabled" : "disabled")
-                                  .arg(availableSut));
+    availabilityLabel_->setText(QString("Command selectable (mapping/bench): turret %1 (%2 axis map), mirror IDs %3, SUT %4 | HW connected now: turret axes %5, discovered nodes %6")
+                                  .arg(turretSelectable ? "yes" : "no")
+                                  .arg(configuredTurretAxes)
+                                  .arg(selectableMirrorIds.empty() ? QString("none") : QString::number(selectableMirrorIds.size()))
+                                  .arg(availableSut)
+                                  .arg(qMin(connectedDevices, 2))
+                                  .arg(discoveredDevices));
     inventoryLabel_->setText(QString("Inventory: discovered=%1, connected=%2, SUT=%3")
                                .arg(discoveredDevices)
                                .arg(connectedDevices)
@@ -1278,6 +1366,10 @@ class DiagnosticsWindow : public QMainWindow {
   QSpinBox *tlmLowPortSpin_{};
   int preferredMirrorId_{0xFF};
   int preferredSutId_{0xFF};
+  int lastConnectedDevices_{0};
+  int lastDiscoveredDevices_{0};
+  std::vector<int> configuredTurretAxes_{};
+  std::vector<int> configuredMirrorIds_{};
 
   std::array<double, kAxisCount> simPos_{};
   std::array<double, kAxisCount> simVel_{};
