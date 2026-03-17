@@ -4,6 +4,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -11,6 +12,13 @@ typedef struct {
   shared_t* sh;
   actionq_t* q;
 } stress_ctx_t;
+
+static void check_pthread(int rc, const char* what) {
+  if (rc != 0) {
+    fprintf(stderr, "%s failed rc=%d\n", what, rc);
+    abort();
+  }
+}
 
 static void* action_producer_thread(void* arg) {
   stress_ctx_t* ctx = (stress_ctx_t*)arg;
@@ -94,17 +102,17 @@ int main(void) {
   pthread_t producer_thread;
   pthread_t telemetry_thread;
 
-  assert(pthread_create(&can_thread, NULL, can_worker_thread, &warg) == 0);
+  check_pthread(pthread_create(&can_thread, NULL, can_worker_thread, &warg), "pthread_create(can)");
 
   stress_ctx_t stress_ctx = {.sh = &sh, .q = &q};
-  assert(pthread_create(&producer_thread, NULL, action_producer_thread, &stress_ctx) == 0);
-  assert(pthread_create(&telemetry_thread, NULL, telemetry_updater_thread, &sh) == 0);
+  check_pthread(pthread_create(&producer_thread, NULL, action_producer_thread, &stress_ctx), "pthread_create(producer)");
+  check_pthread(pthread_create(&telemetry_thread, NULL, telemetry_updater_thread, &sh), "pthread_create(telemetry)");
 
-  assert(pthread_join(producer_thread, NULL) == 0);
-  assert(pthread_join(telemetry_thread, NULL) == 0);
+  check_pthread(pthread_join(producer_thread, NULL), "pthread_join(producer)");
+  check_pthread(pthread_join(telemetry_thread, NULL), "pthread_join(telemetry)");
 
   atomic_store(&g_stop, 1);
-  assert(pthread_join(can_thread, NULL) == 0);
+  check_pthread(pthread_join(can_thread, NULL), "pthread_join(can)");
 
   pthread_mutex_destroy(&sh.mtx);
   printf("can_worker concurrency stress completed\n");
