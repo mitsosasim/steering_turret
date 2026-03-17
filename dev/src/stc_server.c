@@ -235,6 +235,7 @@ typedef struct {
 
   // --- runtime flags
   int can_ok;
+  int num_axes;
   uint8_t axis_available[STC_AXIS_COUNT];
   uint8_t axis_expected[STC_AXIS_COUNT];
   uint8_t can_discovered_nodes[16];
@@ -451,6 +452,20 @@ static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
   sh->saturated[axis] = true;
 }
 
+static int axis_in_runtime_range(const shared_data_t* sh, int axis) {
+  if (!sh) return 0;
+  if (axis < 0 || axis >= (int)STC_AXIS_COUNT) return 0;
+  return axis < sh->num_axes;
+}
+
+static int axis_is_operational(const shared_data_t* sh, int axis) {
+  if (!axis_in_runtime_range(sh, axis)) return 0;
+  if (!sh->axis_expected[axis]) return 0;
+  if (!sh->axis_available[axis]) return 0;
+  if (sh->axis_fault_active[axis]) return 0;
+  return 1;
+}
+
 static uint32_t turret_axes_mask(const shared_data_t* sh) {
   uint32_t mask = 0;
   if (sh->turret_az_axis >= 0 && sh->turret_az_axis < (int)STC_AXIS_COUNT) mask |= (1u << sh->turret_az_axis);
@@ -464,8 +479,8 @@ static uint32_t sut_axes_mask(const shared_data_t* sh, uint8_t id) {
     for (int i = 0; i < sh->sut_count; i++) {
       int az = sh->sut_az_axis[i];
       int el = sh->sut_el_axis[i];
-      if (az >= 0 && az < (int)STC_AXIS_COUNT) mask |= (1u << az);
-      if (el >= 0 && el < (int)STC_AXIS_COUNT) mask |= (1u << el);
+      if (axis_is_operational(sh, az)) mask |= (1u << az);
+      if (axis_is_operational(sh, el)) mask |= (1u << el);
     }
     return mask;
   }
@@ -482,7 +497,7 @@ static uint32_t mirror_axes_mask(const shared_data_t* sh, uint8_t id) {
   if (id == 0xFF) {
     for (int i = 0; i < sh->mirror_count; i++) {
       int axis = sh->mirror_axis[i];
-      if (axis >= 0 && axis < (int)STC_AXIS_COUNT) mask |= (1u << axis);
+      if (axis_is_operational(sh, axis)) mask |= (1u << axis);
     }
     return mask;
   }
@@ -1415,6 +1430,7 @@ typedef struct {
 } cli_override_flags_t;
 
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
+  sh->d.num_axes = cfg->num_axes;
   memset(sh->d.axis_expected, 0, sizeof(sh->d.axis_expected));
   for (int i = 0; i < cfg->num_axes && i < (int)STC_AXIS_COUNT; i++) {
     sh->d.axis_node_id[i] = (uint8_t)cfg->axis_node_id[i];
@@ -2131,7 +2147,16 @@ int main(int argc, char** argv) {
                   if (cmd.u.sut.id != 0xFF && cmd.u.sut.id != (uint8_t)(i + 1)) continue;
                   int az = sh.d.sut_az_axis[i];
                   int el = sh.d.sut_el_axis[i];
+
+                  if (cmd.u.sut.id == 0xFF && az >= 0 && !axis_is_operational(&sh.d, az)) {
+                    STC_LOG_WARN("SUT All skipped axis %d (out-of-range/not-expected/disconnected/fault)", az);
+                  }
+                  if (cmd.u.sut.id == 0xFF && el >= 0 && !axis_is_operational(&sh.d, el)) {
+                    STC_LOG_WARN("SUT All skipped axis %d (out-of-range/not-expected/disconnected/fault)", el);
+                  }
+
                   if (az >= 0 && az < (int)STC_AXIS_COUNT) {
+                    if (cmd.u.sut.id == 0xFF && !axis_is_operational(&sh.d, az)) continue;
                     if (cmd.u.sut.motion_type == STC_MOTION_SPEED) {
                       speeds[az] = (double)cmd.u.sut.az;
                       bool target_limited = false, speed_limited = false;
@@ -2148,6 +2173,7 @@ int main(int argc, char** argv) {
                     }
                   }
                   if (el >= 0 && el < (int)STC_AXIS_COUNT) {
+                    if (cmd.u.sut.id == 0xFF && !axis_is_operational(&sh.d, el)) continue;
                     if (cmd.u.sut.motion_type == STC_MOTION_SPEED) {
                       speeds[el] = (double)cmd.u.sut.el;
                       bool target_limited = false, speed_limited = false;
@@ -2169,7 +2195,11 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < sh.d.mirror_count; i++) {
                   if (cmd.u.mirror.mirror_id != 0xFF && cmd.u.mirror.mirror_id != (uint8_t)(i + 1)) continue;
                   int axis = sh.d.mirror_axis[i];
+                  if (cmd.u.mirror.mirror_id == 0xFF && axis >= 0 && !axis_is_operational(&sh.d, axis)) {
+                    STC_LOG_WARN("Mirror All skipped axis %d (out-of-range/not-expected/disconnected/fault)", axis);
+                  }
                   if (axis < 0 || axis >= (int)STC_AXIS_COUNT) continue;
+                  if (cmd.u.mirror.mirror_id == 0xFF && !axis_is_operational(&sh.d, axis)) continue;
                   if (cmd.u.mirror.motion_type == STC_MOTION_SPEED) {
                     speeds[axis] = (double)cmd.u.mirror.elevation;
                     bool target_limited = false, speed_limited = false;
