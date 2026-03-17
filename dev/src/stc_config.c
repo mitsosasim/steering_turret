@@ -195,7 +195,12 @@ bool load_config(const char* path, stc_config_t* cfg) {
         return false;
       }
       *close = '\0';
-      snprintf(section, sizeof(section), "%s", line + 1);
+      {
+        const size_t sec_src_len = strlen(line + 1);
+        const size_t sec_len = (sec_src_len < (sizeof(section) - 1)) ? sec_src_len : (sizeof(section) - 1);
+        memcpy(section, line + 1, sec_len);
+        section[sec_len] = '\0';
+      }
       trim_inplace(section);
 
       const int mir_idx = parse_indexed_section(section, "Mirror", STC_MAX_MIRROR, 1);
@@ -217,8 +222,12 @@ bool load_config(const char* path, stc_config_t* cfg) {
     char* value = eq + 1;
     trim_inplace(key);
     trim_inplace(value);
-    strncpy(parse_key, key, sizeof(parse_key) - 1);
-    parse_key[sizeof(parse_key) - 1] = '\0';
+    {
+      const size_t key_src_len = strlen(key);
+      const size_t key_len = (key_src_len < (sizeof(parse_key) - 1)) ? key_src_len : (sizeof(parse_key) - 1);
+      memcpy(parse_key, key, key_len);
+      parse_key[key_len] = '\0';
+    }
     parse_error_reason = "invalid value";
 
     if (strcmp(section, "Network") == 0) {

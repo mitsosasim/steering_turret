@@ -430,7 +430,7 @@ class DiagnosticsWindow : public QMainWindow {
       configuredMirrorIds_ = parseIdList(mirrorIds, 1, 255);
     }
 
-    if (configuredMirrorIds_.isEmpty()) {
+    if (configuredMirrorIds_.empty()) {
       bool ok = false;
       const int mirrorCount = QString::fromLocal8Bit(qgetenv("STC_DIAG_MIRROR_COUNT")).toInt(&ok);
       if (ok && mirrorCount > 0) {
