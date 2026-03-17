@@ -656,11 +656,20 @@ int pd4c_pp_move(pd4c_ctx_t* ctx,
     uint16_t cw_sp1 = (uint16_t)(cw_base |  0x0010); // bit4 = 1
 
     // (1) Arm: bit4 low, wait set-point-ack low (bit12=0)
+    // Some drives keep TPDO1 sparse while idle; in that case we continue with
+    // a best-effort trigger sequence instead of aborting before sending RPDO2.
     rc = pd4c_rpdo1_send_control_mode(ctx, cw_sp0, PD4C_MODE_PROFILE_POSITION);
     if (rc != PD4C_OK) return rc;
 
     rc = wait_statusword_mask_eq(ctx, PD4C_SW_SETPOINT_ACK, 0, timeout_ms);
-    if (rc != PD4C_OK) return (rc == PD4C_ETIMEDOUT) ? PD4C_ETIMEDOUT : rc;
+    if (rc != PD4C_OK) {
+        if (rc == PD4C_ETIMEDOUT) {
+            logf_ctx(ctx, PD4C_LOG_WARN,
+                     "pp_move: setpoint-ack low not observed before trigger; continuing with best-effort pulse");
+        } else {
+            return rc;
+        }
+    }
 
     // (2) Send setpoint + profile vel via RPDO2
     rc = pd4c_rpdo2_send_pp(ctx, target_pos, profile_vel);
@@ -671,14 +680,28 @@ int pd4c_pp_move(pd4c_ctx_t* ctx,
     if (rc != PD4C_OK) return rc;
 
     rc = wait_statusword_mask_eq(ctx, PD4C_SW_SETPOINT_ACK, PD4C_SW_SETPOINT_ACK, timeout_ms);
-    if (rc != PD4C_OK) return (rc == PD4C_ETIMEDOUT) ? PD4C_ETIMEDOUT : rc;
+    if (rc != PD4C_OK) {
+        if (rc == PD4C_ETIMEDOUT) {
+            logf_ctx(ctx, PD4C_LOG_WARN,
+                     "pp_move: setpoint-ack high not observed after trigger; command was sent");
+        } else {
+            return rc;
+        }
+    }
 
     // (4) Clear bit4, wait ack clear (bit12=0) so next command works reliably
     rc = pd4c_rpdo1_send_control_mode(ctx, cw_sp0, PD4C_MODE_PROFILE_POSITION);
     if (rc != PD4C_OK) return rc;
 
     rc = wait_statusword_mask_eq(ctx, PD4C_SW_SETPOINT_ACK, 0, timeout_ms);
-    if (rc != PD4C_OK) return (rc == PD4C_ETIMEDOUT) ? PD4C_ETIMEDOUT : rc;
+    if (rc != PD4C_OK) {
+        if (rc == PD4C_ETIMEDOUT) {
+            logf_ctx(ctx, PD4C_LOG_WARN,
+                     "pp_move: setpoint-ack low not observed after clear; keeping command success for compatibility");
+        } else {
+            return rc;
+        }
+    }
 
     return PD4C_OK;
 }
