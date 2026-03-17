@@ -109,7 +109,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->turret_az_axis = 0;
   cfg->turret_el_axis = 1;
   cfg->sut_count = STC_MAX_SUT;
-  cfg->mirror_count = STC_MAX_MIRROR;
+  cfg->mirror_count = 0;
 
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
     cfg->axis_node_id[i] = (int)(i + 1);
@@ -148,7 +148,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
     cfg->sut_el_axis[i] = (int)(10 + i);
   }
   for (size_t i = 0; i < STC_MAX_MIRROR; i++) {
-    cfg->mirror_axis[i] = (int)(10 + i);
+    cfg->mirror_axis[i] = -1;
   }
   for (size_t i = 0; i < 8; i++) cfg->motor_status_map[i] = (int8_t)(2 + i);
 }
@@ -197,6 +197,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
       *close = '\0';
       snprintf(section, sizeof(section), "%s", line + 1);
       trim_inplace(section);
+
+      const int mir_idx = parse_indexed_section(section, "Mirror", STC_MAX_MIRROR, 1);
+      if (mir_idx >= 0 && mir_idx + 1 > cfg->mirror_count) {
+        cfg->mirror_count = mir_idx + 1;
+      }
       continue;
     }
 
@@ -403,7 +408,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
         parse_error_reason = "unknown key";
         goto parse_error;
       }
-      if (mir_idx + 1 > cfg->mirror_count) cfg->mirror_count = mir_idx + 1;
       continue;
     }
 
