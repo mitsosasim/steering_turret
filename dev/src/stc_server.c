@@ -1082,6 +1082,10 @@ static long telemetry_rate_hz_to_period_ns(int rate_hz, long default_period_ns) 
   return 1000000000L / rate_hz;
 }
 
+static double ns_to_us(uint64_t ns) {
+  return (double)ns / 1000.0;
+}
+
 static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms) {
   pthread_mutex_lock(&sh->mtx);
   if (elapsed_ms_nonnegative(now_ms, sh->d.obs_last_log_ms) < 1000) {
@@ -1096,22 +1100,39 @@ static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms) {
   uint64_t qpeak = sh->d.action_queue_depth_peak;
   pthread_mutex_unlock(&sh->mtx);
 
-  STC_LOG_INFO("OBS type=timing tlmh={samples:%llu,deadline_miss:%llu,last_jitter_ns:{min:%llu,max:%llu,avg:%llu}} tlml={samples:%llu,deadline_miss:%llu,last_jitter_ns:{min:%llu,max:%llu,avg:%llu}} cmd={samples:%llu,tcp_to_queue_avg_ns:%llu,queue_to_exec_avg_ns:%llu,end_to_end_avg_ns:%llu} queue_depth_peak=%llu",
-               (unsigned long long)h.sample_count,
-               (unsigned long long)h.deadline_miss_count,
-               (unsigned long long)h.last_sec_jitter_min_ns,
-               (unsigned long long)h.last_sec_jitter_max_ns,
-               (unsigned long long)h.last_sec_jitter_avg_ns,
-               (unsigned long long)l.sample_count,
-               (unsigned long long)l.deadline_miss_count,
-               (unsigned long long)l.last_sec_jitter_min_ns,
-               (unsigned long long)l.last_sec_jitter_max_ns,
-               (unsigned long long)l.last_sec_jitter_avg_ns,
-               (unsigned long long)c.samples,
-               (unsigned long long)c.tcp_to_queue_avg_ns,
-               (unsigned long long)c.queue_to_exec_avg_ns,
-               (unsigned long long)c.end_to_end_avg_ns,
-               (unsigned long long)qpeak);
+  if (c.samples > 0) {
+    STC_LOG_INFO(
+      "OBS timing | tlmh(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=%llu tcp_to_queue_us=%.1f queue_to_exec_us=%.1f end_to_end_us=%.1f) | queue_depth_peak=%llu",
+      (unsigned long long)h.sample_count,
+      (unsigned long long)h.deadline_miss_count,
+      ns_to_us(h.last_sec_jitter_min_ns),
+      ns_to_us(h.last_sec_jitter_avg_ns),
+      ns_to_us(h.last_sec_jitter_max_ns),
+      (unsigned long long)l.sample_count,
+      (unsigned long long)l.deadline_miss_count,
+      ns_to_us(l.last_sec_jitter_min_ns),
+      ns_to_us(l.last_sec_jitter_avg_ns),
+      ns_to_us(l.last_sec_jitter_max_ns),
+      (unsigned long long)c.samples,
+      ns_to_us(c.tcp_to_queue_avg_ns),
+      ns_to_us(c.queue_to_exec_avg_ns),
+      ns_to_us(c.end_to_end_avg_ns),
+      (unsigned long long)qpeak);
+  } else {
+    STC_LOG_INFO(
+      "OBS timing | tlmh(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=0 pending) | queue_depth_peak=%llu",
+      (unsigned long long)h.sample_count,
+      (unsigned long long)h.deadline_miss_count,
+      ns_to_us(h.last_sec_jitter_min_ns),
+      ns_to_us(h.last_sec_jitter_avg_ns),
+      ns_to_us(h.last_sec_jitter_max_ns),
+      (unsigned long long)l.sample_count,
+      (unsigned long long)l.deadline_miss_count,
+      ns_to_us(l.last_sec_jitter_min_ns),
+      ns_to_us(l.last_sec_jitter_avg_ns),
+      ns_to_us(l.last_sec_jitter_max_ns),
+      (unsigned long long)qpeak);
+  }
 }
 
 typedef struct {

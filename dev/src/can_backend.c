@@ -19,6 +19,15 @@ typedef enum {
 
 struct motion_backend {
   motion_backend_cfg_t cfg;
+  struct {
+    int responsive;
+    int identity_ok;
+    int identity_rc;
+    uint32_t vendor_id;
+    uint32_t product_code;
+    uint32_t revision;
+    uint32_t serial;
+  } node_discovery[128];
   pd4c_ctx_t ctx[STC_AXIS_COUNT];
   int axis_connected[STC_AXIS_COUNT];
   int axis_enabled[STC_AXIS_COUNT];
@@ -71,12 +80,37 @@ static int verify_node_responsive(pd4c_ctx_t* ctx, uint32_t timeout_ms) {
   return pd4c_sdo_read_u32(ctx, 0x1018u, 0x01u, &vendor_id) == PD4C_OK;
 }
 
+static int bounded_sdo_timeout_ms(uint32_t timeout_ms) {
+  if (timeout_ms == 0 || timeout_ms > INT32_MAX) return 500;
+  return (int)timeout_ms;
+}
+
+static int read_node_identity(pd4c_ctx_t* ctx, uint32_t timeout_ms, uint32_t identity[4], uint8_t* failed_subidx) {
+  if (!ctx || !identity || !failed_subidx) return -1;
+
+  const int sdo_timeout_ms = bounded_sdo_timeout_ms(timeout_ms);
+  pd4c_set_sdo_timeout(ctx, sdo_timeout_ms);
+
+  for (uint8_t i = 0; i < 4; i++) {
+    const uint8_t subidx = (uint8_t)(i + 1u);
+    int rc = pd4c_sdo_read_u32(ctx, 0x1018u, subidx, &identity[i]);
+    if (rc != PD4C_OK) {
+      *failed_subidx = subidx;
+      return rc;
+    }
+  }
+
+  *failed_subidx = 0;
+  return PD4C_OK;
+}
+
 static int discover_responsive_nodes(struct motion_backend* b) {
   if (!b) return 0;
 
   int responsive_count = 0;
   const int scan_max = bounded_scan_max(b->cfg.can_scan_max_node);
 
+  memset(b->node_discovery, 0, sizeof(b->node_discovery));
   memset(b->snap.can_discovered_nodes, 0, sizeof(b->snap.can_discovered_nodes));
   for (int node = 1; node <= scan_max; node++) {
     pd4c_ctx_t tmp;
@@ -86,12 +120,40 @@ static int discover_responsive_nodes(struct motion_backend* b) {
     if (pd4c_open(&tmp, b->cfg.can_if, (uint8_t)node) != PD4C_OK) continue;
 
     (void)pd4c_nmt_start(&tmp);
-    if (verify_node_responsive(&tmp, b->cfg.can_timeout_ms)) {
+    const int responsive = verify_node_responsive(&tmp, b->cfg.can_timeout_ms);
+    b->node_discovery[node].responsive = responsive ? 1 : 0;
+    if (responsive) {
+      uint32_t identity[4] = {0};
+      uint8_t failed_subidx = 0;
+      int identity_rc = read_node_identity(&tmp, b->cfg.can_timeout_ms, identity, &failed_subidx);
+      if (identity_rc == PD4C_OK) {
+        b->node_discovery[node].identity_ok = 1;
+        b->node_discovery[node].vendor_id = identity[0];
+        b->node_discovery[node].product_code = identity[1];
+        b->node_discovery[node].revision = identity[2];
+        b->node_discovery[node].serial = identity[3];
+        STC_LOG_INFO(
+          "can_discovery node=%d responsive=yes vendor_id=0x%08x product_code=0x%08x revision=0x%08x serial=0x%08x",
+          node,
+          b->node_discovery[node].vendor_id,
+          b->node_discovery[node].product_code,
+          b->node_discovery[node].revision,
+          b->node_discovery[node].serial);
+      } else {
+        b->node_discovery[node].identity_ok = 0;
+        b->node_discovery[node].identity_rc = identity_rc;
+        STC_LOG_WARN(
+          "can_discovery node=%d responsive=yes identity_read=failed failed_subidx=0x%02x rc=%d",
+          node, failed_subidx, identity_rc);
+      }
+
       const int node_idx = responsive_count;
       if (node_idx < (int)(sizeof(b->snap.can_discovered_nodes) / sizeof(b->snap.can_discovered_nodes[0]))) {
         b->snap.can_discovered_nodes[node_idx] = (uint8_t)node;
       }
       responsive_count++;
+    } else {
+      STC_LOG_INFO("can_discovery node=%d responsive=no identity_read=skipped reason=liveness_failed", node);
     }
     pd4c_close(&tmp);
   }
@@ -137,6 +199,22 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
     b->snap.last_rx_ms[axis] = b->axis_last_seen_ms[axis];
     b->snap.last_rx_ms[axis] = mono_ms();
     STC_LOG_INFO("connected axis=%zu node=%u", axis, node_id);
+    if (b->node_discovery[node_id].identity_ok) {
+      STC_LOG_INFO(
+        "can_axis_connect axis=%zu configured_node=%u discovery_identity=ok vendor_id=0x%08x product_code=0x%08x revision=0x%08x serial=0x%08x",
+        axis,
+        node_id,
+        b->node_discovery[node_id].vendor_id,
+        b->node_discovery[node_id].product_code,
+        b->node_discovery[node_id].revision,
+        b->node_discovery[node_id].serial);
+    } else {
+      STC_LOG_INFO(
+        "can_axis_connect axis=%zu configured_node=%u discovery_identity=unavailable reason=read_failed rc=%d",
+        axis,
+        node_id,
+        b->node_discovery[node_id].identity_rc);
+    }
   }
   STC_LOG_INFO("discovery summary: scanned %d, responsive %u, connected %u",
     bounded_scan_max(b->cfg.can_scan_max_node), b->snap.can_discovered_devices, b->snap.can_connected_devices);
