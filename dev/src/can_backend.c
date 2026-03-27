@@ -55,6 +55,18 @@ static int bounded_scan_max(int configured_scan_max) {
   return scan_max;
 }
 
+static int effective_scan_max(const motion_backend_cfg_t* cfg) {
+  if (!cfg) return bounded_scan_max(1);
+
+  int axis_max_node = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if ((int)cfg->axis_node_id[axis] > axis_max_node) axis_max_node = (int)cfg->axis_node_id[axis];
+  }
+
+  const int scan_max = (cfg->can_scan_max_node > axis_max_node) ? cfg->can_scan_max_node : axis_max_node;
+  return bounded_scan_max(scan_max);
+}
+
 static uint64_t mono_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -104,11 +116,19 @@ static int read_node_identity(pd4c_ctx_t* ctx, uint32_t timeout_ms, uint32_t ide
   return PD4C_OK;
 }
 
+static int read_node_id_crosscheck(pd4c_ctx_t* ctx, uint32_t timeout_ms, uint8_t* node_id) {
+  if (!ctx || !node_id) return -1;
+
+  const int sdo_timeout_ms = bounded_sdo_timeout_ms(timeout_ms);
+  pd4c_set_sdo_timeout(ctx, sdo_timeout_ms);
+  return pd4c_sdo_read_u8(ctx, 0x2009u, 0x00u, node_id);
+}
+
 static int discover_responsive_nodes(struct motion_backend* b) {
   if (!b) return 0;
 
   int responsive_count = 0;
-  const int scan_max = bounded_scan_max(b->cfg.can_scan_max_node);
+  const int scan_max = effective_scan_max(&b->cfg);
 
   memset(b->node_discovery, 0, sizeof(b->node_discovery));
   memset(b->snap.can_discovered_nodes, 0, sizeof(b->snap.can_discovered_nodes));
@@ -145,6 +165,27 @@ static int discover_responsive_nodes(struct motion_backend* b) {
         STC_LOG_WARN(
           "can_discovery node=%d responsive=yes identity_read=failed failed_subidx=0x%02x rc=%d",
           node, failed_subidx, identity_rc);
+      }
+
+      uint8_t reported_node_id = 0;
+      const int node_id_rc = read_node_id_crosscheck(&tmp, b->cfg.can_timeout_ms, &reported_node_id);
+      if (node_id_rc == PD4C_OK) {
+        if ((int)reported_node_id != node) {
+          STC_LOG_WARN(
+            "can_discovery node=%d node_id_object_0x2009=0x%02x mismatch=yes",
+            node,
+            reported_node_id);
+        } else {
+          STC_LOG_INFO(
+            "can_discovery node=%d node_id_object_0x2009=0x%02x mismatch=no",
+            node,
+            reported_node_id);
+        }
+      } else {
+        STC_LOG_WARN(
+          "can_discovery node=%d node_id_object_0x2009=unavailable rc=%d",
+          node,
+          node_id_rc);
       }
 
       const int node_idx = responsive_count;
@@ -217,7 +258,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
     }
   }
   STC_LOG_INFO("discovery summary: scanned %d, responsive %u, connected %u",
-    bounded_scan_max(b->cfg.can_scan_max_node), b->snap.can_discovered_devices, b->snap.can_connected_devices);
+    effective_scan_max(&b->cfg), b->snap.can_discovered_devices, b->snap.can_connected_devices);
   b->snap.can_ok = 1;
   *out_backend = b;
   return 0;
@@ -237,7 +278,7 @@ int motion_backend_discover(motion_backend_t* backend) {
   if (!b) return -1;
   const int responsive_count = discover_responsive_nodes(b);
   STC_LOG_INFO("discovery summary: scanned %d, responsive %d, connected %u",
-    bounded_scan_max(b->cfg.can_scan_max_node), responsive_count, b->snap.can_connected_devices);
+    effective_scan_max(&b->cfg), responsive_count, b->snap.can_connected_devices);
   return responsive_count;
 }
 
