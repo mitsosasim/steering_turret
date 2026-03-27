@@ -1484,7 +1484,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
     sh->d.axis_expected[i] = (cfg->axis_node_id[i] > 0) ? 1u : 0u;
     sh->d.cfg[i].counts_per_rev = cfg->axis_counts_per_rev[i];
     sh->d.cfg[i].gear_ratio = cfg->axis_gear_ratio[i];
-    sh->d.cfg[i].vel_raw_units = cfg->axis_vel_is_rpm[i] ? AXIS_VEL_RAW_RPM : AXIS_VEL_RAW_DEG_PER_SEC;
+    sh->d.cfg[i].vel_raw_units = AXIS_VEL_RAW_DEG_PER_SEC;
     sh->d.cfg[i].vel_scale = 1.0;
     sh->d.cfg[i].az_min_deg = cfg->axis_min_deg[i];
     sh->d.cfg[i].az_max_deg = cfg->axis_max_deg[i];
@@ -1817,7 +1817,6 @@ int main(int argc, char** argv) {
     parsed_cfg.axis_node_id[0] = net.node_id;
     parsed_cfg.axis_counts_per_rev[0] = sh.d.cfg[0].counts_per_rev;
     parsed_cfg.axis_gear_ratio[0] = sh.d.cfg[0].gear_ratio;
-    parsed_cfg.axis_vel_is_rpm[0] = (sh.d.cfg[0].vel_raw_units == AXIS_VEL_RAW_RPM) ? 1 : 0;
     parsed_cfg.axis_min_deg[0] = sh.d.cfg[0].az_min_deg;
     parsed_cfg.axis_max_deg[0] = sh.d.cfg[0].az_max_deg;
     parsed_cfg.axis_max_speed_deg_s[0] = sh.d.cfg[0].max_speed_deg_s;

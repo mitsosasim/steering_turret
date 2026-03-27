@@ -11,9 +11,7 @@ extern "C" {
 #define STC_AXIS_COUNT 18u
 
 typedef enum axis_vel_raw_units_e {
-  AXIS_VEL_RAW_DEG_PER_SEC = 0,
-  AXIS_VEL_RAW_RPM = 1,
-  AXIS_VEL_RAW_COUNTS_PER_SEC = 2
+  AXIS_VEL_RAW_DEG_PER_SEC = 0
 } axis_vel_raw_units_t;
 
 typedef struct axis_cfg_s {

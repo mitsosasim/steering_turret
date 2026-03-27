@@ -33,21 +33,7 @@ int32_t axis_deg_to_counts(const axis_cfg_t* cfg, double deg) {
 double axis_vel_to_deg_s(const axis_cfg_t* cfg, int32_t vel_raw) {
   const double gr = safe_gr(cfg);
   const double vel_scale = safe_vel_scale(cfg);
-
-  double motor_deg_s = 0.0;
-  switch (cfg ? cfg->vel_raw_units : AXIS_VEL_RAW_DEG_PER_SEC) {
-    case AXIS_VEL_RAW_DEG_PER_SEC:
-      motor_deg_s = ((double)vel_raw) * vel_scale;
-      break;
-    case AXIS_VEL_RAW_RPM:
-      motor_deg_s = ((double)vel_raw) * 6.0 * vel_scale;
-      break;
-    case AXIS_VEL_RAW_COUNTS_PER_SEC:
-    default:
-      motor_deg_s = ((double)vel_raw) * 360.0 * vel_scale / safe_cpr(cfg);
-      break;
-  }
-
+  const double motor_deg_s = ((double)vel_raw) * vel_scale;
   return motor_deg_s / gr;
 }
 
