@@ -309,6 +309,13 @@ int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   return 0;
 }
 
+int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
+  struct motion_backend* b = (struct motion_backend*)backend;
+  if (!b) return -1;
+  STC_LOG_INFO("laser_stub id=%u on_off=%u (no physical laser hardware integrated)", laser_id, on_off);
+  return 0;
+}
+
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !snapshot) return -1;

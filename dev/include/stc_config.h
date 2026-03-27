@@ -53,6 +53,7 @@ typedef struct stc_config_s {
   int sut_count;
   int sut_az_axis[STC_MAX_SUT];
   int sut_el_axis[STC_MAX_SUT];
+  uint8_t sut_laser_on[STC_MAX_SUT];
 
   int mirror_count;
   int mirror_axis[STC_MAX_MIRROR];

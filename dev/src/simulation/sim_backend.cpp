@@ -205,6 +205,16 @@ int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   }
   return 0;
 }
+
+int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
+  motion_backend* b = reinterpret_cast<motion_backend*>(backend);
+  if (!b) return -1;
+  std::lock_guard<std::mutex> lock(b->mtx);
+  (void)laser_id;
+  (void)on_off;
+  return 0;
+}
+
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !snapshot) return -1;

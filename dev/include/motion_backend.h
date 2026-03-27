@@ -56,6 +56,7 @@ int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, 
 int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]);
 int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask);
 int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask);
+int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off);
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot);
 
 #ifdef __cplusplus

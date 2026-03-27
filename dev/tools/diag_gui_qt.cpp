@@ -641,24 +641,18 @@ class DiagnosticsWindow : public QMainWindow {
                           .arg(tlm.humidity_pct, 0, 'f', 1)
                           .arg(tlm.pressure_hpa, 0, 'f', 1));
 
-      const int bitrateKbps = static_cast<int>(tlm.laser_status[0]) * 10 + static_cast<int>(tlm.laser_status[1]);
-      const int connectedDevices = static_cast<int>(tlm.laser_status[2]);
-      const int discoveredDevices = static_cast<int>(tlm.laser_status[3]);
-      const int scanMaxNode = static_cast<int>(tlm.laser_status[4]);
-      const int restartMs = (static_cast<int>(tlm.laser_status[5]) << 8) | static_cast<int>(tlm.laser_status[6]);
-      const bool canOk = tlm.laser_status[7] != 0;
+      QStringList laserStates;
+      int laserOnCount = 0;
+      for (int i = 0; i < 8; ++i) {
+        const bool on = tlm.laser_status[i] != 0;
+        if (on) ++laserOnCount;
+        laserStates << QString("SUT%1:%2").arg(i + 1).arg(on ? "ON" : "OFF");
+      }
+      connectionLabel_->setText(QString("Laser status (%1/8 ON) | %2")
+                                  .arg(laserOnCount)
+                                  .arg(laserStates.join(", ")));
 
-      connectionLabel_->setText(QString("CAN %1 | if-speed %2 kbps | restart %3 ms | connected %4 | discovered %5 | scan<=%6")
-                                  .arg(canOk ? "UP" : "DOWN")
-                                  .arg(bitrateKbps)
-                                  .arg(restartMs)
-                                  .arg(connectedDevices)
-                                  .arg(discoveredDevices)
-                                  .arg(scanMaxNode));
-
-      lastConnectedDevices_ = connectedDevices;
-      lastDiscoveredDevices_ = discoveredDevices;
-      updateDeviceSelectors(connectedDevices, discoveredDevices);
+      updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
       updateCommandAvailability();
 
       QStringList errors;
@@ -1081,7 +1075,7 @@ class DiagnosticsWindow : public QMainWindow {
     lowSeqLabel_ = new QLabel("Low-rate seq: -", statusGroup);
     envLabel_ = new QLabel("Temp -, Hum -, Press -", statusGroup);
     tcpStatusLabel_ = new QLabel("CU TCP: DISCONNECTED", statusGroup);
-    connectionLabel_ = new QLabel("CAN -", statusGroup);
+    connectionLabel_ = new QLabel("Laser status -", statusGroup);
     availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
     ackLabel_ = new QLabel("Last response: -", statusGroup);
     simModeBox_ = new QCheckBox("Simulation mode", statusGroup);

@@ -146,6 +146,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   for (size_t i = 0; i < STC_MAX_SUT; i++) {
     cfg->sut_az_axis[i] = (int)(2 + i);
     cfg->sut_el_axis[i] = (int)(10 + i);
+    cfg->sut_laser_on[i] = 0u;
   }
   for (size_t i = 0; i < STC_MAX_MIRROR; i++) {
     cfg->mirror_axis[i] = -1;
@@ -394,6 +395,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->sut_az_axis[sut_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "el_axis") == 0) {
         if (parse_int(value, &cfg->sut_el_axis[sut_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "laser_on") == 0) {
+        int laser_on = 0;
+        if (parse_int(value, &laser_on) != 0 || (laser_on != 0 && laser_on != 1)) goto parse_error;
+        cfg->sut_laser_on[sut_idx] = (uint8_t)laser_on;
       } else {
         recognized = false;
       }
