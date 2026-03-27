@@ -128,3 +128,9 @@ void stc_action_make_stream_speed(stc_action_t* action, uint32_t axes_mask, cons
   stc_action_make_simple(action, ACTION_STREAM_SPEED, axes_mask);
   memcpy(action->u.speed_deg_s, speed_deg_s, sizeof(action->u.speed_deg_s));
 }
+
+void stc_action_make_set_laser(stc_action_t* action, uint8_t laser_id, uint8_t on_off) {
+  stc_action_make_simple(action, ACTION_SET_LASER, 0u);
+  action->u.laser.laser_id = laser_id;
+  action->u.laser.on_off = on_off;
+}

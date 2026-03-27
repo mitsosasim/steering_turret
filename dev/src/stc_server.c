@@ -203,6 +203,7 @@ typedef struct {
   int sut_count;
   int sut_az_axis[STC_MAX_SUT];
   int sut_el_axis[STC_MAX_SUT];
+  uint8_t sut_laser_on[STC_MAX_SUT];
   int mirror_count;
   int mirror_axis[STC_MAX_MIRROR];
 
@@ -328,6 +329,7 @@ static void cmd_timing_update(cmd_timing_stats_t* stats,
 }
 
 static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms);
+static int sut_index_from_laser_id(const shared_data_t* sh, uint8_t laser_id);
 
 /* ----------------------------- signal handling ----------------------------- */
 
@@ -421,7 +423,7 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
     if (c->u.mirror.mirror_id != 0xFF && c->u.mirror.mirror_id < 1) return STC_ERR_VALUE_OUT_OF_RANGE;
   }
   if (c->cmd_id == STC_CMD_LASER) {
-    if (c->u.laser.id < 1 || c->u.laser.id > 8) return STC_ERR_VALUE_OUT_OF_RANGE;
+    if (sut_index_from_laser_id(sh, c->u.laser.id) < 0) return STC_ERR_VALUE_OUT_OF_RANGE;
     if (c->u.laser.on_off > 1) return STC_ERR_VALUE_OUT_OF_RANGE;
   }
   if (c->cmd_id == STC_CMD_MANUALPOS || c->cmd_id == STC_CMD_POSMODE) {
@@ -464,6 +466,14 @@ static int axis_is_operational(const shared_data_t* sh, int axis) {
   if (!sh->axis_available[axis]) return 0;
   if (sh->axis_fault_active[axis]) return 0;
   return 1;
+}
+
+static int sut_index_from_laser_id(const shared_data_t* sh, uint8_t laser_id) {
+  if (!sh) return -1;
+  if (laser_id < 1) return -1;
+  const int idx = (int)laser_id - 1;
+  if (idx < 0 || idx >= sh->sut_count) return -1;
+  return idx;
 }
 
 static uint32_t turret_axes_mask(const shared_data_t* sh) {
@@ -956,6 +966,20 @@ static void* can_worker_thread(void* arg) {
           (void)motion_backend_quick_stop(backend, act.axes_mask);
           memset(axis_enabled, 0, sizeof(axis_enabled));
           break;
+        case ACTION_SET_LASER: {
+          const uint8_t laser_id = act.u.laser.laser_id;
+          const uint8_t on_off = act.u.laser.on_off ? 1u : 0u;
+          const int rc = motion_backend_set_laser(backend, laser_id, on_off);
+          if (rc == 0) {
+            pthread_mutex_lock(&a->sh->mtx);
+            const int sut_idx = sut_index_from_laser_id(&a->sh->d, laser_id);
+            if (sut_idx >= 0) a->sh->d.sut_laser_on[sut_idx] = on_off;
+            pthread_mutex_unlock(&a->sh->mtx);
+          } else {
+            STC_LOG_WARN("laser_stub failed id=%u on_off=%u rc=%d", laser_id, on_off, rc);
+          }
+          break;
+        }
         default:
           break;
       }
@@ -1324,12 +1348,8 @@ static void* tlml_tx_thread(void* arg) {
     }
     memcpy(motor_map, a->sh->d.motor_map, sizeof(motor_map));
     uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
-    uint16_t can_bitrate_kbps = a->sh->d.can_bitrate_kbps;
-    uint16_t can_restart_ms = a->sh->d.can_restart_ms;
-    uint8_t can_scan_max_node = a->sh->d.can_scan_max_node;
-    uint8_t can_connected_devices = a->sh->d.can_connected_devices;
-    uint8_t can_discovered_devices = a->sh->d.can_discovered_devices;
-    uint8_t can_ok = a->sh->d.can_ok ? 1u : 0u;
+    uint8_t laser_status_snapshot[8];
+    memcpy(laser_status_snapshot, a->sh->d.sut_laser_on, sizeof(laser_status_snapshot));
     int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
     pthread_mutex_unlock(&a->sh->mtx);
 
@@ -1360,14 +1380,7 @@ static void* tlml_tx_thread(void* arg) {
     }
 
     memset(m.laser_status, 0, sizeof(m.laser_status));
-    m.laser_status[0] = (uint8_t)(can_bitrate_kbps / 10u);
-    m.laser_status[1] = (uint8_t)(can_bitrate_kbps % 10u);
-    m.laser_status[2] = can_connected_devices;
-    m.laser_status[3] = can_discovered_devices;
-    m.laser_status[4] = can_scan_max_node;
-    m.laser_status[5] = (uint8_t)((can_restart_ms >> 8) & 0xFFu);
-    m.laser_status[6] = (uint8_t)(can_restart_ms & 0xFFu);
-    m.laser_status[7] = can_ok;
+    memcpy(m.laser_status, laser_status_snapshot, sizeof(m.laser_status));
 
     enum {
       STC_DIAG_ERR_AXIS_FAULT = 0x0001,
@@ -1485,6 +1498,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.sut_count = cfg->sut_count;
   memcpy(sh->d.sut_az_axis, cfg->sut_az_axis, sizeof(sh->d.sut_az_axis));
   memcpy(sh->d.sut_el_axis, cfg->sut_el_axis, sizeof(sh->d.sut_el_axis));
+  memcpy(sh->d.sut_laser_on, cfg->sut_laser_on, sizeof(sh->d.sut_laser_on));
 
   sh->d.mirror_count = cfg->mirror_count;
   memcpy(sh->d.mirror_axis, cfg->mirror_axis, sizeof(sh->d.mirror_axis));
@@ -2124,6 +2138,9 @@ int main(int argc, char** argv) {
           } else if (cmd.cmd_id == STC_CMD_CONFIG) {
             /* ACK-only placeholder: no state mutation until CONFIG schema is defined. */
             has_action = 0;
+          } else if (cmd.cmd_id == STC_CMD_LASER) {
+            stc_action_make_set_laser(&act, cmd.u.laser.id, cmd.u.laser.on_off);
+            has_action = 1;
           } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
             if (!stc_state_can_move(sh.d.st_state)) {
               v = STC_ERR_NOT_ALLOWED_STATE;

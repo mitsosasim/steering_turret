@@ -288,7 +288,7 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
  *   alt_m float
  *   heading_deg float
  *   motor_status[8] u8
- *   laser_status[8] u8
+ *   laser_status[8] u8   (SUT laser on/off: index i => SUT(i+1), 0=OFF, 1=ON)
  *   level_x float
  *   level_y float
  *   error_count u16
