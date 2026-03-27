@@ -2380,12 +2380,10 @@ cleanup:
     close(client_fd);
   }
 
-  if (!atomic_load(&g_stop)) {
-    if (tlmh_thread_started) pthread_join(th_h, NULL);
-    if (tlml_thread_started) pthread_join(th_l, NULL);
-    if (diag_thread_started) pthread_join(th_diag, NULL);
-    if (can_thread_started) pthread_join(th_can, NULL);
-  }
+  if (tlmh_thread_started) pthread_join(th_h, NULL);
+  if (tlml_thread_started) pthread_join(th_l, NULL);
+  if (diag_thread_started) pthread_join(th_diag, NULL);
+  if (can_thread_started) pthread_join(th_can, NULL);
 
   if (udp_h_open) close(udp_h);
   if (udp_l_open) close(udp_l);
