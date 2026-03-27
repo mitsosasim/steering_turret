@@ -37,7 +37,6 @@ typedef struct stc_config_s {
   int axis_node_id[STC_AXIS_COUNT];
   double axis_counts_per_rev[STC_AXIS_COUNT];
   double axis_gear_ratio[STC_AXIS_COUNT];
-  int axis_vel_is_rpm[STC_AXIS_COUNT];
   double axis_min_deg[STC_AXIS_COUNT];
   double axis_max_deg[STC_AXIS_COUNT];
   double axis_max_speed_deg_s[STC_AXIS_COUNT];

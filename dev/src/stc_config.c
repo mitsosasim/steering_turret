@@ -114,7 +114,6 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
     cfg->axis_node_id[i] = (int)(i + 1);
     cfg->axis_counts_per_rev[i] = 4096.0;
-    cfg->axis_vel_is_rpm[i] = 0;
     cfg->axis_storage_deg[i] = 0.0;
     cfg->axis_pp_profile_vel[i] = 500;
     cfg->axis_diag_cat[i] = 0x06;
@@ -315,8 +314,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_double(value, &cfg->axis_counts_per_rev[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "gear_ratio") == 0) {
         if (parse_double(value, &cfg->axis_gear_ratio[axis_idx]) != 0) goto parse_error;
-      } else if (strcmp(key, "vel_is_rpm") == 0) {
-        if (parse_int(value, &cfg->axis_vel_is_rpm[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "min_deg") == 0) {
         if (parse_double(value, &cfg->axis_min_deg[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "max_deg") == 0) {

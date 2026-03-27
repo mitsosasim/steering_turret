@@ -80,7 +80,7 @@ int main(void) {
     sh.d.cfg[axis].counts_per_rev = 4096;
     sh.d.cfg[axis].gear_ratio = 1.0;
     sh.d.cfg[axis].pp_profile_vel = 100;
-    sh.d.cfg[axis].vel_raw_units = AXIS_VEL_RAW_RPM;
+    sh.d.cfg[axis].vel_raw_units = AXIS_VEL_RAW_DEG_PER_SEC;
     sh.d.last_rx_ms[axis] = mono_ms();
   }
   sh.d.st_state = STC_STATE_OPER;

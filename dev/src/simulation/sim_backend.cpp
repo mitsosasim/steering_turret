@@ -42,16 +42,9 @@ static MotorModel::Limits limits_from_cfg(const axis_cfg_t& cfg) {
 
 static int32_t vel_deg_s_to_raw(const axis_cfg_t& cfg, double axis_deg_s) {
   const double gr = safe(cfg.gear_ratio, 1.0);
-  const double cpr = safe(cfg.counts_per_rev, 1.0);
   const double scale = (cfg.vel_scale != 0.0) ? cfg.vel_scale : 1.0;
   const double motor_deg_s = axis_deg_s * gr;
-  double raw = 0.0;
-  switch (cfg.vel_raw_units) {
-    case AXIS_VEL_RAW_RPM: raw = motor_deg_s / (6.0 * scale); break;
-    case AXIS_VEL_RAW_COUNTS_PER_SEC: raw = (motor_deg_s * cpr) / (360.0 * scale); break;
-    case AXIS_VEL_RAW_DEG_PER_SEC:
-    default: raw = motor_deg_s / scale; break;
-  }
+  double raw = motor_deg_s / scale;
   if (raw > static_cast<double>(INT32_MAX)) raw = static_cast<double>(INT32_MAX);
   if (raw < static_cast<double>(INT32_MIN)) raw = static_cast<double>(INT32_MIN);
   return static_cast<int32_t>(std::llround(raw));

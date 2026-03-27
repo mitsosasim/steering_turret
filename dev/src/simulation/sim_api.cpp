@@ -39,25 +39,10 @@ static uint64_t now_ms_steady() {
 
 static int32_t vel_deg_s_to_raw(const axis_cfg_t* cfg, double axis_deg_s) {
   const double gr = safe(cfg ? cfg->gear_ratio : 0.0, 1.0);
-  const double cpr = safe(cfg ? cfg->counts_per_rev : 0.0, 1.0);
   const double scale = (cfg && cfg->vel_scale != 0.0) ? cfg->vel_scale : 1.0;
 
   const double motor_deg_s = axis_deg_s * gr;
-  double raw = 0.0;
-
-  axis_vel_raw_units_t units = cfg ? cfg->vel_raw_units : AXIS_VEL_RAW_DEG_PER_SEC;
-  switch (units) {
-    case AXIS_VEL_RAW_RPM:
-      raw = motor_deg_s / (6.0 * scale);
-      break;
-    case AXIS_VEL_RAW_COUNTS_PER_SEC:
-      raw = (motor_deg_s * cpr) / (360.0 * scale);
-      break;
-    case AXIS_VEL_RAW_DEG_PER_SEC:
-    default:
-      raw = motor_deg_s / scale;
-      break;
-  }
+  double raw = motor_deg_s / scale;
 
   if (raw > static_cast<double>(INT32_MAX)) raw = static_cast<double>(INT32_MAX);
   if (raw < static_cast<double>(INT32_MIN)) raw = static_cast<double>(INT32_MIN);
