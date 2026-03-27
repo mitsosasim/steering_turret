@@ -107,6 +107,10 @@ static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
   return (a >= b) ? (a - b) : (b - a);
 }
 
+static inline uint8_t stc_state_to_wire(stc_state_t s) {
+  return (s == STC_STATE_FAIL) ? 0xFFu : (uint8_t)s;
+}
+
 /* ----------------------------- networking helpers ----------------------------- */
 
 static int send_all(int fd, const uint8_t* buf, size_t len) {
@@ -1317,7 +1321,7 @@ static void* tlml_tx_thread(void* arg) {
 
     pthread_mutex_lock(&a->sh->mtx);
     m.seq = a->sh->d.seq_l++;
-    m.state = (uint8_t)a->sh->d.st_state;
+    m.state = stc_state_to_wire(a->sh->d.st_state);
     uint64_t uptime_ms = nowm - a->sh->d.boot_ms;
     m.uptime_sec = (uint32_t)(uptime_ms / 1000ULL);
     m.lat = a->sh->d.has_manualpos ? a->sh->d.lat : 0.0;
