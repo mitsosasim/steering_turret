@@ -275,7 +275,7 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
  * TLML (variable errors list):
  *   magic[4] = "TLML"
  *   version u8
- *   sender_id u8
+ *   controller_id u8
  *   seq u16
  *   timestamp_ms u64
  *   state u8
@@ -285,19 +285,16 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
  *   pressure_hpa float
  *   lat double
  *   lon double
- *   alt_m float
- *   heading_deg float
+ *   alt_m double
+ *   heading_deg double
  *   motor_status[8] u8
  *   laser_status[8] u8   (SUT laser on/off: index i => SUT(i+1), 0=OFF, 1=ON)
  *   level_x float
  *   level_y float
- *   error_count u16
+ *   error_count u8
  *   errors[error_count] u32
  *
  * Base size (without errors) = 83 bytes, then +4*error_count.
- *
- * Parser tolerates:
- * - mismatch between error_count and remaining bytes (will infer from remaining bytes if possible).
  */
 
 typedef struct stc_tlml_s {
