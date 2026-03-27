@@ -1,3 +1,4 @@
+#define STC_TEST_HOOKS 1
 #define main stc_server_main
 #include "../src/stc_server.c"
 #undef main
@@ -103,6 +104,20 @@ int main(void) {
   pthread_t telemetry_thread;
 
   check_pthread(pthread_create(&can_thread, NULL, can_worker_thread, &warg), "pthread_create(can)");
+
+  usleep(20000);
+  assert(atomic_load(&g_can_worker_action_dispatch_iterations) == 0);
+
+  stc_action_t single_action;
+  stc_action_make_simple(&single_action, ACTION_RESET, 0xFFFFFFFFu);
+  assert(actionq_push(&q, &single_action) == 0);
+
+  const uint64_t consume_deadline = mono_ms() + 500;
+  while (actionq_count(&q) != 0 && mono_ms() < consume_deadline) {
+    usleep(1000);
+  }
+  assert(actionq_count(&q) == 0);
+  assert(atomic_load(&g_can_worker_action_dispatch_iterations) >= 1);
 
   stress_ctx_t stress_ctx = {.sh = &sh, .q = &q};
   check_pthread(pthread_create(&producer_thread, NULL, action_producer_thread, &stress_ctx), "pthread_create(producer)");

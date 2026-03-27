@@ -828,6 +828,10 @@ typedef struct {
 
 
 
+#ifdef STC_TEST_HOOKS
+_Atomic uint64_t g_can_worker_action_dispatch_iterations = 0;
+#endif
+
 static void* can_worker_thread(void* arg) {
   can_worker_arg_t* a = (can_worker_arg_t*)arg;
   const uint64_t maintenance_period_ms = 10;
@@ -899,7 +903,11 @@ static void* can_worker_thread(void* arg) {
     }
 
     stc_action_t act;
-    while (actionq_try_peek(a->q, &act) == 0) {
+    memset(&act, 0, sizeof(act));
+    while (actionq_try_peek(a->q, &act) == 1) {
+#ifdef STC_TEST_HOOKS
+      atomic_fetch_add(&g_can_worker_action_dispatch_iterations, 1);
+#endif
       const uint64_t exec_start_ns = mono_ns();
       if (act.obs_tcp_rx_ns > 0 && act.obs_queued_ns > 0) {
         pthread_mutex_lock(&a->sh->mtx);
@@ -951,7 +959,8 @@ static void* can_worker_thread(void* arg) {
         default:
           break;
       }
-      (void)actionq_drop_head(a->q);
+      if (!actionq_drop_head(a->q)) break;
+      memset(&act, 0, sizeof(act));
     }
 
     stc_state_t st_state = STC_STATE_INIT;
