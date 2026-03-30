@@ -58,16 +58,29 @@ int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next
       }
       break;
     case STC_STATE_SELF_LEVELLING:
-    case STC_STATE_IBIT_RUNNING:
     case STC_STATE_STORE:
       if (evt == EVT_ENTER_SAFE) {
         *next = STC_STATE_SAFE;
         return 0;
       }
       break;
-    case STC_STATE_FAIL:
-      if (evt == EVT_RESET) {
+    case STC_STATE_IBIT_RUNNING:
+      if (evt == EVT_ENTER_SAFE) {
         *next = STC_STATE_SAFE;
+        return 0;
+      }
+      if (evt == EVT_IBIT_OK) {
+        *next = STC_STATE_OPER;
+        return 0;
+      }
+      if (evt == EVT_IBIT_FAIL) {
+        *next = STC_STATE_FAIL;
+        return 0;
+      }
+      break;
+    case STC_STATE_FAIL:
+      if (evt == EVT_IBIT) {
+        *next = STC_STATE_IBIT_RUNNING;
         return 0;
       }
       break;
