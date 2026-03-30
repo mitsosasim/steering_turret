@@ -1476,6 +1476,47 @@ typedef struct {
   int has_tlml_hz;
 } cli_override_flags_t;
 
+static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net) {
+  if (!sh || !net) {
+    STC_LOG_ERROR("PBIT FAIL: invalid startup context");
+    return EVT_PBIT_FAIL;
+  }
+
+  int expected_motors = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (sh->d.axis_expected[axis]) expected_motors++;
+  }
+
+  int network_ok = 1;
+  struct in_addr parsed_addr;
+  if (net->can_if == NULL || net->can_if[0] == '\0' || net->can_bitrate <= 0) network_ok = 0;
+  if (net->tcp_port <= 0 || net->tcp_port > 65535) network_ok = 0;
+  if (net->tlmh_port <= 0 || net->tlmh_port > 65535) network_ok = 0;
+  if (net->tlml_port <= 0 || net->tlml_port > 65535) network_ok = 0;
+  if (parse_ipv4_addr(net->tlmh_ip, &parsed_addr) != 0) network_ok = 0;
+  if (parse_ipv4_addr(net->tlml_ip, &parsed_addr) != 0) network_ok = 0;
+
+  const int motors_ok = (expected_motors > 0);
+  STC_LOG_INFO("PBIT motor_check=%s expected_motors=%d", motors_ok ? "OK" : "FAIL", expected_motors);
+  STC_LOG_INFO("PBIT network_check=%s can_if=%s can_bitrate=%d tcp_port=%d tlmh=%s:%d tlml=%s:%d",
+               network_ok ? "OK" : "FAIL",
+               net->can_if ? net->can_if : "<null>",
+               net->can_bitrate,
+               net->tcp_port,
+               net->tlmh_ip ? net->tlmh_ip : "<null>",
+               net->tlmh_port,
+               net->tlml_ip ? net->tlml_ip : "<null>",
+               net->tlml_port);
+
+  if (motors_ok && network_ok) {
+    STC_LOG_INFO("PBIT result: PASS");
+    return EVT_PBIT_OK;
+  }
+
+  STC_LOG_ERROR("PBIT result: FAIL");
+  return EVT_PBIT_FAIL;
+}
+
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.num_axes = cfg->num_axes;
   memset(sh->d.axis_expected, 0, sizeof(sh->d.axis_expected));
@@ -1844,8 +1885,16 @@ int main(int argc, char** argv) {
   signal(SIGTERM, on_sig);
 
   stc_state_t next_state = STC_STATE_INIT;
-  if (stc_state_transition(sh.d.st_state, EVT_INIT_COMPLETE, &next_state) == 0) sh.d.st_state = next_state;
-  if (stc_state_transition(sh.d.st_state, EVT_ENTER_SAFE, &next_state) == 0) sh.d.st_state = next_state;
+  const stc_event_t pbit_evt = run_startup_pbit(&sh, &net);
+  if (stc_state_transition(sh.d.st_state, pbit_evt, &next_state) == 0) {
+    sh.d.st_state = next_state;
+  } else {
+    STC_LOG_ERROR("startup transition rejected: state=%d event=%d", (int)sh.d.st_state, (int)pbit_evt);
+  }
+  if (sh.d.st_state != STC_STATE_FAIL &&
+      stc_state_transition(sh.d.st_state, EVT_ENTER_SAFE, &next_state) == 0) {
+    sh.d.st_state = next_state;
+  }
 
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
   cfg.strict_magic = 0;    // allow us to return NACK even when magic is wrong

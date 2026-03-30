@@ -10,8 +10,12 @@ int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next
 
   switch (current) {
     case STC_STATE_INIT:
-      if (evt == EVT_INIT_COMPLETE) {
+      if (evt == EVT_PBIT_OK) {
         *next = STC_STATE_INIT_DONE;
+        return 0;
+      }
+      if (evt == EVT_PBIT_FAIL) {
+        *next = STC_STATE_FAIL;
         return 0;
       }
       break;

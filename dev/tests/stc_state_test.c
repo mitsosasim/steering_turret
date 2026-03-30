@@ -16,7 +16,8 @@ static void expect_invalid(stc_state_t from, stc_event_t evt) {
 }
 
 int main(void) {
-  expect_transition(STC_STATE_INIT, EVT_INIT_COMPLETE, STC_STATE_INIT_DONE);
+  expect_transition(STC_STATE_INIT, EVT_PBIT_OK, STC_STATE_INIT_DONE);
+  expect_transition(STC_STATE_INIT, EVT_PBIT_FAIL, STC_STATE_FAIL);
   expect_transition(STC_STATE_INIT_DONE, EVT_ENTER_SAFE, STC_STATE_SAFE);
   expect_transition(STC_STATE_SAFE, EVT_ENTER_OPER, STC_STATE_OPER);
   expect_transition(STC_STATE_SAFE, EVT_SELF_LEV, STC_STATE_SELF_LEVELLING);
