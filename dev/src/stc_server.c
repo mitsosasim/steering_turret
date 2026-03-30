@@ -252,6 +252,8 @@ typedef struct {
   uint64_t last_rx_ms[STC_AXIS_COUNT];
   uint8_t axis_fault_active[STC_AXIS_COUNT];
   uint8_t axis_enabled[STC_AXIS_COUNT];
+  uint8_t fail_stop_pending;
+  uint32_t fail_stop_axes_mask;
 
   // --- telemetry seq + uptime
   uint16_t seq_h;
@@ -449,9 +451,23 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
 
 
 static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
+  const stc_state_t prev = sh->d.st_state;
   stc_state_t next = sh->d.st_state;
   if (stc_state_transition(sh->d.st_state, evt, &next) != 0) return -1;
   sh->d.st_state = next;
+  if (next == STC_STATE_FAIL && prev != STC_STATE_FAIL) {
+    uint32_t mask = 0;
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (sh->d.axis_expected[axis] ||
+          sh->d.axis_available[axis] ||
+          sh->d.axis_enabled[axis] ||
+          sh->d.stream[axis].enabled) {
+        mask |= (1u << axis);
+      }
+    }
+    sh->d.fail_stop_pending = 1;
+    sh->d.fail_stop_axes_mask = mask;
+  }
   if (evt == EVT_ENTER_SAFE) {
     sh->d.ibit_pending = 0;
     sh->d.ibit_due_ms = 0;
@@ -991,6 +1007,53 @@ static void* can_worker_thread(void* arg) {
       a->sh->d.selflev_pending = 0;
       a->sh->d.selflev_due_ms = 0;
     }
+
+    int critical_axis_faults = 0;
+    int critical_axis_stale = 0;
+    int critical_hb = 0;
+    int critical_emcy = 0;
+    const uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
+    const int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      const int expected = a->sh->d.axis_expected[axis] ? 1 : 0;
+      const int connected = a->sh->d.axis_available[axis] ? 1 : 0;
+      const int axis_fault = stc_detect_ds402_fault(a->sh->d.telem[axis].status_word) ? 1 : 0;
+      int stale = 0;
+      if (can_timeout_ms > 0) {
+        const int timed_out = elapsed_ms_nonnegative(now, a->sh->d.last_rx_ms[axis]) > can_timeout_ms;
+        stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
+      }
+      a->sh->d.axis_fault_active[axis] = axis_fault ? 1u : 0u;
+      if (expected && axis_fault) critical_axis_faults++;
+      if (stale) critical_axis_stale++;
+    }
+
+    if (a->sh->d.have_hb) {
+      if (a->sh->d.hb_state != 0x05u) critical_hb = 1; /* OPERATIONAL */
+      if (can_timeout_ms > 0 &&
+          elapsed_ms_nonnegative(now, a->sh->d.ts_hb_ms) > can_timeout_ms) {
+        critical_hb = 1;
+      }
+    }
+    if (a->sh->d.have_emcy && a->sh->d.emcy_code != 0) critical_emcy = 1;
+
+    const int critical_condition =
+      (critical_axis_faults > 0) ||
+      (critical_axis_stale > 0) ||
+      critical_hb ||
+      critical_emcy;
+    if (critical_condition && a->sh->d.st_state != STC_STATE_FAIL) {
+      if (shared_transition_locked(a->sh, EVT_FAULT_CRITICAL) == 0) {
+        STC_LOG_ERROR(
+          "Critical fault detected -> FAIL: axis_faults=%d axis_stale=%d hb=%d emcy=%d",
+          critical_axis_faults, critical_axis_stale, critical_hb, critical_emcy);
+      } else {
+        STC_LOG_ERROR(
+          "Critical fault transition rejected: state=%d axis_faults=%d axis_stale=%d hb=%d emcy=%d",
+          (int)a->sh->d.st_state,
+          critical_axis_faults, critical_axis_stale, critical_hb, critical_emcy);
+      }
+    }
     pthread_mutex_unlock(&a->sh->mtx);
 
     stc_action_t act;
@@ -1113,10 +1176,28 @@ static void* can_worker_thread(void* arg) {
 
     stc_state_t st_state = STC_STATE_INIT;
     int watchdog_ms = 0;
+    uint8_t fail_stop_pending = 0;
+    uint32_t fail_stop_axes_mask = 0;
     pthread_mutex_lock(&a->sh->mtx);
     st_state = a->sh->d.st_state;
     watchdog_ms = a->sh->d.speed_watchdog_ms;
+    fail_stop_pending = a->sh->d.fail_stop_pending;
+    fail_stop_axes_mask = a->sh->d.fail_stop_axes_mask;
+    a->sh->d.fail_stop_pending = 0;
+    a->sh->d.fail_stop_axes_mask = 0;
     pthread_mutex_unlock(&a->sh->mtx);
+
+    if (fail_stop_pending) {
+      (void)motion_backend_quick_stop(backend, fail_stop_axes_mask);
+      for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+        if ((fail_stop_axes_mask & (1u << axis)) == 0) continue;
+        axis_enabled[axis] = 0;
+        pthread_mutex_lock(&a->sh->mtx);
+        a->sh->d.stream[axis].enabled = 0;
+        pthread_mutex_unlock(&a->sh->mtx);
+      }
+      STC_LOG_WARN("FAIL entry quick-stop executed: axes_mask=0x%08x", fail_stop_axes_mask);
+    }
 
     if (!stc_state_can_stream(st_state)) {
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
