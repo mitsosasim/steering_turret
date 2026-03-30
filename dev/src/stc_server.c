@@ -275,6 +275,10 @@ typedef struct {
   // --- IBIT tracking
   int ibit_pending;
   uint64_t ibit_due_ms;
+
+  // --- SELFLEV tracking
+  int selflev_pending;
+  uint64_t selflev_due_ms;
 } shared_data_t;
 
 typedef struct {
@@ -448,6 +452,12 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
   stc_state_t next = sh->d.st_state;
   if (stc_state_transition(sh->d.st_state, evt, &next) != 0) return -1;
   sh->d.st_state = next;
+  if (evt == EVT_ENTER_SAFE) {
+    sh->d.ibit_pending = 0;
+    sh->d.ibit_due_ms = 0;
+    sh->d.selflev_pending = 0;
+    sh->d.selflev_due_ms = 0;
+  }
   if (!stc_state_can_stream(sh->d.st_state)) {
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       sh->d.stream[axis].enabled = 0;
@@ -480,6 +490,12 @@ static stc_event_t ibit_completion_event_locked(const shared_data_t* d) {
   if (available_axes != expected_axes) return EVT_IBIT_COMPLETE_FAIL;
   if (faulted_axes > 0) return EVT_IBIT_COMPLETE_FAIL;
   return EVT_IBIT_COMPLETE_OK;
+}
+
+static stc_event_t selflev_completion_event_locked(const shared_data_t* d) {
+  if (!d) return EVT_ENTER_SAFE;
+  if (!d->can_ok) return EVT_ENTER_SAFE;
+  return EVT_SELF_LEV_DONE;
 }
 
 static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
@@ -960,6 +976,20 @@ static void* can_worker_thread(void* arg) {
       }
       a->sh->d.ibit_pending = 0;
       a->sh->d.ibit_due_ms = 0;
+    }
+    if (a->sh->d.selflev_pending && now >= a->sh->d.selflev_due_ms) {
+      const stc_event_t selflev_evt = selflev_completion_event_locked(&a->sh->d);
+      if (shared_transition_locked(a->sh, selflev_evt) == 0) {
+        STC_LOG_INFO("SELFLEV completion event published: event=%d state=%d",
+                     (int)selflev_evt,
+                     (int)a->sh->d.st_state);
+      } else {
+        STC_LOG_ERROR("SELFLEV completion transition rejected: state=%d event=%d",
+                      (int)a->sh->d.st_state,
+                      (int)selflev_evt);
+      }
+      a->sh->d.selflev_pending = 0;
+      a->sh->d.selflev_due_ms = 0;
     }
     pthread_mutex_unlock(&a->sh->mtx);
 
@@ -2292,9 +2322,14 @@ int main(int argc, char** argv) {
             }
           } else if (cmd.cmd_id == STC_CMD_SELFLEV) {
             if (cmd.u.selflev.v == 0) {
+              sh.d.selflev_pending = 0;
+              sh.d.selflev_due_ms = 0;
               if (shared_transition_locked(&sh, EVT_ENTER_SAFE) != 0) v = STC_ERR_NOT_ALLOWED_STATE;
             } else if (shared_transition_locked(&sh, EVT_SELF_LEV) != 0) {
               v = STC_ERR_NOT_ALLOWED_STATE;
+            } else {
+              sh.d.selflev_pending = 1;
+              sh.d.selflev_due_ms = mono_ms() + 100;
             }
           } else if (cmd.cmd_id == STC_CMD_IBIT) {
             if (cmd.u.ibit.v == 0) {
