@@ -17,7 +17,8 @@ typedef enum {
 } stc_state_t;
 
 typedef enum {
-  EVT_INIT_COMPLETE = 0,
+  EVT_PBIT_OK = 0,
+  EVT_PBIT_FAIL,
   EVT_ENTER_SAFE,
   EVT_ENTER_OPER,
   EVT_SELF_LEV,
