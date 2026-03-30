@@ -28,8 +28,10 @@ int main(void) {
   expect_transition(STC_STATE_OPER, EVT_IBIT, STC_STATE_IBIT_RUNNING);
   expect_transition(STC_STATE_SELF_LEVELLING, EVT_ENTER_SAFE, STC_STATE_SAFE);
   expect_transition(STC_STATE_IBIT_RUNNING, EVT_ENTER_SAFE, STC_STATE_SAFE);
+  expect_transition(STC_STATE_IBIT_RUNNING, EVT_IBIT_OK, STC_STATE_OPER);
+  expect_transition(STC_STATE_IBIT_RUNNING, EVT_IBIT_FAIL, STC_STATE_FAIL);
   expect_transition(STC_STATE_STORE, EVT_ENTER_SAFE, STC_STATE_SAFE);
-  expect_transition(STC_STATE_FAIL, EVT_RESET, STC_STATE_SAFE);
+  expect_transition(STC_STATE_FAIL, EVT_IBIT, STC_STATE_IBIT_RUNNING);
 
   for (int s = STC_STATE_INIT; s <= STC_STATE_FAIL; ++s) {
     expect_transition((stc_state_t)s, EVT_FAULT_CRITICAL, STC_STATE_FAIL);

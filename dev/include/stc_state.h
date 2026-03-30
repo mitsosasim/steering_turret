@@ -19,12 +19,13 @@ typedef enum {
 typedef enum {
   EVT_PBIT_OK = 0,
   EVT_PBIT_FAIL,
+  EVT_IBIT_OK,
+  EVT_IBIT_FAIL,
   EVT_ENTER_SAFE,
   EVT_ENTER_OPER,
   EVT_SELF_LEV,
   EVT_IBIT,
   EVT_STORE,
-  EVT_RESET,
   EVT_FAULT_CRITICAL
 } stc_event_t;
 

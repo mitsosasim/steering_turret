@@ -1517,6 +1517,47 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
   return EVT_PBIT_FAIL;
 }
 
+static stc_event_t run_admin_reset_ibit(const shared_t* sh, const runtime_net_t* net) {
+  if (!sh || !net) {
+    STC_LOG_ERROR("RESET/IBIT recovery FAIL: invalid context");
+    return EVT_IBIT_FAIL;
+  }
+
+  int expected_motors = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (sh->d.axis_expected[axis]) expected_motors++;
+  }
+
+  int network_ok = 1;
+  struct in_addr parsed_addr;
+  if (net->can_if == NULL || net->can_if[0] == '\0' || net->can_bitrate <= 0) network_ok = 0;
+  if (net->tcp_port <= 0 || net->tcp_port > 65535) network_ok = 0;
+  if (net->tlmh_port <= 0 || net->tlmh_port > 65535) network_ok = 0;
+  if (net->tlml_port <= 0 || net->tlml_port > 65535) network_ok = 0;
+  if (parse_ipv4_addr(net->tlmh_ip, &parsed_addr) != 0) network_ok = 0;
+  if (parse_ipv4_addr(net->tlml_ip, &parsed_addr) != 0) network_ok = 0;
+
+  const int motors_ok = (expected_motors > 0);
+  STC_LOG_INFO("RESET/IBIT motor_check=%s expected_motors=%d", motors_ok ? "OK" : "FAIL", expected_motors);
+  STC_LOG_INFO("RESET/IBIT network_check=%s can_if=%s can_bitrate=%d tcp_port=%d tlmh=%s:%d tlml=%s:%d",
+               network_ok ? "OK" : "FAIL",
+               net->can_if ? net->can_if : "<null>",
+               net->can_bitrate,
+               net->tcp_port,
+               net->tlmh_ip ? net->tlmh_ip : "<null>",
+               net->tlmh_port,
+               net->tlml_ip ? net->tlml_ip : "<null>",
+               net->tlml_port);
+
+  if (motors_ok && network_ok) {
+    STC_LOG_INFO("RESET/IBIT result: PASS");
+    return EVT_IBIT_OK;
+  }
+
+  STC_LOG_ERROR("RESET/IBIT result: FAIL");
+  return EVT_IBIT_FAIL;
+}
+
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.num_axes = cfg->num_axes;
   memset(sh->d.axis_expected, 0, sizeof(sh->d.axis_expected));
@@ -2341,8 +2382,21 @@ int main(int argc, char** argv) {
             if (sh.d.st_state != STC_STATE_FAIL) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             } else {
-              stc_action_make_simple(&act, ACTION_RESET, 0xFFFFFFFFu);
-              has_action = 1;
+              stc_event_t reset_evt = EVT_IBIT_FAIL;
+              if (shared_transition_locked(&sh, EVT_IBIT) != 0) {
+                v = STC_ERR_NOT_ALLOWED_STATE;
+              } else {
+                reset_evt = run_admin_reset_ibit(&sh, &net);
+                if (shared_transition_locked(&sh, reset_evt) != 0) {
+                  STC_LOG_ERROR("RESET/IBIT transition rejected: state=%d event=%d",
+                                (int)sh.d.st_state,
+                                (int)reset_evt);
+                  v = STC_ERR_NOT_ALLOWED_STATE;
+                } else {
+                  stc_action_make_simple(&act, ACTION_RESET, 0xFFFFFFFFu);
+                  has_action = 1;
+                }
+              }
             }
           } else if (cmd.cmd_id == STC_CMD_DELLOG) {
             stc_action_make_simple(&act, ACTION_CLEAR_ERRORS, 0xFFFFFFFFu);
