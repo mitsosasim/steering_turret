@@ -271,6 +271,10 @@ typedef struct {
 
   // --- controller-id acceptance policy
   int controller_id_strict_legacy;
+
+  // --- IBIT tracking
+  int ibit_pending;
+  uint64_t ibit_due_ms;
 } shared_data_t;
 
 typedef struct {
@@ -450,6 +454,32 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
     }
   }
   return 0;
+}
+
+static int shared_start_ibit_locked(shared_t* sh, uint64_t now_ms) {
+  if (shared_transition_locked(sh, EVT_IBIT) != 0) return -1;
+  sh->d.ibit_pending = 1;
+  sh->d.ibit_due_ms = now_ms + 100;
+  return 0;
+}
+
+static stc_event_t ibit_completion_event_locked(const shared_data_t* d) {
+  int expected_axes = 0;
+  int available_axes = 0;
+  int faulted_axes = 0;
+
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!d->axis_expected[axis]) continue;
+    expected_axes++;
+    if (d->axis_available[axis]) available_axes++;
+    if (d->axis_fault_active[axis]) faulted_axes++;
+  }
+
+  if (expected_axes <= 0) return EVT_IBIT_COMPLETE_FAIL;
+  if (!d->can_ok) return EVT_IBIT_COMPLETE_FAIL;
+  if (available_axes != expected_axes) return EVT_IBIT_COMPLETE_FAIL;
+  if (faulted_axes > 0) return EVT_IBIT_COMPLETE_FAIL;
+  return EVT_IBIT_COMPLETE_OK;
 }
 
 static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
@@ -915,6 +945,23 @@ static void* can_worker_thread(void* arg) {
       a->sh->d.ts_emcy_ms = snap.ts_emcy_ms;
       pthread_mutex_unlock(&a->sh->mtx);
     }
+
+    pthread_mutex_lock(&a->sh->mtx);
+    if (a->sh->d.ibit_pending && now >= a->sh->d.ibit_due_ms) {
+      const stc_event_t ibit_evt = ibit_completion_event_locked(&a->sh->d);
+      if (shared_transition_locked(a->sh, ibit_evt) == 0) {
+        STC_LOG_INFO("IBIT completion event published: event=%d state=%d",
+                     (int)ibit_evt,
+                     (int)a->sh->d.st_state);
+      } else {
+        STC_LOG_ERROR("IBIT completion transition rejected: state=%d event=%d",
+                      (int)a->sh->d.st_state,
+                      (int)ibit_evt);
+      }
+      a->sh->d.ibit_pending = 0;
+      a->sh->d.ibit_due_ms = 0;
+    }
+    pthread_mutex_unlock(&a->sh->mtx);
 
     stc_action_t act;
     memset(&act, 0, sizeof(act));
@@ -1551,11 +1598,11 @@ static stc_event_t run_admin_reset_ibit(const shared_t* sh, const runtime_net_t*
 
   if (motors_ok && network_ok) {
     STC_LOG_INFO("RESET/IBIT result: PASS");
-    return EVT_IBIT_OK;
+    return EVT_IBIT_COMPLETE_OK;
   }
 
   STC_LOG_ERROR("RESET/IBIT result: FAIL");
-  return EVT_IBIT_FAIL;
+  return EVT_IBIT_COMPLETE_FAIL;
 }
 
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
@@ -2208,8 +2255,10 @@ int main(int argc, char** argv) {
             }
           } else if (cmd.cmd_id == STC_CMD_IBIT) {
             if (cmd.u.ibit.v == 0) {
+              sh.d.ibit_pending = 0;
+              sh.d.ibit_due_ms = 0;
               if (shared_transition_locked(&sh, EVT_ENTER_SAFE) != 0) v = STC_ERR_NOT_ALLOWED_STATE;
-            } else if (shared_transition_locked(&sh, EVT_IBIT) != 0) {
+            } else if (shared_start_ibit_locked(&sh, mono_ms()) != 0) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             }
           } else if (cmd.cmd_id == STC_CMD_MANUALPOS) {
@@ -2382,8 +2431,8 @@ int main(int argc, char** argv) {
             if (sh.d.st_state != STC_STATE_FAIL) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             } else {
-              stc_event_t reset_evt = EVT_IBIT_FAIL;
-              if (shared_transition_locked(&sh, EVT_IBIT) != 0) {
+              stc_event_t reset_evt = EVT_IBIT_COMPLETE_FAIL;
+              if (shared_start_ibit_locked(&sh, mono_ms()) != 0) {
                 v = STC_ERR_NOT_ALLOWED_STATE;
               } else {
                 reset_evt = run_admin_reset_ibit(&sh, &net);

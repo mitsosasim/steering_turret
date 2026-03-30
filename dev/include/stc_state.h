@@ -19,8 +19,8 @@ typedef enum {
 typedef enum {
   EVT_PBIT_OK = 0,
   EVT_PBIT_FAIL,
-  EVT_IBIT_OK,
-  EVT_IBIT_FAIL,
+  EVT_IBIT_COMPLETE_OK,
+  EVT_IBIT_COMPLETE_FAIL,
   EVT_ENTER_SAFE,
   EVT_ENTER_OPER,
   EVT_SELF_LEV,
@@ -28,6 +28,9 @@ typedef enum {
   EVT_STORE,
   EVT_FAULT_CRITICAL
 } stc_event_t;
+
+#define EVT_IBIT_OK EVT_IBIT_COMPLETE_OK
+#define EVT_IBIT_FAIL EVT_IBIT_COMPLETE_FAIL
 
 int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next);
 int stc_state_can_move(stc_state_t state);

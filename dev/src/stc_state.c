@@ -69,11 +69,11 @@ int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next
         *next = STC_STATE_SAFE;
         return 0;
       }
-      if (evt == EVT_IBIT_OK) {
+      if (evt == EVT_IBIT_COMPLETE_OK) {
         *next = STC_STATE_OPER;
         return 0;
       }
-      if (evt == EVT_IBIT_FAIL) {
+      if (evt == EVT_IBIT_COMPLETE_FAIL) {
         *next = STC_STATE_FAIL;
         return 0;
       }
