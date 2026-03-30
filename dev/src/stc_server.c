@@ -1031,6 +1031,49 @@ static void* can_worker_thread(void* arg) {
           }
           break;
         }
+        case ACTION_ENTER_STORE: {
+          uint32_t storage_axes_mask = 0;
+          double storage_targets[STC_AXIS_COUNT] = {0};
+          pthread_mutex_lock(&a->sh->mtx);
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            storage_targets[axis] = a->sh->d.storage_deg[axis];
+            if (a->sh->d.axis_available[axis]) storage_axes_mask |= (1u << axis);
+          }
+          pthread_mutex_unlock(&a->sh->mtx);
+
+          if (storage_axes_mask == 0) {
+            pthread_mutex_lock(&a->sh->mtx);
+            if (shared_transition_locked(a->sh, EVT_STORE_FAIL) != 0) {
+              (void)shared_transition_locked(a->sh, EVT_FAULT_CRITICAL);
+            }
+            pthread_mutex_unlock(&a->sh->mtx);
+            STC_LOG_ERROR("STORE command failed: no connected axes available");
+            break;
+          }
+
+          const int store_rc = motion_backend_apply_pp_move(backend, storage_axes_mask, storage_targets);
+          pthread_mutex_lock(&a->sh->mtx);
+          if (store_rc == 0) {
+            if (shared_transition_locked(a->sh, EVT_STORE_OK) != 0) {
+              STC_LOG_ERROR("STORE success transition rejected: state=%d event=%d",
+                            (int)a->sh->d.st_state,
+                            (int)EVT_STORE_OK);
+              (void)shared_transition_locked(a->sh, EVT_FAULT_CRITICAL);
+            } else {
+              STC_LOG_INFO("STORE command completed successfully: axes_mask=0x%08x", storage_axes_mask);
+            }
+          } else {
+            if (shared_transition_locked(a->sh, EVT_STORE_FAIL) != 0) {
+              STC_LOG_ERROR("STORE fail transition rejected: state=%d event=%d",
+                            (int)a->sh->d.st_state,
+                            (int)EVT_STORE_FAIL);
+              (void)shared_transition_locked(a->sh, EVT_FAULT_CRITICAL);
+            }
+            STC_LOG_ERROR("STORE command failed: motion_backend_apply_pp_move rc=%d", store_rc);
+          }
+          pthread_mutex_unlock(&a->sh->mtx);
+          break;
+        }
         default:
           break;
       }
