@@ -1040,10 +1040,21 @@ static void* can_worker_thread(void* arg) {
     }
     if (a->sh->d.have_emcy && a->sh->d.emcy_code != 0) critical_emcy = 1;
 
+    /*
+     * Heartbeat is currently treated as diagnostic-only (non-fatal).
+     *
+     * Rationale:
+     * - Some deployed drives run with 0x1017 heartbeat producer time = 0
+     *   (no periodic heartbeat), especially during bring-up/bench testing.
+     * - Marking heartbeat as fatal forces immediate FAIL even when motion I/O
+     *   over PDO/SDO is otherwise healthy.
+     *
+     * Keep hb assessment/logging for observability, but do not gate
+     * critical-fault transition on hb alone.
+     */
     const int critical_condition =
       (critical_axis_faults > 0) ||
       (critical_axis_stale > 0) ||
-      critical_hb ||
       critical_emcy;
     stc_diag_set_cbit_critical(&a->sh->d, critical_condition ? true : false);
     const stc_diag_health_t cbit_health = run_cbit_cycle(&a->sh->d);
