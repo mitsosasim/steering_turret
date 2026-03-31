@@ -13,7 +13,8 @@
 
 typedef enum {
   MTR_MODE_NONE = 0,
-  MTR_MODE_PV = PD4C_MODE_PROFILE_VELOCITY,
+  /* RPDO3 maps to 0x6042 (Target Velocity), which PD4-C defines for mode 2. */
+  MTR_MODE_PV = PD4C_MODE_VELOCITY,
   MTR_MODE_PP = PD4C_MODE_PROFILE_POSITION
 } mtr_mode_t;
 
