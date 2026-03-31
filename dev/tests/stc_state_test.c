@@ -1,5 +1,6 @@
 #include "stc_state.h"
 #include "stc_faults.h"
+#include "stc_diag.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -60,6 +61,31 @@ int main(void) {
   assert(!stc_detect_can_timeout(1000, 10, 1000));
   assert(stc_detect_can_timeout(1010, 10, 1000));
   assert(!stc_detect_can_timeout(99, 100, 10));
+
+  stc_diag_set_pbit_result(true);
+  assert(run_pbit_startup());
+  expect_transition(STC_STATE_INIT, run_pbit_startup() ? EVT_PBIT_OK : EVT_PBIT_FAIL, STC_STATE_INIT_DONE);
+  stc_diag_set_pbit_result(false);
+  assert(!run_pbit_startup());
+  expect_transition(STC_STATE_INIT, run_pbit_startup() ? EVT_PBIT_OK : EVT_PBIT_FAIL, STC_STATE_FAIL);
+
+  int dummy = 0;
+  shared_data_t* shared = (shared_data_t*)&dummy;
+  stc_diag_set_cbit_critical(shared, false);
+  assert(run_cbit_cycle(shared) == STC_DIAG_HEALTH_OK);
+  stc_diag_set_cbit_critical(shared, true);
+  assert(run_cbit_cycle(shared) == STC_DIAG_HEALTH_CRITICAL_FAULT);
+
+  stc_diag_set_ibit_result(true);
+  assert(run_ibit_sequence(shared));
+  expect_transition(STC_STATE_IBIT_RUNNING,
+                    run_ibit_sequence(shared) ? EVT_IBIT_COMPLETE_OK : EVT_IBIT_COMPLETE_FAIL,
+                    STC_STATE_OPER);
+  stc_diag_set_ibit_result(false);
+  assert(!run_ibit_sequence(shared));
+  expect_transition(STC_STATE_IBIT_RUNNING,
+                    run_ibit_sequence(shared) ? EVT_IBIT_COMPLETE_OK : EVT_IBIT_COMPLETE_FAIL,
+                    STC_STATE_FAIL);
 
   puts("stc_state_test: PASS");
   return 0;
