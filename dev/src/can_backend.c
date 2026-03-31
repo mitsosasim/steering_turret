@@ -37,6 +37,35 @@ struct motion_backend {
   motion_snapshot_t snap;
 };
 
+/*
+ * can_ok criteria:
+ * - At least one axis is expected (configured with a non-zero node ID), and
+ * - Every expected axis is currently connected/usable.
+ *
+ * This intentionally treats partial bring-up as degraded (can_ok=0), while
+ * preserving per-axis availability in axis_available[] so callers can diagnose
+ * which axes are missing.
+ */
+static int compute_can_ok(const struct motion_backend* b) {
+  if (!b) return 0;
+
+  int expected_axes = 0;
+  int connected_expected_axes = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (b->cfg.axis_node_id[axis] == 0) continue;
+    expected_axes++;
+    if (b->axis_connected[axis]) connected_expected_axes++;
+  }
+
+  if (expected_axes == 0) return 0;
+  return connected_expected_axes == expected_axes;
+}
+
+static void refresh_can_status(struct motion_backend* b) {
+  if (!b) return;
+  b->snap.can_ok = compute_can_ok(b);
+}
+
 static int node_in_discovery_list(const motion_snapshot_t* snap, uint8_t node_id) {
   if (!snap || node_id == 0) return 0;
   const int discovered = (int)snap->can_discovered_devices;
@@ -259,7 +288,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   }
   STC_LOG_INFO("discovery summary: scanned %d, responsive %u, connected %u",
     effective_scan_max(&b->cfg), b->snap.can_discovered_devices, b->snap.can_connected_devices);
-  b->snap.can_ok = 1;
+  refresh_can_status(b);
   *out_backend = b;
   return 0;
 }
@@ -277,6 +306,7 @@ int motion_backend_discover(motion_backend_t* backend) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
   const int responsive_count = discover_responsive_nodes(b);
+  refresh_can_status(b);
   STC_LOG_INFO("discovery summary: scanned %d, responsive %d, connected %u",
     effective_scan_max(&b->cfg), responsive_count, b->snap.can_connected_devices);
   return responsive_count;
@@ -398,6 +428,7 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
     }
     b->snap.last_rx_ms[axis] = b->axis_last_seen_ms[axis];
   }
+  refresh_can_status(b);
   *snapshot = b->snap;
   return 0;
 }
