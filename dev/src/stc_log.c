@@ -2,12 +2,14 @@
 
 #include "stc_log.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
 static FILE* g_log_file = NULL;
 static stc_log_level_t g_log_level = STC_LOG_LEVEL_INFO;
+static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static const char* level_tag(stc_log_level_t level) {
   switch (level) {
@@ -40,6 +42,8 @@ static void format_timestamp(char* out, size_t out_sz) {
 }
 
 void stc_log_init(const char* filename, stc_log_level_t level) {
+  pthread_mutex_lock(&g_log_mutex);
+
   g_log_level = level;
 
   if (g_log_file) {
@@ -53,22 +57,28 @@ void stc_log_init(const char* filename, stc_log_level_t level) {
       setvbuf(g_log_file, NULL, _IOLBF, 0);
     }
   }
+
+  pthread_mutex_unlock(&g_log_mutex);
 }
 
 void stc_log_close(void) {
+  pthread_mutex_lock(&g_log_mutex);
+
   if (g_log_file) {
     fclose(g_log_file);
     g_log_file = NULL;
   }
+
+  pthread_mutex_unlock(&g_log_mutex);
 }
 
 void stc_log_set_level(stc_log_level_t level) {
+  pthread_mutex_lock(&g_log_mutex);
   g_log_level = level;
+  pthread_mutex_unlock(&g_log_mutex);
 }
 
 void stc_vlog(stc_log_level_t level, const char* fmt, va_list ap) {
-  if (level > g_log_level) return;
-
   char ts[32];
   format_timestamp(ts, sizeof(ts));
 
@@ -78,10 +88,19 @@ void stc_vlog(stc_log_level_t level, const char* fmt, va_list ap) {
   vsnprintf(message, sizeof(message), fmt, ap_copy);
   va_end(ap_copy);
 
+  pthread_mutex_lock(&g_log_mutex);
+
+  if (level > g_log_level) {
+    pthread_mutex_unlock(&g_log_mutex);
+    return;
+  }
+
   fprintf(stderr, "%s | %s | %s\n", ts, level_tag(level), message);
   if (g_log_file) {
     fprintf(g_log_file, "%s | %s | %s\n", ts, level_tag(level), message);
   }
+
+  pthread_mutex_unlock(&g_log_mutex);
 }
 
 void stc_log(stc_log_level_t level, const char* fmt, ...) {

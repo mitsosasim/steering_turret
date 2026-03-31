@@ -121,6 +121,15 @@ add_executable(stc_config_test
 
 target_include_directories(stc_config_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_config_test PRIVATE -Wall -Wextra)
+
+add_executable(test_log_concurrency
+  dev/tests/test_log_concurrency.c
+  dev/src/stc_log.c
+)
+
+target_include_directories(test_log_concurrency PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_log_concurrency PRIVATE -Wall -Wextra)
+target_link_libraries(test_log_concurrency PRIVATE pthread)
 add_executable(test_can_worker_concurrency
   dev/tests/test_can_worker_concurrency.c
   dev/src/stc_log.c
