@@ -190,7 +190,7 @@ typedef struct {
   uint64_t end_to_end_avg_ns;
 } cmd_timing_stats_t;
 
-typedef struct {
+typedef struct shared_data {
   // --- per-axis config/telemetry/stream (axis0 = turret az active in step3)
   axis_cfg_t cfg[STC_AXIS_COUNT];
   uint8_t axis_node_id[STC_AXIS_COUNT];
@@ -501,11 +501,14 @@ static stc_event_t ibit_completion_event_locked(const shared_data_t* d) {
     if (d->axis_fault_active[axis]) faulted_axes++;
   }
 
-  if (expected_axes <= 0) return EVT_IBIT_COMPLETE_FAIL;
-  if (!d->can_ok) return EVT_IBIT_COMPLETE_FAIL;
-  if (available_axes != expected_axes) return EVT_IBIT_COMPLETE_FAIL;
-  if (faulted_axes > 0) return EVT_IBIT_COMPLETE_FAIL;
-  return EVT_IBIT_COMPLETE_OK;
+  const int pass =
+    (expected_axes > 0) &&
+    d->can_ok &&
+    (available_axes == expected_axes) &&
+    (faulted_axes == 0);
+
+  stc_diag_set_ibit_result(pass ? true : false);
+  return run_ibit_sequence((shared_data_t*)d) ? EVT_IBIT_COMPLETE_OK : EVT_IBIT_COMPLETE_FAIL;
 }
 
 static stc_event_t selflev_completion_event_locked(const shared_data_t* d) {
@@ -1042,14 +1045,17 @@ static void* can_worker_thread(void* arg) {
       (critical_axis_stale > 0) ||
       critical_hb ||
       critical_emcy;
-    if (critical_condition && a->sh->d.st_state != STC_STATE_FAIL) {
+    stc_diag_set_cbit_critical(&a->sh->d, critical_condition ? true : false);
+    const stc_diag_health_t cbit_health = run_cbit_cycle(&a->sh->d);
+    if (cbit_health == STC_DIAG_HEALTH_CRITICAL_FAULT &&
+        a->sh->d.st_state != STC_STATE_FAIL) {
       if (shared_transition_locked(a->sh, EVT_FAULT_CRITICAL) == 0) {
         STC_LOG_ERROR(
-          "Critical fault detected -> FAIL: axis_faults=%d axis_stale=%d hb=%d emcy=%d",
+          "CBIT critical fault detected -> FAIL: axis_faults=%d axis_stale=%d hb=%d emcy=%d",
           critical_axis_faults, critical_axis_stale, critical_hb, critical_emcy);
       } else {
         STC_LOG_ERROR(
-          "Critical fault transition rejected: state=%d axis_faults=%d axis_stale=%d hb=%d emcy=%d",
+          "CBIT critical fault transition rejected: state=%d axis_faults=%d axis_stale=%d hb=%d emcy=%d",
           (int)a->sh->d.st_state,
           critical_axis_faults, critical_axis_stale, critical_hb, critical_emcy);
       }
@@ -1709,7 +1715,9 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
                net->tlml_ip ? net->tlml_ip : "<null>",
                net->tlml_port);
 
-  if (motors_ok && network_ok) {
+  stc_diag_set_pbit_result(motors_ok && network_ok);
+  const int pass = run_pbit_startup() ? 1 : 0;
+  if (pass) {
     STC_LOG_INFO("PBIT result: PASS");
     return EVT_PBIT_OK;
   }
@@ -1750,7 +1758,9 @@ static stc_event_t run_admin_reset_ibit(const shared_t* sh, const runtime_net_t*
                net->tlml_ip ? net->tlml_ip : "<null>",
                net->tlml_port);
 
-  if (motors_ok && network_ok) {
+  stc_diag_set_ibit_result(motors_ok && network_ok);
+  const int pass = run_ibit_sequence((shared_data_t*)&sh->d) ? 1 : 0;
+  if (pass) {
     STC_LOG_INFO("RESET/IBIT result: PASS");
     return EVT_IBIT_COMPLETE_OK;
   }
