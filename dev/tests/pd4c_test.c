@@ -323,6 +323,24 @@ static int send_rpdo3_vel(pd4c_ctx_t* ctx, int16_t vel) {
 
 static bool sw_is_fault(uint16_t sw) { return (sw & 0x0008u) != 0; }
 
+static int assert_mode_display(pd4c_ctx_t* ctx, uint8_t expected_mode, int timeout_ms) {
+    /* PD4-C uses 0x6042/0x6044 in mode 2 (Velocity mode), not mode 3. */
+    uint64_t t0 = now_ms();
+    uint8_t mode_display = 0;
+
+    while ((int)(now_ms() - t0) < timeout_ms) {
+        int rc = pd4c_sdo_read_u8(ctx, 0x6061, 0x00, &mode_display);
+        if (rc == 0 && mode_display == expected_mode) return 0;
+        msleep(20);
+    }
+
+    fprintf(stderr,
+            "mode_display mismatch: expected=%u got=%u before RPDO3 velocity command\n",
+            (unsigned)expected_mode,
+            (unsigned)mode_display);
+    return -1;
+}
+
 /* enable sequence using RPDO1 (controlword + mode), verify with SDO reads */
 static int ds402_to_enabled(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms) {
     uint64_t t0 = now_ms();
@@ -454,11 +472,16 @@ int main(int argc, char** argv) {
     }
 
     /* ---------------- velocity mode via RPDO3 (6042) ---------------- */
-    printf("[4] Velocity mode test via PDO\n");
+    printf("[4] Velocity mode (6060=2) test via PDO\n");
     printf("  target channel: RPDO3 (0x%03X) -> 0x6042 (int16)\n", 0x400 + node);
+    printf("  note: PD4-C object dictionary ties 0x6042 target velocity to DS402 mode 2.\n");
 
     rc = ds402_to_enabled(&ctx, /*mode=*/2, /*timeout_ms=*/2000);
     printf("  ds402_to_enabled(mode=2): %s (%d)\n", (rc==0)?"OK":"FAIL", rc);
+    if (rc != 0) goto cleanup;
+
+    rc = assert_mode_display(&ctx, /*expected_mode=*/2, /*timeout_ms=*/500);
+    printf("  assert mode_display(6061)==2 before RPDO3: %s (%d)\n", (rc==0)?"OK":"FAIL", rc);
     if (rc != 0) goto cleanup;
 
     /* command +1000 then stop */
