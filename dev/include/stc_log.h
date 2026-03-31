@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 
+// Logger functions are thread-safe and internally synchronized.
 typedef enum {
   STC_LOG_LEVEL_ERROR = 0,
   STC_LOG_LEVEL_WARN = 1,
