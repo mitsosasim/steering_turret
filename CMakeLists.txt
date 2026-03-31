@@ -93,6 +93,12 @@ add_executable(stc_diag_test
   dev/src/stc_diag.c
 )
 
+add_executable(test_diag_state_integration
+  dev/tests/test_diag_state_integration.c
+  dev/src/stc_state.c
+  dev/src/stc_diag.c
+)
+
 add_executable(test_icd_codec
   dev/tests/test_icd_codec.c
   dev/src/stc_icd.c
@@ -103,6 +109,8 @@ target_compile_options(test_icd_codec PRIVATE -Wall -Wextra)
 
 target_include_directories(stc_diag_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_diag_test PRIVATE -Wall -Wextra)
+target_include_directories(test_diag_state_integration PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_diag_state_integration PRIVATE -Wall -Wextra)
 
 
 add_executable(stc_config_test
