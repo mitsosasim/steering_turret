@@ -89,6 +89,31 @@ Examples:
 ./build/tlm_rx_udp --tlmh-ip 239.255.10.2 --tlmh-port 6010 --tlml-ip 239.255.10.3 --tlml-port 6020 --raw
 ```
 
+### Turret motion demo script (`turret_motion_demo`)
+
+The build now copies a scripted motion demo to:
+
+```text
+./build/turret_motion_demo
+```
+
+This script drives a one-axis turret scenario through `icd_tx_tcp`:
+
+- enter `CU_STATE=3`
+- normalize to home (`0 deg`)
+- sweep to `-140`, hold, sweep to `+140`, hold (25 deg/s speed mode)
+- return home
+- run `0.1 deg` absolute steps every `2s` from `0` to `+140`
+- return home and exit
+
+It also traps `Ctrl+C` and performs a best-effort stop + return-to-home so a restart begins from a known state.
+
+Run:
+
+```bash
+./build/turret_motion_demo [host] [port]
+```
+
 
 ### Qt diagnostics GUI (`diag_gui_qt`)
 
