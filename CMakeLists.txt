@@ -211,3 +211,8 @@ if(BUILD_DIAG_GUI)
     message(STATUS "Qt6 not found: skipping diag_gui_qt target")
   endif()
 endif()
+
+# Motion demonstration script (runs against stc_server via icd_tx_tcp)
+configure_file(dev/tests/turret_motion_demo.sh ${CMAKE_BINARY_DIR}/turret_motion_demo COPYONLY)
+add_custom_target(turret_motion_demo_script ALL
+  DEPENDS ${CMAKE_BINARY_DIR}/turret_motion_demo)
