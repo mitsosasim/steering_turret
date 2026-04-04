@@ -194,6 +194,76 @@ Then run server/tests using `vcan0` where applicable.
 
 ---
 
+
+### Common RockPro + Windows workflow (SSH X11 forwarding)
+
+If you run the server on RockPro and display the Qt GUI on Windows, this flow is known to work.
+
+On **Windows**:
+
+1. Launch **XLaunch** (Xming/VcXsrv).
+2. In Command Prompt:
+
+```bat
+set DISPLAY=localhost:0.0
+ssh -Y STSide
+```
+
+Then on the SSH shell (RockPro):
+
+```bash
+./build/diag_gui_qt
+```
+
+> Note: `ssh -Y` enables trusted X11 forwarding. If needed, `ssh -X` can also be used.
+
+### VS Code build/run command examples
+
+Simulator-enabled GUI build:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_DIAG_GUI=ON -DUSE_SIMULATOR=ON
+cmake --build build -j"$(nproc)"
+./build/stc_server
+```
+
+Hardware-CAN GUI build:
+
+```bash
+cmake -S . -B build -DUSE_SIMULATOR=OFF -DBUILD_DIAG_GUI=ON
+cmake --build build -j"$(nproc)"
+```
+
+### CAN bus detailed monitoring (`candump`)
+
+For detailed live CAN traffic insight while the server is running, use `candump` from `can-utils`:
+
+```bash
+candump -tz -cae can0
+```
+
+Useful variants:
+
+```bash
+candump -L can0            # log-format output
+candump any,0:0,#FFFFFFFF  # capture from any interface with mask
+candump can0,123:7FF       # filter specific CAN ID range
+```
+
+### `canup` alias note
+
+If you already use a local `canup` alias/function to bring CAN up quickly, keep using it before starting `stc_server`/GUI. Example:
+
+```bash
+canup
+ip -details link show can0
+```
+
+(Exact `canup` definition is environment-specific, so keep your local alias/script as the source of truth.)
+
+
+---
+
 ## 7) Run tests and demos
 
 ### 7.1 CMake-built tests
