@@ -1,66 +1,114 @@
 # STC
 
-## Build
+This repository builds an STC server, CLI tooling, optional Qt diagnostics GUI, and multiple test/demo programs.
+
+## 1) Prerequisites
+
+### Required
+- Linux (SocketCAN-based workflows assume Linux).
+- CMake >= 3.16.
+- GCC/G++ (or another C11/C++17 toolchain).
+- `make`/Ninja (any CMake generator is fine).
+
+### Optional (depending on what you want to run)
+- **Qt6** (`Core`, `Gui`, `Widgets`, `Network`) for `diag_gui_qt`.
+- **SocketCAN tools** (`iproute2`, optional `can-utils`) for real CAN interfaces.
+- `setcap` (from `libcap`) when granting runtime capabilities.
+
+---
+
+## 2) Build from scratch
+
+From the repo root:
 
 ```bash
 cmake -S . -B build
 cmake --build build -j
 ```
 
-## Run
+This builds:
+- Main server: `build/stc_server`
+- CLI helpers: `build/icd_tx_tcp`, `build/tlm_rx_udp`
+- Unit/integration tests in `build/` (see [Section 7](#7-run-tests-and-demos))
+- Scripted demo copied to `build/turret_motion_demo`
 
+### Build variants you will likely use
+
+#### A) Server + CLI tools + tests (default)
 ```bash
-./build/stc_server --help
+cmake -S . -B build
+cmake --build build -j
 ```
 
-If `--help` is not implemented in your build, run the server directly:
+#### B) Server **without GUI** (explicit)
+If you want to force-disable GUI target generation:
+
+```bash
+cmake -S . -B build_nogui -DBUILD_DIAG_GUI=OFF
+cmake --build build_nogui -j
+```
+
+#### C) Server with hardware CAN backend (no simulator)
+By default, `USE_SIMULATOR=ON`. To build against `can_backend.c` instead:
+
+```bash
+cmake -S . -B build_hwcan -DUSE_SIMULATOR=OFF
+cmake --build build_hwcan -j
+```
+
+#### D) Attempt GUI build (Qt required)
+```bash
+cmake -S . -B build_gui -DBUILD_DIAG_GUI=ON
+cmake --build build_gui -j
+```
+
+> If Qt6 is not found, CMake logs: `Qt6 not found: skipping diag_gui_qt target`.
+
+---
+
+## 3) Run modes
+
+### Mode 1: Server only (no GUI)
 
 ```bash
 ./build/stc_server
 ```
 
-### Real-time scheduling privileges
-
-`stc_server` can request RT scheduler policies (`SCHED_FIFO`/`SCHED_RR`).
-At startup it probes RT privilege once and behaves deterministically:
-
-- `--rt-strict 1`: fail startup if RT policy/priority cannot be set.
-- `--rt-strict 0`: log warning + remediation and continue with RT disabled.
-
-Runtime flags:
-
-```text
---rt-enabled 0|1
---rt-strict 0|1
---rt-policy fifo|rr|other
---can-worker-prio <int> --tlmh-prio <int> --tlml-prio <int>
-```
-
-Grant `CAP_SYS_NICE` directly on the binary:
+Show usage/options:
 
 ```bash
-sudo setcap cap_sys_nice=ep /opt/stc/bin/stc_server
-getcap /opt/stc/bin/stc_server
+./build/stc_server --help
 ```
 
-Install the Linux deployment artifacts (`systemd` unit + preflight checks):
+Key runtime flags include TCP/CAN settings, telemetry endpoints, and RT scheduling controls.
+
+### Mode 2: Server + GUI
+
+1. Start server in one terminal:
 
 ```bash
-sudo install -d /opt/stc/deploy
-sudo install -m 0755 deploy/stc_preflight.sh /opt/stc/deploy/stc_preflight.sh
-sudo install -m 0644 deploy/stc_server.service /etc/systemd/system/stc_server.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now stc_server
-sudo systemctl status stc_server --no-pager
+./build/stc_server
 ```
 
-See `deploy/CPU_AFFINITY.md` for CPU isolation guidance and `deploy/OPERATOR_RUNBOOK.md` for privilege model (root vs capability-based) operations.
+2. Start GUI in another terminal (if built):
 
-### ICD command transmitter (`icd_tx_tcp`)
+```bash
+./build/diag_gui_qt
+```
 
-`icd_tx_tcp` uses:
+The GUI provides command controls and UDP telemetry listeners.
 
-```text
+### Mode 3: Server + CLI-only control (no GUI)
+
+1. Start server:
+
+```bash
+./build/stc_server
+```
+
+2. Use CLI command sender:
+
+```bash
 ./build/icd_tx_tcp <host> <port> <cmd> [args...]
 ```
 
@@ -73,69 +121,174 @@ Examples:
 ./build/icd_tx_tcp 127.0.0.1 7001 manualpos 37.5665 126.9780 45.0 90.0
 ```
 
-### Telemetry receiver (`tlm_rx_udp`)
-
-`tlm_rx_udp` uses:
-
-```text
-./build/tlm_rx_udp [--ifname <iface>] [--tlmh-ip <ip> --tlmh-port <port>] [--tlml-ip <ip> --tlml-port <port>] [--raw]
-```
-
-Examples:
+3. (Optional) Monitor telemetry via UDP:
 
 ```bash
 ./build/tlm_rx_udp
 ./build/tlm_rx_udp --ifname eth0
-./build/tlm_rx_udp --tlmh-ip 239.255.10.2 --tlmh-port 6010 --tlml-ip 239.255.10.3 --tlml-port 6020 --raw
+./build/tlm_rx_udp --raw --verbose
 ```
 
-### Turret motion demo script (`turret_motion_demo`)
+---
 
-The build now copies a scripted motion demo to:
+## 4) Real-time scheduling + capability setup
 
-```text
-./build/turret_motion_demo
-```
+`stc_server` supports RT policy options (`fifo`, `rr`, `other`) and strict/non-strict behavior:
 
-This script drives a one-axis turret scenario through `icd_tx_tcp`:
+- `--rt-enabled 0|1`
+- `--rt-strict 0|1`
+- `--rt-policy fifo|rr|other`
+- `--can-worker-prio <int> --tlmh-prio <int> --tlml-prio <int>`
 
-- enter `CU_STATE=3`
-- normalize to home (`0 deg`)
-- sweep to `-140`, hold, sweep to `+140`, hold (25 deg/s speed mode)
-- return home
-- run `0.1 deg` absolute steps every `2s` from `0` to `+140`
-- return home and exit
-
-It also traps `Ctrl+C` and performs a best-effort stop + return-to-home so a restart begins from a known state.
-
-Run:
+Grant RT privilege to installed binary:
 
 ```bash
-./build/turret_motion_demo [host] [port]
+sudo setcap cap_sys_nice=ep /opt/stc/bin/stc_server
+getcap /opt/stc/bin/stc_server
 ```
 
-
-### Qt diagnostics GUI (`diag_gui_qt`)
-
-If Qt6 (Core/Gui/Widgets/Network) is available, CMake builds `diag_gui_qt`.
-The GUI provides:
-
-- ICD command send controls (`CU_STATE`, `SELFLEV`, `IBIT`, turret motion).
-- Dual UDP telemetry listeners (high/low rate) with asynchronous `readyRead` handling.
-- Dynamic 18-axis panel (`Position`, `Velocity`, `Target`, `Type`).
-- Simulation mode toggle with a 10ms update timer.
-
-Run:
-
-```bash
-./build/diag_gui_qt
-```
-
-For deployments under `/opt/stc/bin`, prefer assigning only the needed net-admin capability instead of running the GUI as root:
+For GUI raw-socket needs (if deployed to `/opt/stc/bin`):
 
 ```bash
 sudo setcap cap_net_admin+ep /opt/stc/bin/diag_gui_qt
 getcap /opt/stc/bin/diag_gui_qt
 ```
 
-The GUI now performs a startup capability probe and logs a warning if `CAP_NET_ADMIN` is missing.
+---
+
+## 5) Systemd deployment (optional)
+
+```bash
+sudo install -d /opt/stc/deploy
+sudo install -m 0755 deploy/stc_preflight.sh /opt/stc/deploy/stc_preflight.sh
+sudo install -m 0644 deploy/stc_server.service /etc/systemd/system/stc_server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now stc_server
+sudo systemctl status stc_server --no-pager
+```
+
+Also see:
+- `deploy/CPU_AFFINITY.md`
+- `deploy/OPERATOR_RUNBOOK.md`
+
+---
+
+## 6) CAN setup quick start (for local testing)
+
+If you do not have physical CAN hardware, you can use the included helper:
+
+```bash
+sudo ./scripts/vcan_setup.sh
+```
+
+Or manually:
+
+```bash
+sudo modprobe vcan
+sudo ip link add dev vcan0 type vcan
+sudo ip link set vcan0 up
+ip -details link show vcan0
+```
+
+Then run server/tests using `vcan0` where applicable.
+
+---
+
+## 7) Run tests and demos
+
+### 7.1 CMake-built tests
+
+After `cmake --build build -j`, run:
+
+```bash
+./build/test_actions
+./build/stc_state_test
+./build/stc_diag_test
+./build/test_diag_state_integration
+./build/test_icd_codec
+./build/stc_config_test
+./build/test_log_concurrency
+./build/test_can_worker_concurrency
+# Optional TSAN build (slower):
+./build/test_can_worker_concurrency_tsan
+```
+
+### 7.2 Scripted turret demo (CMake-copied)
+
+CMake copies `dev/tests/turret_motion_demo.sh` to:
+
+```bash
+./build/turret_motion_demo [host] [port]
+```
+
+This drives turret state/motion via `icd_tx_tcp` against a running `stc_server`.
+
+### 7.3 Standalone C test files not built by default CMake targets
+
+Some demo/test C files in `dev/tests/` are intentionally standalone and can be compiled directly.
+
+### `pd4c_test.c`
+
+```bash
+gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
+  -Idev/include \
+  dev/tests/pd4c_test.c dev/src/pd4c.c -lm -o build/pd4c_test
+
+./build/pd4c_test <can_iface> <node_id>
+# example:
+./build/pd4c_test can0 1
+```
+
+### `turret_motion_demo.c`
+
+```bash
+gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
+  -Idev/include \
+  dev/tests/turret_motion_demo.c dev/src/pd4c.c -lm -o build/turret_motion_demo_c
+
+./build/turret_motion_demo_c <can_iface> <node_id>
+# example:
+./build/turret_motion_demo_c can0 1
+```
+
+> Note: this file includes additional optional CLI parameters; run it without enough arguments to print usage guidance.
+
+---
+
+## 8) Typical end-to-end workflows
+
+### Workflow A: Fast local (simulator, CLI only)
+```bash
+cmake -S . -B build
+cmake --build build -j
+./build/stc_server
+# second terminal:
+./build/icd_tx_tcp 127.0.0.1 7001 cu_state 2
+./build/tlm_rx_udp --raw
+```
+
+### Workflow B: GUI operator station
+```bash
+cmake -S . -B build_gui -DBUILD_DIAG_GUI=ON
+cmake --build build_gui -j
+./build_gui/stc_server
+./build_gui/diag_gui_qt
+```
+
+### Workflow C: Hardware CAN validation
+```bash
+cmake -S . -B build_hwcan -DUSE_SIMULATOR=OFF -DBUILD_DIAG_GUI=OFF
+cmake --build build_hwcan -j
+./build_hwcan/stc_server --can can0 --node 1
+./build_hwcan/icd_tx_tcp 127.0.0.1 7001 suite
+```
+
+---
+
+## 9) Troubleshooting
+
+- **`diag_gui_qt` missing**: Qt6 dependencies were not found at configure time.
+- **Permission errors on RT/network features**: apply `setcap` commands above or run with appropriate service policy.
+- **No CAN interface**: create `vcan0` first (Section 6).
+- **Server option confusion**: run `./build/stc_server --help` and use long-form flags shown there.
+
