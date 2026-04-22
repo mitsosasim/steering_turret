@@ -1,15 +1,12 @@
 /*
- * Build example (Linux, adjust include/lib paths for your PCAN-Basic install):
+ * Build example (Linux, SocketCAN):
  *
- *   gcc -O2 -Wall -Wextra -std=c11 \
- *       x8_25.c x8_25_test_pcan.c \
- *       -I/path/to/pcan/include -L/path/to/pcan/lib \
- *       -lpcanbasic -lm -o x8_25_test_pcan
- *
- * Some installs use -lPCANBasic instead of -lpcanbasic.
+ *   gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
+ *       dev/src/x8_25.c dev/tests/x8_25_test.c \
+ *       -Idev/include -lm -o x8_25_test_can
  *
  * Usage:
- *   ./x8_25_test_pcan usb1 1 1M
+ *   ./x8_25_test_can can0 1
  *
  * Notes:
  * - This test is intentionally safe by default:
@@ -22,18 +19,30 @@
  */
 
 #include "x8_25.h"
-#include <PCANBasic.h>
 
+#include <errno.h>
 #include <inttypes.h>
+#include <net/if.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <linux/can.h>
+#include <linux/can/raw.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 typedef struct {
-    TPCANHandle ch;
-} pcan_bus_t;
+    int s;
+    char ifname[IFNAMSIZ];
+} sockcan_bus_t;
 
 static uint64_t now_ms(void* user) {
     struct timespec ts;
@@ -46,69 +55,63 @@ static void msleep(unsigned ms) {
     usleep(ms * 1000u);
 }
 
-static const char* pcan_err_text(TPCANStatus st, char buf[256]) {
-    if (CAN_GetErrorText(st, 0, buf) == PCAN_ERROR_OK) return buf;
-    snprintf(buf, 256, "PCAN error 0x%08X", (unsigned)st);
-    return buf;
-}
+static int sockcan_send_cb(const myact_can_frame_t* fr, void* user) {
+    sockcan_bus_t* bus = (sockcan_bus_t*)user;
+    struct can_frame cfr;
+    ssize_t n;
+    if (!fr || !bus) return MYACT_EINVAL;
+    if (fr->dlc > 8u) return MYACT_EINVAL;
 
-static int pcan_to_myact(TPCANStatus st) {
-    if (st == PCAN_ERROR_OK) return MYACT_OK;
-    if (st == PCAN_ERROR_QRCVEMPTY) return MYACT_ETIMEDOUT;
-    if (st & (PCAN_ERROR_BUSOFF | PCAN_ERROR_BUSHEAVY | PCAN_ERROR_BUSLIGHT)) return MYACT_EBUS;
+    memset(&cfr, 0, sizeof(cfr));
+    cfr.can_id = fr->id & CAN_SFF_MASK;
+    cfr.can_dlc = fr->dlc;
+    memcpy(cfr.data, fr->data, 8);
+
+    n = write(bus->s, &cfr, sizeof(cfr));
+    if (n == (ssize_t)sizeof(cfr)) return MYACT_OK;
+    if (n < 0) {
+        if (errno == ENETDOWN || errno == ENETUNREACH || errno == EBUSY) return MYACT_EBUS;
+        return MYACT_EIO;
+    }
     return MYACT_EIO;
 }
 
-static int pcan_send_cb(const myact_can_frame_t* fr, void* user) {
-    TPCANMsg msg;
-    TPCANStatus st;
-    pcan_bus_t* bus = (pcan_bus_t*)user;
-
-    if (!fr || !bus) return MYACT_EINVAL;
-    memset(&msg, 0, sizeof(msg));
-    msg.ID = fr->id;
-    msg.MSGTYPE = PCAN_MESSAGE_STANDARD;
-    msg.LEN = fr->dlc;
-    memcpy(msg.DATA, fr->data, 8);
-
-    st = CAN_Write(bus->ch, &msg);
-    return pcan_to_myact(st);
-}
-
-static int pcan_recv_cb(myact_can_frame_t* out, uint32_t timeout_ms, void* user) {
-    pcan_bus_t* bus = (pcan_bus_t*)user;
-    uint64_t t0 = now_ms(NULL);
-    TPCANStatus st;
-
+static int sockcan_recv_cb(myact_can_frame_t* out, uint32_t timeout_ms, void* user) {
+    sockcan_bus_t* bus = (sockcan_bus_t*)user;
+    struct pollfd pfd;
+    int prc;
+    struct can_frame cfr;
+    ssize_t n;
     if (!out || !bus) return MYACT_EINVAL;
 
+    pfd.fd = bus->s;
+    pfd.events = POLLIN;
+
     for (;;) {
-        TPCANMsg msg;
-        TPCANTimestamp ts;
-
-        st = CAN_Read(bus->ch, &msg, &ts);
-        if (st == PCAN_ERROR_OK) {
-            if (msg.MSGTYPE & PCAN_MESSAGE_STATUS) {
-                return MYACT_EBUS;
-            }
-            if (!(msg.MSGTYPE & PCAN_MESSAGE_STANDARD)) {
-                continue;
-            }
-
-            memset(out, 0, sizeof(*out));
-            out->id = msg.ID;
-            out->dlc = msg.LEN;
-            memcpy(out->data, msg.DATA, 8);
-            return MYACT_OK;
+        prc = poll(&pfd, 1, (int)timeout_ms);
+        if (prc == 0) return MYACT_ETIMEDOUT;
+        if (prc < 0) {
+            if (errno == EINTR) continue;
+            return MYACT_EIO;
         }
-
-        if (st == PCAN_ERROR_QRCVEMPTY) {
-            if ((now_ms(NULL) - t0) >= timeout_ms) return MYACT_ETIMEDOUT;
-            usleep(1000);
+        if (!(pfd.revents & POLLIN)) {
+            if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return MYACT_EBUS;
             continue;
         }
 
-        return pcan_to_myact(st);
+        n = read(bus->s, &cfr, sizeof(cfr));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return MYACT_EIO;
+        }
+        if (n != (ssize_t)sizeof(cfr)) continue;
+        if ((cfr.can_id & CAN_EFF_FLAG) || (cfr.can_id & CAN_RTR_FLAG) || (cfr.can_id & CAN_ERR_FLAG)) continue;
+
+        memset(out, 0, sizeof(*out));
+        out->id = cfr.can_id & CAN_SFF_MASK;
+        out->dlc = (uint8_t)cfr.can_dlc;
+        memcpy(out->data, cfr.data, 8);
+        return MYACT_OK;
     }
 }
 
@@ -122,30 +125,39 @@ static void log_cb(myact_log_level_t level, const char* msg, void* user) {
     fprintf(stderr, "[myact][%s] %s\n", tag, msg);
 }
 
-static TPCANHandle parse_channel(const char* s) {
-    struct { const char* name; TPCANHandle h; } map[] = {
-        { "usb1", PCAN_USBBUS1 }, { "usb2", PCAN_USBBUS2 },
-        { "usb3", PCAN_USBBUS3 }, { "usb4", PCAN_USBBUS4 },
-        { "usb5", PCAN_USBBUS5 }, { "usb6", PCAN_USBBUS6 },
-        { "usb7", PCAN_USBBUS7 }, { "usb8", PCAN_USBBUS8 }
-    };
-    size_t i;
+static int sockcan_open(sockcan_bus_t* bus, const char* ifname) {
+    struct ifreq ifr;
+    struct sockaddr_can addr;
+    int s;
 
-    if (strncmp(s, "0x", 2) == 0 || strncmp(s, "0X", 2) == 0) {
-        return (TPCANHandle)strtoul(s, NULL, 0);
+    if (!bus || !ifname) return -EINVAL;
+
+    s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+    if (s < 0) return -errno;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+    if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) {
+        int e = -errno;
+        close(s);
+        return e;
     }
 
-    for (i = 0; i < sizeof(map) / sizeof(map[0]); ++i) {
-        if (strcmp(s, map[i].name) == 0) return map[i].h;
+    memset(&addr, 0, sizeof(addr));
+    addr.can_family = AF_CAN;
+    addr.can_ifindex = ifr.ifr_ifindex;
+    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        int e = -errno;
+        close(s);
+        return e;
     }
-    return PCAN_NONEBUS;
-}
 
-static TPCANBaudrate parse_baud(const char* s) {
-    if (!s) return PCAN_BAUD_1M;
-    if (strcmp(s, "1M") == 0 || strcmp(s, "1m") == 0)   return PCAN_BAUD_1M;
-    if (strcmp(s, "500K") == 0 || strcmp(s, "500k") == 0) return PCAN_BAUD_500K;
-    return PCAN_BAUD_1M;
+    memset(bus, 0, sizeof(*bus));
+    bus->s = s;
+    strncpy(bus->ifname, ifname, IFNAMSIZ - 1);
+    bus->ifname[IFNAMSIZ - 1] = '\0';
+    return 0;
 }
 
 static void print_status1(const myact_status1_t* s) {
@@ -348,57 +360,49 @@ static int test_motion_mode(myact_ctx_t* ctx) {
 }
 
 int main(int argc, char** argv) {
-    pcan_bus_t bus;
+    sockcan_bus_t bus;
     myact_io_t io;
     myact_ctx_t ctx;
-    TPCANHandle ch;
-    TPCANBaudrate baud;
-    TPCANStatus st;
-    char ebuf[256];
-    DWORD on = PCAN_PARAMETER_ON;
+    const char* can_if = NULL;
     int node_id;
     int rc;
 
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <usb1|0x51...> <node_id 1..32> [1M|500K]\n", argv[0]);
+        fprintf(stderr, "usage: %s <can_if> <node_id 1..32>\n", argv[0]);
         return 2;
     }
 
-    ch = parse_channel(argv[1]);
+    can_if = argv[1];
     node_id = atoi(argv[2]);
-    baud = parse_baud((argc >= 4) ? argv[3] : "1M");
 
-    if (ch == PCAN_NONEBUS || node_id < 1 || node_id > 32) {
-        fprintf(stderr, "invalid channel or node id\n");
+    if (node_id < 1 || node_id > 32) {
+        fprintf(stderr, "invalid node id\n");
         return 2;
     }
 
-    st = CAN_Initialize(ch, baud, 0, 0, 0);
-    if (st != PCAN_ERROR_OK) {
-        fprintf(stderr, "CAN_Initialize failed: %s\n", pcan_err_text(st, ebuf));
+    rc = sockcan_open(&bus, can_if);
+    if (rc < 0) {
+        fprintf(stderr, "socketcan open failed on '%s': %s\n", can_if, strerror(-rc));
         return 1;
     }
 
-    (void)CAN_SetValue(ch, PCAN_BUSOFF_AUTORESET, &on, sizeof(on));
-
-    bus.ch = ch;
-    io.send = pcan_send_cb;
-    io.recv = pcan_recv_cb;
+    io.send = sockcan_send_cb;
+    io.recv = sockcan_recv_cb;
     io.time_ms = now_ms;
     io.user = &bus;
 
     rc = myact_init(&ctx, (uint8_t)node_id, &io);
     if (rc < 0) {
         fprintf(stderr, "myact_init failed: %s\n", myact_strerror(rc));
-        CAN_Uninitialize(ch);
+        close(bus.s);
         return 1;
     }
 
     myact_set_timeout_ms(&ctx, 300);
     myact_set_logger(&ctx, log_cb, NULL);
 
-    printf("=== MYACTUATOR X8-25 PCAN test ===\n");
-    printf("channel=%s  node=%d  baud=%s\n", argv[1], node_id, (baud == PCAN_BAUD_500K) ? "500K" : "1M");
+    printf("=== MYACTUATOR X8-25 SocketCAN test ===\n");
+    printf("if=%s  node=%d\n", can_if, node_id);
     printf("safe defaults: 0.20 A torque, 10 dps speed, small position steps\n");
 
     rc = read_identity(&ctx);
@@ -426,13 +430,13 @@ int main(int argc, char** argv) {
     (void)myact_shutdown(&ctx);
 
     printf("\nall default tests completed successfully\n");
-    CAN_Uninitialize(ch);
+    close(bus.s);
     return 0;
 
 fail:
     fprintf(stderr, "\nTEST FAILED: %s (%d)\n", myact_strerror(rc), rc);
     (void)myact_stop(&ctx);
     (void)myact_shutdown(&ctx);
-    CAN_Uninitialize(ch);
+    close(bus.s);
     return 1;
 }
