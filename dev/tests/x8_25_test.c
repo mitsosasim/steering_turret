@@ -2,14 +2,14 @@
  * Build example (Linux, adjust include/lib paths for your PCAN-Basic install):
  *
  *   gcc -O2 -Wall -Wextra -std=c11 \
- *       myactuator_can.c myactuator_can_test_pcan.c \
+ *       x8_25.c x8_25_test_pcan.c \
  *       -I/path/to/pcan/include -L/path/to/pcan/lib \
- *       -lpcanbasic -lm -o myactuator_can_test_pcan
+ *       -lpcanbasic -lm -o x8_25_test_pcan
  *
  * Some installs use -lPCANBasic instead of -lpcanbasic.
  *
  * Usage:
- *   ./myactuator_can_test_pcan usb1 1 1M
+ *   ./x8_25_test_pcan usb1 1 1M
  *
  * Notes:
  * - This test is intentionally safe by default:
@@ -21,7 +21,7 @@
  *   on the official product page is the "N" (no brake) variant.
  */
 
-#include "myactuator_can.h"
+#include "x8_25.h"
 #include <PCANBasic.h>
 
 #include <inttypes.h>
