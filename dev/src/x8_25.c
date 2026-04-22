@@ -1,8 +1,6 @@
-#include "myactuator_can.h"
+#include "x8_25.h"
 
 #include <math.h>
-#include <stdarg.h>
-#include <stdio.h>
 #include <string.h>
 
 #define MYACT_CMD_ID_BASE           0x140u
@@ -20,16 +18,6 @@ static void myact_rebuild_ids(myact_ctx_t* ctx) {
 
 static uint64_t myact_now_ms(const myact_ctx_t* ctx) {
     return ctx->io.time_ms(ctx->io.user);
-}
-
-static void myact_logf(myact_ctx_t* ctx, myact_log_level_t lvl, const char* fmt, ...) {
-    char buf[256];
-    va_list ap;
-    if (!ctx || !ctx->log_fn) return;
-    va_start(ap, fmt);
-    (void)vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    ctx->log_fn(lvl, buf, ctx->log_user);
 }
 
 static uint16_t rd_u16_le(const uint8_t* p) {
