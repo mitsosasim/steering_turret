@@ -2,7 +2,8 @@
  * Build example (Linux, adjust include/lib paths for your PCAN-Basic install):
  *
  *   gcc -O2 -Wall -Wextra -std=c11 \
- *       x8_25.c x8_25_test_pcan.c \
+ *       dev/src/x8_25.c dev/tests/x8_25_test.c \
+ *       -Idev/include \
  *       -I/path/to/pcan/include -L/path/to/pcan/lib \
  *       -lpcanbasic -lm -o x8_25_test_pcan
  *
@@ -30,6 +31,10 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 typedef struct {
     TPCANHandle ch;

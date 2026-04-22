@@ -1,5 +1,5 @@
-#ifndef MYACTUATOR_CAN_H
-#define MYACTUATOR_CAN_H
+#ifndef X8_25_H
+#define X8_25_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -432,4 +432,4 @@ double   myact_clamp(double x, double x_min, double x_max);
 }
 #endif
 
-#endif /* MYACTUATOR_CAN_H */
+#endif /* X8_25_H */
