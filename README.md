@@ -323,6 +323,30 @@ gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
 
 > Note: this file includes additional optional CLI parameters; run it without enough arguments to print usage guidance.
 
+### `x8_25_test.c` (MyActuator X8-25 / X8-PRO over SocketCAN)
+
+Compile:
+
+```bash
+gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
+  dev/src/x8_25.c dev/tests/x8_25_test.c \
+  -Idev/include -lm -o build/x8_25_test_can
+```
+
+Run:
+
+```bash
+./build/x8_25_test_can <can_iface> <node_id>
+# example:
+./build/x8_25_test_can can0 1
+```
+
+Monitor live CAN traffic with `candump` (separate terminal):
+
+```bash
+candump -tz -cae can0
+```
+
 ---
 
 ## 8) Typical end-to-end workflows
@@ -361,4 +385,3 @@ cmake --build build_hwcan -j
 - **Permission errors on RT/network features**: apply `setcap` commands above or run with appropriate service policy.
 - **No CAN interface**: create `vcan0` first (Section 6).
 - **Server option confusion**: run `./build/stc_server --help` and use long-form flags shown there.
-
