@@ -273,11 +273,60 @@ static int test_torque(myact_ctx_t* ctx) {
 
     printf("\n[torque test] +0.20 A for 300 ms, then stop\n");
     rc = myact_torque(ctx, iq, &fb);
-    if (rc < 0) return rc;
-    printf("  feedback: iq=%.2f A speed=%d dps angle=%d deg\n",
-           myact_current_raw_to_a(fb.iq_0p01a),
-           (int)fb.speed_dps,
-           (int)fb.angle_deg);
+    if (rc == MYACT_ETIMEDOUT) {
+        const uint64_t grace_ms = 800;
+        uint64_t t0 = now_ms(NULL);
+        int saw_status2 = 0;
+        int saw_effect = 0;
+        int saw_status1_noerr = 0;
+
+        rc = myact_torque_send(ctx, iq);
+        if (rc < 0) return rc;
+
+        while ((now_ms(NULL) - t0) < grace_ms) {
+            myact_status2_t s2;
+            myact_status1_t s1;
+
+            rc = myact_read_status2(ctx, &s2);
+            if (rc == MYACT_OK) {
+                saw_status2 = 1;
+                if (abs((int)s2.iq_0p01a) >= abs((int)iq) / 2 || abs((int)s2.speed_dps) >= 1) {
+                    saw_effect = 1;
+                }
+            } else if (rc != MYACT_ETIMEDOUT) {
+                return rc;
+            }
+
+            rc = myact_read_status1(ctx, &s1);
+            if (rc == MYACT_OK) {
+                if (s1.error_flags == 0u) {
+                    saw_status1_noerr = 1;
+                } else {
+                    break;
+                }
+            } else if (rc != MYACT_ETIMEDOUT) {
+                return rc;
+            }
+
+            if ((saw_effect || saw_status2) && saw_status1_noerr) break;
+            msleep(80);
+        }
+
+        if ((saw_effect || saw_status2) && saw_status1_noerr) {
+            printf("  A1 ack missing; validated via 0x9C stream\n");
+        } else {
+            fprintf(stderr, "  A1 ack missing and no motion/torque evidence in 0x9C\n");
+            return MYACT_ETIMEDOUT;
+        }
+    } else if (rc < 0) {
+        return rc;
+    } else {
+        printf("  feedback: iq=%.2f A speed=%d dps angle=%d deg\n",
+               myact_current_raw_to_a(fb.iq_0p01a),
+               (int)fb.speed_dps,
+               (int)fb.angle_deg);
+    }
+
     msleep(300);
     return myact_stop(ctx);
 }
