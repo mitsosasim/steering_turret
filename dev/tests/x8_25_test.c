@@ -184,7 +184,7 @@ static void print_status3(const myact_status3_t* s) {
            myact_current_raw_to_a(s->phase_c_0p01a));
 }
 
-static int read_identity(myact_ctx_t* ctx) {
+static int read_identity(myact_ctx_t* ctx, myact_status1_t* initial_status1) {
     char model[8];
     uint32_t ver = 0;
     uint32_t runtime = 0;
@@ -236,6 +236,50 @@ static int read_identity(myact_ctx_t* ctx) {
     print_status1(&s1);
     print_status2(&s2);
     print_status3(&s3);
+    if (initial_status1) *initial_status1 = s1;
+    return MYACT_OK;
+}
+
+
+static int preflight_brake_state(myact_ctx_t* ctx, bool force_motion, const myact_status1_t* initial_status1, bool* motion_allowed) {
+    myact_status1_t s1;
+    int rc;
+
+    if (!ctx || !initial_status1 || !motion_allowed) return MYACT_EINVAL;
+
+    s1 = *initial_status1;
+    if (s1.brake_released) {
+        *motion_allowed = true;
+        return MYACT_OK;
+    }
+
+    fprintf(stderr, "\n[preflight] brake reports locked/off in status1. attempting release via cmd 0x77...\n");
+    rc = myact_brake_release(ctx);
+    if (rc < 0) {
+        fprintf(stderr, "[preflight] brake release command not supported/failed: %s (%d)\n", myact_strerror(rc), rc);
+    } else {
+        msleep(120);
+        rc = myact_read_status1(ctx, &s1);
+        if (rc < 0) {
+            fprintf(stderr, "[preflight] status1 re-read after release failed: %s (%d)\n", myact_strerror(rc), rc);
+        } else {
+            print_status1(&s1);
+            if (s1.brake_released) {
+                printf("[preflight] brake released; motion tests enabled.\n");
+                *motion_allowed = true;
+                return MYACT_OK;
+            }
+            fprintf(stderr, "[preflight] brake still locked/off after release command.\n");
+        }
+    }
+
+    if (force_motion) {
+        fprintf(stderr, "[preflight] --force-motion set: continuing motion tests despite brake state.\n");
+        *motion_allowed = true;
+        return MYACT_OK;
+    }
+
+    *motion_allowed = false;
     return MYACT_OK;
 }
 
@@ -415,14 +459,24 @@ int main(int argc, char** argv) {
     const char* can_if = NULL;
     int node_id;
     int rc;
+    bool force_motion = false;
+    bool motion_allowed = true;
+    myact_status1_t initial_status1;
 
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <can_if> <node_id 1..32>\n", argv[0]);
+        fprintf(stderr, "usage: %s <can_if> <node_id 1..32> [--force-motion]\n", argv[0]);
         return 2;
     }
 
     can_if = argv[1];
     node_id = atoi(argv[2]);
+    for (int i = 3; i < argc; ++i) {
+        if (strcmp(argv[i], "--force-motion") == 0) force_motion = true;
+        else {
+            fprintf(stderr, "unknown option: %s\n", argv[i]);
+            return 2;
+        }
+    }
 
     if (node_id < 1 || node_id > 32) {
         fprintf(stderr, "invalid node id\n");
@@ -451,14 +505,25 @@ int main(int argc, char** argv) {
     myact_set_logger(&ctx, log_cb, NULL);
 
     printf("=== MYACTUATOR X8-25 SocketCAN test ===\n");
+    printf("warning: X8-PRO / brake-capable variants may require brake release before motion tests.\n");
     printf("if=%s  node=%d\n", can_if, node_id);
     printf("safe defaults: 0.20 A torque, 10 dps speed, small position steps\n");
 
-    rc = read_identity(&ctx);
+    rc = read_identity(&ctx, &initial_status1);
     if (rc < 0) goto fail;
 
     rc = test_active_reply(&ctx);
     if (rc < 0) goto fail;
+
+    rc = preflight_brake_state(&ctx, force_motion, &initial_status1, &motion_allowed);
+    if (rc < 0) goto fail;
+    if (!motion_allowed) {
+        fprintf(stderr, "\nMOTION TESTS SKIPPED: communication OK, motion blocked by brake state.\n");
+        (void)myact_stop(&ctx);
+        (void)myact_shutdown(&ctx);
+        close(bus.s);
+        return 3;
+    }
 
     rc = test_torque(&ctx);
     if (rc < 0) goto fail;
