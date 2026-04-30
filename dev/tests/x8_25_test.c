@@ -310,6 +310,87 @@ static int test_active_reply(myact_ctx_t* ctx) {
     return myact_active_reply_config(ctx, MYACT_CMD_STATUS2, false, 10);
 }
 
+typedef struct {
+    bool valid;
+    int16_t iq_0p01a;
+    int16_t speed_dps;
+    int16_t angle_deg;
+    int8_t motor_temp_c;
+    uint16_t error_flags;
+    uint8_t last_opcode;
+} wait_snapshot_t;
+
+static void wait_snapshot_update_status2(wait_snapshot_t* snap, const myact_can_frame_t* fr) {
+    if (!snap || !fr || fr->dlc < 8 || fr->data[0] != MYACT_CMD_STATUS2) return;
+    snap->valid = true;
+    snap->last_opcode = fr->data[0];
+    snap->motor_temp_c = (int8_t)fr->data[1];
+    snap->iq_0p01a = (int16_t)(((uint16_t)fr->data[3] << 8) | fr->data[2]);
+    snap->speed_dps = (int16_t)(((uint16_t)fr->data[5] << 8) | fr->data[4]);
+    snap->angle_deg = (int16_t)(((uint16_t)fr->data[7] << 8) | fr->data[6]);
+}
+
+static void wait_snapshot_update_status1(wait_snapshot_t* snap, const myact_can_frame_t* fr) {
+    if (!snap || !fr || fr->dlc < 8 || fr->data[0] != MYACT_CMD_STATUS1) return;
+    snap->last_opcode = fr->data[0];
+    snap->error_flags = (uint16_t)(((uint16_t)fr->data[7] << 8) | fr->data[6]);
+}
+
+static bool telemetry_completion_seen(const wait_snapshot_t* snap, int16_t target_iq) {
+    if (!snap || !snap->valid) return false;
+    if (snap->error_flags != 0u) return false;
+    return (abs((int)snap->iq_0p01a) >= abs((int)target_iq) / 2) || (abs((int)snap->speed_dps) >= 1);
+}
+
+static int wait_command_or_telemetry(myact_ctx_t* ctx, uint8_t expect_ack_opcode, int16_t target_iq, uint32_t timeout_ms) {
+    const uint64_t deadline = now_ms(NULL) + timeout_ms;
+    wait_snapshot_t snap;
+    bool saw_ack = false;
+    bool saw_fallback = false;
+
+    memset(&snap, 0, sizeof(snap));
+
+    while (now_ms(NULL) < deadline) {
+        myact_can_frame_t fr;
+        uint32_t rem_ms = (uint32_t)(deadline - now_ms(NULL));
+        int rc = ctx->io.recv(&fr, rem_ms > 50u ? 50u : rem_ms, ctx->io.user);
+        if (rc == MYACT_ETIMEDOUT) continue;
+        if (rc < 0) return rc;
+        if (fr.id != ctx->reply_id || fr.dlc < 1) continue;
+
+        snap.last_opcode = fr.data[0];
+        wait_snapshot_update_status2(&snap, &fr);
+        wait_snapshot_update_status1(&snap, &fr);
+
+        if (fr.data[0] == expect_ack_opcode && fr.dlc >= 8) {
+            saw_ack = true;
+            break;
+        }
+        if (telemetry_completion_seen(&snap, target_iq)) {
+            saw_fallback = true;
+            break;
+        }
+    }
+
+    if (saw_ack) return MYACT_OK;
+    if (saw_fallback) {
+        printf("  A1 ack missing; validated via 0x9C stream\n");
+        return MYACT_OK;
+    }
+
+    fprintf(stderr,
+            "  timeout waiting for 0x%02X; last opcode=0x%02X telemetry valid=%s iq=%.2fA speed=%d dps angle=%d deg temp=%dC err=0x%04X\n",
+            (unsigned)expect_ack_opcode,
+            (unsigned)snap.last_opcode,
+            snap.valid ? "yes" : "no",
+            myact_current_raw_to_a(snap.iq_0p01a),
+            (int)snap.speed_dps,
+            (int)snap.angle_deg,
+            (int)snap.motor_temp_c,
+            (unsigned)snap.error_flags);
+    return MYACT_ETIMEDOUT;
+}
+
 static int test_torque(myact_ctx_t* ctx) {
     myact_basic_feedback_t fb;
     int rc;
@@ -318,50 +399,10 @@ static int test_torque(myact_ctx_t* ctx) {
     printf("\n[torque test] +0.20 A for 300 ms, then stop\n");
     rc = myact_torque(ctx, iq, &fb);
     if (rc == MYACT_ETIMEDOUT) {
-        const uint64_t grace_ms = 800;
-        uint64_t t0 = now_ms(NULL);
-        int saw_status2 = 0;
-        int saw_effect = 0;
-        int saw_status1_noerr = 0;
-
         rc = myact_torque_send(ctx, iq);
         if (rc < 0) return rc;
-
-        while ((now_ms(NULL) - t0) < grace_ms) {
-            myact_status2_t s2;
-            myact_status1_t s1;
-
-            rc = myact_read_status2(ctx, &s2);
-            if (rc == MYACT_OK) {
-                saw_status2 = 1;
-                if (abs((int)s2.iq_0p01a) >= abs((int)iq) / 2 || abs((int)s2.speed_dps) >= 1) {
-                    saw_effect = 1;
-                }
-            } else if (rc != MYACT_ETIMEDOUT) {
-                return rc;
-            }
-
-            rc = myact_read_status1(ctx, &s1);
-            if (rc == MYACT_OK) {
-                if (s1.error_flags == 0u) {
-                    saw_status1_noerr = 1;
-                } else {
-                    break;
-                }
-            } else if (rc != MYACT_ETIMEDOUT) {
-                return rc;
-            }
-
-            if ((saw_effect || saw_status2) && saw_status1_noerr) break;
-            msleep(80);
-        }
-
-        if ((saw_effect || saw_status2) && saw_status1_noerr) {
-            printf("  A1 ack missing; validated via 0x9C stream\n");
-        } else {
-            fprintf(stderr, "  A1 ack missing and no motion/torque evidence in 0x9C\n");
-            return MYACT_ETIMEDOUT;
-        }
+        rc = wait_command_or_telemetry(ctx, MYACT_CMD_TORQUE, iq, 800);
+        if (rc < 0) return rc;
     } else if (rc < 0) {
         return rc;
     } else {
