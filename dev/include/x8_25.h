@@ -22,6 +22,8 @@ extern "C" {
 #define MYACT_NODE_ID_MIN              1u
 #define MYACT_NODE_ID_MAX             32u
 #define MYACT_DEFAULT_TIMEOUT_MS     100u
+#define MYACT_ACTIVE_REPLY_DISABLE_SPACING_MS 6u
+#define MYACT_ACTIVE_REPLY_DRAIN_MS          400u
 
 /* X8-25 product constants (output-shaft side) */
 #define MYACT_X8_25_GEAR_RATIO              9.0

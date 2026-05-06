@@ -878,7 +878,11 @@ int myact_disable_all_active_replies(myact_ctx_t* ctx) {
     for (i = 0; i < sizeof(cmds) / sizeof(cmds[0]); ++i) {
         int rc = myact_active_reply_config(ctx, cmds[i], false, 0);
         if (rc < 0 && rc_final == MYACT_OK) rc_final = rc;
+        if (i + 1u < (sizeof(cmds) / sizeof(cmds[0]))) {
+            (void)ctx->io.recv(&(myact_can_frame_t){0}, MYACT_ACTIVE_REPLY_DISABLE_SPACING_MS, ctx->io.user);
+        }
     }
+    (void)myact_drain_rx(ctx, MYACT_ACTIVE_REPLY_DRAIN_MS);
     return rc_final;
 }
 
