@@ -34,13 +34,6 @@ typedef struct {
     int s;
     char ifname[IFNAMSIZ];
 } sockcan_bus_t;
-
-enum {
-    MOTION_TORQUE = 1u << 0,
-    MOTION_SPEED = 1u << 1,
-    MOTION_INC = 1u << 2
-};
-
 typedef struct {
     bool motion;
     bool motion_torque;
