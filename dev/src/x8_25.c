@@ -6,7 +6,7 @@
 #define MYACT_CMD_ID_BASE           0x140u
 #define MYACT_REPLY_ID_BASE         0x240u
 #define MYACT_CANID_SERVICE_ID      0x300u
-#define MYACT_MOTION_CMD_ID_BASE    0x400u
+#define MYACT_MOTION_CMD_ID_BASE    0xMYACT_ACTIVE_REPLY_DRAIN_MS
 #define MYACT_MOTION_REPLY_ID_BASE  0x500u
 
 static void myact_rebuild_ids(myact_ctx_t* ctx) {
@@ -878,7 +878,11 @@ int myact_disable_all_active_replies(myact_ctx_t* ctx) {
     for (i = 0; i < sizeof(cmds) / sizeof(cmds[0]); ++i) {
         int rc = myact_active_reply_config(ctx, cmds[i], false, 0);
         if (rc < 0 && rc_final == MYACT_OK) rc_final = rc;
+        if (i + 1u < (sizeof(cmds) / sizeof(cmds[0]))) {
+            (void)ctx->io.recv(&(myact_can_frame_t){0}, MYACT_ACTIVE_REPLY_DISABLE_SPACING_MS, ctx->io.user);
+        }
     }
+    (void)myact_drain_rx(ctx, MYACT_ACTIVE_REPLY_DRAIN_MS);
     return rc_final;
 }
 
