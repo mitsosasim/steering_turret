@@ -126,7 +126,7 @@ static int parse_status1(const myact_can_frame_t* fr, uint64_t ts_ms, myact_stat
     out->valid = true;
     out->ts_ms = ts_ms;
     out->motor_temp_c = (int8_t)fr->data[1];
-    out->brake_released = (fr->data[3] != 0u);
+    out->brake_release_command_state = (fr->data[3] != 0u);
     out->voltage_0p1v = rd_u16_le(&fr->data[4]);
     out->error_flags = rd_u16_le(&fr->data[6]);
     return MYACT_OK;
@@ -309,7 +309,7 @@ static int myact_parse_frame(myact_ctx_t* ctx, const myact_can_frame_t* fr) {
                 break;
             case MYACT_CMD_READ_ANGLE_SINGLE:
                 if (fr->dlc >= 6) {
-                    ctx->cache.angle_single_0p01deg = rd_u16_le(&fr->data[4]);
+                    ctx->cache.angle_single_0p01deg = rd_u16_le(&fr->data[6]);
                     ctx->cache.angle_single_valid = true;
                     ctx->cache.angle_single_ts_ms = ts_ms;
                     ev |= MYACT_EVENT_ANGLE_SINGLE;
@@ -427,6 +427,7 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
     uint64_t start;
     uint64_t now;
     myact_can_frame_t fr;
+    unsigned active_seen = 0;
     int rc;
 
     if (!ctx) return MYACT_EINVAL;
@@ -442,6 +443,16 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
         if (rc < 0) return rc;
 
         (void)myact_parse_frame(ctx, &fr);
+
+        if (fr.id == ctx->reply_id && fr.dlc >= 1 && fr.data[0] == MYACT_CMD_STATUS2) {
+            active_seen++;
+        }
+        if (active_seen >= 3 && expected_cmd_or_neg1 >= 0 && expected_cmd_or_neg1 != MYACT_CMD_STATUS2) {
+            if (ctx->log_fn) ctx->log_fn(MYACT_LOG_ERROR,
+                "expected synchronous reply but active reply 0x9C is still streaming; disable active reply before synchronous command",
+                ctx->log_user);
+            return MYACT_ESTATE;
+        }
 
         if (fr.id != reply_id) continue;
         if (expected_cmd_or_neg1 >= 0 && fr.data[0] != (uint8_t)expected_cmd_or_neg1) continue;
@@ -605,7 +616,7 @@ int myact_read_angle_single(myact_ctx_t* ctx, uint16_t* out_angle_0p01deg) {
     if (!ctx || !out_angle_0p01deg) return MYACT_EINVAL;
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_READ_ANGLE_SINGLE, &rx);
     if (rc < 0) return rc;
-    *out_angle_0p01deg = rd_u16_le(&rx.data[4]);
+    *out_angle_0p01deg = rd_u16_le(&rx.data[6]);
     return MYACT_OK;
 }
 
@@ -844,13 +855,66 @@ int myact_set_baud_code(myact_ctx_t* ctx, myact_baud_code_t code) {
 }
 
 int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, uint16_t interval_10ms) {
-    uint8_t tx[8] = { MYACT_CMD_ACTIVE_REPLY, 0,0,0,0,0,0,0 };
+    uint8_t tx[8] = {0};
     if (!ctx) return MYACT_EINVAL;
+    tx[0] = MYACT_CMD_ACTIVE_REPLY;
     tx[1] = reply_cmd;
     tx[2] = enable ? 1u : 0u;
-    wr_u16_le(&tx[3], interval_10ms);
-    /* Protocol says there is no immediate reply after enabling */
+    if (enable) {
+        tx[3] = (uint8_t)(interval_10ms & 0xFFu);
+        tx[4] = (uint8_t)((interval_10ms >> 8) & 0xFFu);
+    } else {
+        tx[3] = 0u;
+        tx[4] = 0u;
+    }
     return myact_send_frame(ctx, ctx->cmd_id, tx);
+}
+
+int myact_disable_all_active_replies(myact_ctx_t* ctx) {
+    static const uint8_t cmds[] = { 0x60, 0x61, 0x62, 0x92, 0x9A, 0x9C, 0x9D, 0x9E };
+    int rc_final = MYACT_OK;
+    size_t i;
+    if (!ctx) return MYACT_EINVAL;
+    for (i = 0; i < sizeof(cmds) / sizeof(cmds[0]); ++i) {
+        int rc = myact_active_reply_config(ctx, cmds[i], false, 0);
+        if (rc < 0 && rc_final == MYACT_OK) rc_final = rc;
+    }
+    return rc_final;
+}
+
+int myact_drain_rx(myact_ctx_t* ctx, uint32_t duration_ms) {
+    uint64_t start;
+    if (!ctx) return MYACT_EINVAL;
+    start = ctx->io.time_ms(ctx->io.user);
+    while (ctx->io.time_ms(ctx->io.user) - start < duration_ms) {
+        myact_can_frame_t fr;
+        int rc = ctx->io.recv(&fr, 10, ctx->io.user);
+        if (rc == MYACT_ETIMEDOUT) continue;
+        if (rc < 0) return rc;
+        (void)myact_parse_frame(ctx, &fr);
+    }
+    return MYACT_OK;
+}
+
+int myact_wait_quiet(myact_ctx_t* ctx, uint32_t quiet_ms, uint32_t max_wait_ms) {
+    uint64_t start;
+    uint64_t last_rx;
+    if (!ctx) return MYACT_EINVAL;
+    start = ctx->io.time_ms(ctx->io.user);
+    last_rx = start;
+    while (ctx->io.time_ms(ctx->io.user) - start < max_wait_ms) {
+        myact_can_frame_t fr;
+        int rc = ctx->io.recv(&fr, quiet_ms, ctx->io.user);
+        uint64_t now = ctx->io.time_ms(ctx->io.user);
+        if (rc == MYACT_ETIMEDOUT) {
+            if (now - last_rx >= quiet_ms) return MYACT_OK;
+            continue;
+        }
+        if (rc < 0) return rc;
+        last_rx = now;
+        (void)myact_parse_frame(ctx, &fr);
+    }
+    return MYACT_ESTATE;
 }
 
 int myact_function_control(myact_ctx_t* ctx, myact_function_index_t index, int32_t value) {

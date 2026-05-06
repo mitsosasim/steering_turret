@@ -137,6 +137,7 @@ typedef enum {
 } myact_accel_index_t;
 
 typedef enum {
+    MYACT_RUNMODE_IDLE_OR_OFF = 0,
     MYACT_RUNMODE_UNKNOWN  = 0,
     MYACT_RUNMODE_CURRENT  = 1,
     MYACT_RUNMODE_SPEED    = 2,
@@ -199,7 +200,7 @@ typedef struct {
     bool     valid;
     uint64_t ts_ms;
     int8_t   motor_temp_c;
-    bool     brake_released;
+    bool     brake_release_command_state;
     uint16_t voltage_0p1v;
     uint16_t error_flags;
 } myact_status1_t;
@@ -384,6 +385,9 @@ int myact_brake_lock(myact_ctx_t* ctx);
 int myact_set_comm_protect_ms(myact_ctx_t* ctx, uint32_t timeout_ms);
 int myact_set_baud_code(myact_ctx_t* ctx, myact_baud_code_t code);
 int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, uint16_t interval_10ms);
+int myact_disable_all_active_replies(myact_ctx_t* ctx);
+int myact_drain_rx(myact_ctx_t* ctx, uint32_t duration_ms);
+int myact_wait_quiet(myact_ctx_t* ctx, uint32_t quiet_ms, uint32_t max_wait_ms);
 int myact_function_control(myact_ctx_t* ctx, myact_function_index_t index, int32_t value);
 
 int myact_clear_multi_turn(myact_ctx_t* ctx);
