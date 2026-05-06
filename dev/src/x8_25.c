@@ -6,7 +6,7 @@
 #define MYACT_CMD_ID_BASE           0x140u
 #define MYACT_REPLY_ID_BASE         0x240u
 #define MYACT_CANID_SERVICE_ID      0x300u
-#define MYACT_MOTION_CMD_ID_BASE    0x400u
+#define MYACT_MOTION_CMD_ID_BASE    0xMYACT_ACTIVE_REPLY_DRAIN_MS
 #define MYACT_MOTION_REPLY_ID_BASE  0x500u
 
 static void myact_rebuild_ids(myact_ctx_t* ctx) {
