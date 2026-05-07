@@ -195,6 +195,8 @@ static int read_full_diagnostics(myact_ctx_t* ctx, myact_status1_t* s1, int32_t*
 
 static int motion_preflight(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1) {
     unsigned attempt;
+    double voltage_v;
+    bool brake_released;
     int rc = prepare_sync(ctx);
     if (rc < 0) return rc;
 
@@ -218,19 +220,22 @@ static int motion_preflight(myact_ctx_t* ctx, const test_opts_t* o, myact_status
                s1->brake_release_command_state ? "on" : "off");
     }
 
-    if (!s1->brake_release_command_state && !o->force_motion_brake) {
+    brake_released = s1->brake_release_command_state;
+    if (!brake_released && !o->force_motion_brake) {
         printf("MOTION SKIPPED: brake release command state is still locked/off after %u attempts\n",
                o->brake_release_retries);
         return MYACT_ESTATE;
     }
 
-    if ((s1->voltage_0p1v / 10.0) < o->min_motion_voltage && !o->force_motion_low_voltage) {
+    voltage_v = s1->voltage_0p1v / 10.0;
+    if (voltage_v < o->min_motion_voltage && !o->force_motion_low_voltage) {
         printf("MOTION SKIPPED: bus voltage %.1f V below configured minimum %.1f V\n",
-               s1->voltage_0p1v / 10.0, o->min_motion_voltage);
+               voltage_v, o->min_motion_voltage);
         return MYACT_ESTATE;
     }
-    if ((s1->voltage_0p1v / 10.0) < o->min_motion_voltage && o->force_motion_low_voltage) {
-        printf("WARNING: low-voltage motion forced at %.1f V\n", s1->voltage_0p1v / 10.0);
+    if (voltage_v < o->min_motion_voltage && o->force_motion_low_voltage) {
+        printf("WARNING: low-voltage motion forced at %.1f V\n", voltage_v);
+        return MYACT_OK;
     }
 
     return MYACT_OK;
@@ -327,22 +332,34 @@ int main(int argc, char** argv) {
         int32_t before = angle_multi_0p01;
         int32_t after = 0;
         myact_basic_feedback_t fb;
+        memset(&fb, 0, sizeof(fb));
         rc = prepare_sync(&ctx);
         if (rc < 0) goto done;
         rc = myact_read_angle_multi(&ctx, &before);
         if (rc < 0) goto done;
+        printf("raw-motion-smoke: before angle read OK\n");
         rc = motion_preflight(&ctx, &opts, &s1);
-        if (rc < 0) { rc = RET_OK; goto done; }
+        printf("raw-motion-smoke: motion_preflight returned %s (%d)\n", myact_strerror(rc), rc);
+        if (rc < 0) {
+            printf("raw-motion-smoke: skipping A8 because motion_preflight failed\n");
+            rc = RET_OK;
+            goto done;
+        }
+        printf("raw-motion-smoke: brake preflight OK\n");
         printf("raw-motion-smoke: sending A8 +1.00 deg at 10 dps\n");
         rc = myact_position_inc(&ctx, 10, myact_deg_to_raw_0p01(1.0), &fb);
         if (rc < 0) {
             printf("raw-motion-smoke: A8 failed: %s (%d)\n", myact_strerror(rc), rc);
+            rc = RET_COMMS_FAIL;
             goto done;
         }
+        printf("raw-motion-smoke: A8 reply OK\n");
         msleep(1200);
         (void)myact_stop_send(&ctx);
+        printf("raw-motion-smoke: stop sent\n");
         rc = myact_read_angle_multi(&ctx, &after);
         if (rc < 0) goto done;
+        printf("raw-motion-smoke: after angle read OK\n");
         printf("raw-motion-smoke before: %.2f deg\n", myact_raw_0p01_to_deg(before));
         printf("raw-motion-smoke after: %.2f deg\n", myact_raw_0p01_to_deg(after));
         printf("raw-motion-smoke delta: %.2f deg\n", myact_raw_0p01_to_deg(after - before));
