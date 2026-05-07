@@ -1024,6 +1024,24 @@ int myact_motion_command(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp,
     return rc;
 }
 
+int myact_timed_txrx(myact_ctx_t* ctx, uint8_t cmd, const uint8_t tx_data[8], myact_can_frame_t* out_reply, uint32_t* out_latency_us) {
+    uint8_t data[8] = {0};
+    uint64_t t0;
+    uint64_t t1;
+    int rc;
+    if (!ctx || !tx_data || !out_reply) return MYACT_EINVAL;
+    memcpy(data, tx_data, 8);
+    data[0] = cmd;
+    t0 = myact_now_ms(ctx);
+    rc = myact_send_frame(ctx, ctx->cmd_id, data);
+    if (rc < 0) return rc;
+    rc = myact_recv_frame(ctx, ctx->timeout_ms, out_reply);
+    if (rc < 0) return rc;
+    t1 = myact_now_ms(ctx);
+    if (out_latency_us) *out_latency_us = (uint32_t)((t1 - t0) * 1000u);
+    return MYACT_OK;
+}
+
 /* unit helpers */
 
 int16_t myact_current_a_to_raw(double amps) {

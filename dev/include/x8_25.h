@@ -420,6 +420,7 @@ int myact_motion_pack(float p_rad, float v_rad_s, float kp, float kd, float t_ff
 int myact_motion_unpack_reply(const myact_can_frame_t* frame, myact_motion_feedback_t* out);
 int myact_motion_send(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm);
 int myact_motion_command(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, myact_motion_feedback_t* out);
+int myact_timed_txrx(myact_ctx_t* ctx, uint8_t cmd, const uint8_t tx_data[8], myact_can_frame_t* out_reply, uint32_t* out_latency_us);
 
 /* unit helpers */
 int16_t  myact_current_a_to_raw(double amps);

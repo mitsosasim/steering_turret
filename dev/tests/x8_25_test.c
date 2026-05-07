@@ -45,9 +45,31 @@ typedef struct {
     bool force_motion_low_voltage;
     bool reset_first;
     bool raw_motion_smoke;
+    bool raw_motion_smoke_sendonly;
+    bool no_shutdown_on_exit;
+    bool enable_hold;
+    bool brake_latency_test;
+    bool brake_persistence_test;
+    bool rt_inc_burst;
+    bool speed_step_test;
+    bool torque_step_test;
+    bool profile_abs_relative_test;
+    bool mit_mode_test;
+    bool active_telemetry_rt_test;
+    bool bench_all;
+    bool run_mit_in_bench_all;
     double min_motion_voltage;
+    double smoke_delta_deg;
+    double smoke_speed_dps;
+    unsigned smoke_wait_ms;
     unsigned brake_release_retries;
     unsigned brake_release_wait_ms;
+    unsigned brake_release_timeout_ms;
+    unsigned brake_poll_ms;
+    unsigned cycles;
+    double inc_delta_deg;
+    double inc_speed_dps;
+    unsigned inc_wait_ms;
 } test_opts_t;
 
 static uint64_t now_ms(void* user) {
@@ -119,12 +141,14 @@ static int prepare_sync(myact_ctx_t* ctx) {
     return myact_wait_quiet(ctx, 300, 1500);
 }
 
-static void cleanup_send_only(myact_ctx_t* ctx) {
+static void test_axis_disable(myact_ctx_t* ctx, bool shutdown) {
     (void)myact_disable_all_active_replies(ctx);
     (void)myact_drain_rx(ctx, 500);
     (void)myact_stop_send(ctx);
-    msleep(100);
-    (void)myact_shutdown_send(ctx);
+    if (shutdown) {
+        msleep(100);
+        (void)myact_shutdown_send(ctx);
+    }
 }
 
 static int parse_cli(int argc, char** argv, test_opts_t* o) {
@@ -133,6 +157,15 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     o->min_motion_voltage = DEFAULT_MIN_MOTION_VOLTAGE_V;
     o->brake_release_retries = 3;
     o->brake_release_wait_ms = 1000;
+    o->brake_release_timeout_ms = 2000;
+    o->brake_poll_ms = 50;
+    o->smoke_delta_deg = 10.0;
+    o->smoke_speed_dps = 60.0;
+    o->smoke_wait_ms = 1500;
+    o->cycles = 3;
+    o->inc_delta_deg = 10.0;
+    o->inc_speed_dps = 60.0;
+    o->inc_wait_ms = 1500;
     for (i = 3; i < argc; ++i) {
         if (!strcmp(argv[i], "--motion")) o->motion = true;
         else if (!strcmp(argv[i], "--motion-torque")) o->motion_torque = true;
@@ -144,6 +177,27 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--force-motion-low-voltage")) o->force_motion_low_voltage = true;
         else if (!strcmp(argv[i], "--reset-first")) o->reset_first = true;
         else if (!strcmp(argv[i], "--raw-motion-smoke")) o->raw_motion_smoke = true;
+        else if (!strcmp(argv[i], "--raw-motion-smoke-sendonly")) o->raw_motion_smoke_sendonly = true;
+        else if (!strcmp(argv[i], "--no-shutdown-on-exit")) o->no_shutdown_on_exit = true;
+        else if (!strcmp(argv[i], "--enable-hold")) o->enable_hold = true;
+        else if (!strcmp(argv[i], "--brake-latency-test")) o->brake_latency_test = true;
+        else if (!strcmp(argv[i], "--brake-persistence-test")) o->brake_persistence_test = true;
+        else if (!strcmp(argv[i], "--rt-inc-burst")) o->rt_inc_burst = true;
+        else if (!strcmp(argv[i], "--speed-step-test")) o->speed_step_test = true;
+        else if (!strcmp(argv[i], "--torque-step-test")) o->torque_step_test = true;
+        else if (!strcmp(argv[i], "--profile-abs-relative-test")) o->profile_abs_relative_test = true;
+        else if (!strcmp(argv[i], "--mit-mode-test")) o->mit_mode_test = true;
+        else if (!strcmp(argv[i], "--active-telemetry-rt-test")) o->active_telemetry_rt_test = true;
+        else if (!strcmp(argv[i], "--bench-all")) o->bench_all = true;
+        else if (!strcmp(argv[i], "--smoke-delta-deg") && i + 1 < argc) o->smoke_delta_deg = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--smoke-speed-dps") && i + 1 < argc) o->smoke_speed_dps = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--smoke-wait-ms") && i + 1 < argc) o->smoke_wait_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--brake-release-timeout-ms") && i + 1 < argc) o->brake_release_timeout_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--brake-poll-ms") && i + 1 < argc) o->brake_poll_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--cycles") && i + 1 < argc) o->cycles = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--inc-delta-deg") && i + 1 < argc) o->inc_delta_deg = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--inc-speed-dps") && i + 1 < argc) o->inc_speed_dps = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--inc-wait-ms") && i + 1 < argc) o->inc_wait_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--min-motion-voltage") && i + 1 < argc) o->min_motion_voltage = atof(argv[++i]);
         else if (!strcmp(argv[i], "--brake-release-retries") && i + 1 < argc) o->brake_release_retries = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--brake-release-wait-ms") && i + 1 < argc) o->brake_release_wait_ms = (unsigned)atoi(argv[++i]);
@@ -234,11 +288,36 @@ static int motion_preflight(myact_ctx_t* ctx, const test_opts_t* o, myact_status
         return MYACT_ESTATE;
     }
     if (voltage_v < o->min_motion_voltage && o->force_motion_low_voltage) {
-        printf("WARNING: low-voltage motion forced at %.1f V\n", voltage_v);
+        printf("WARNING: low-voltage motion forced at %.1f V; use rated supply for real torque/speed characterization.\n", voltage_v);
+        printf("rated voltage is 48 V-class; current bench voltage is low.\n");
         return MYACT_OK;
     }
 
     return MYACT_OK;
+}
+
+static int test_axis_enable(myact_ctx_t* ctx, const test_opts_t* opts, myact_status1_t* s1) {
+    uint64_t t0;
+    int rc = prepare_sync(ctx);
+    if (rc < 0) return rc;
+    rc = myact_read_status1(ctx, s1);
+    if (rc < 0) return rc;
+    if (s1->brake_release_command_state) return MYACT_OK;
+    t0 = now_ms(NULL);
+    rc = myact_brake_release(ctx);
+    if (rc < 0) return rc;
+    for (;;) {
+        msleep(opts->brake_poll_ms);
+        rc = myact_read_status1(ctx, s1);
+        if (rc < 0) return rc;
+        if (s1->brake_release_command_state) {
+            printf("brake latency: %llums\n", (unsigned long long)(now_ms(NULL) - t0));
+            return MYACT_OK;
+        }
+        if (now_ms(NULL) - t0 >= opts->brake_release_timeout_ms) break;
+    }
+    if (opts->force_motion_brake) return MYACT_OK;
+    return MYACT_ESTATE;
 }
 
 static int run_motion_tests(myact_ctx_t* ctx, unsigned mask) {
@@ -322,13 +401,31 @@ int main(int argc, char** argv) {
     rc = read_full_diagnostics(&ctx, &s1, &angle_multi_0p01);
     if (rc < 0) goto done;
 
-    if (!opts.motion && !opts.raw_motion_smoke) {
+    if (!opts.motion && !opts.raw_motion_smoke && !opts.raw_motion_smoke_sendonly &&
+        !opts.enable_hold && !opts.brake_latency_test && !opts.brake_persistence_test &&
+        !opts.rt_inc_burst) {
         printf("DIAG-ONLY mode: no motion requested. Use --motion to run motion tests.\n");
         rc = RET_OK;
         goto done;
     }
 
-    if (opts.raw_motion_smoke) {
+    if (opts.brake_latency_test) {
+        rc = test_axis_enable(&ctx, &opts, &s1);
+        if (rc < 0) fprintf(stderr, "brake-latency-test failed: %s (%d)\n", myact_strerror(rc), rc);
+        rc = (rc < 0) ? RET_COMMS_FAIL : RET_OK;
+        goto done;
+    }
+
+    if (opts.enable_hold) {
+        rc = test_axis_enable(&ctx, &opts, &s1);
+        if (rc < 0) { rc = RET_COMMS_FAIL; goto done; }
+        (void)myact_stop_send(&ctx);
+        printf("enable-hold: brake released and motor held enabled.\n");
+        rc = RET_OK;
+        goto done;
+    }
+
+    if (opts.raw_motion_smoke || opts.raw_motion_smoke_sendonly) {
         int32_t before = angle_multi_0p01;
         int32_t after = 0;
         myact_basic_feedback_t fb;
@@ -339,22 +436,32 @@ int main(int argc, char** argv) {
         if (rc < 0) goto done;
         printf("raw-motion-smoke: before angle read OK\n");
         rc = motion_preflight(&ctx, &opts, &s1);
-        printf("raw-motion-smoke: motion_preflight returned %s (%d)\n", myact_strerror(rc), rc);
+        printf("raw-motion-smoke: brake preflight returned %s (%d)\n", myact_strerror(rc), rc);
         if (rc < 0) {
             printf("raw-motion-smoke: skipping A8 because motion_preflight failed\n");
-            rc = RET_OK;
-            goto done;
-        }
-        printf("raw-motion-smoke: brake preflight OK\n");
-        printf("raw-motion-smoke: sending A8 +1.00 deg at 10 dps\n");
-        rc = myact_position_inc(&ctx, 10, myact_deg_to_raw_0p01(1.0), &fb);
-        if (rc < 0) {
-            printf("raw-motion-smoke: A8 failed: %s (%d)\n", myact_strerror(rc), rc);
             rc = RET_COMMS_FAIL;
             goto done;
         }
+        printf("raw-motion-smoke: sending A8 %+0.2f deg at %.0f dps\n", opts.smoke_delta_deg, opts.smoke_speed_dps);
+        if (opts.raw_motion_smoke_sendonly) {
+            rc = myact_position_inc_send(&ctx, (uint16_t)opts.smoke_speed_dps, myact_deg_to_raw_0p01(opts.smoke_delta_deg));
+            if (rc < 0) {
+                fprintf(stderr, "raw-motion-smoke: A8 failed: %s (%d)\n", myact_strerror(rc), rc);
+                rc = RET_COMMS_FAIL;
+                goto done;
+            }
+            msleep(opts.smoke_wait_ms);
+        } else {
+            memset(&fb, 0, sizeof(fb));
+            rc = myact_position_inc(&ctx, (uint16_t)opts.smoke_speed_dps, myact_deg_to_raw_0p01(opts.smoke_delta_deg), &fb);
+            if (rc < 0) {
+                fprintf(stderr, "raw-motion-smoke: A8 failed: %s (%d)\n", myact_strerror(rc), rc);
+                rc = RET_COMMS_FAIL;
+                goto done;
+            }
+            msleep(opts.smoke_wait_ms);
+        }
         printf("raw-motion-smoke: A8 reply OK\n");
-        msleep(1200);
         (void)myact_stop_send(&ctx);
         printf("raw-motion-smoke: stop sent\n");
         rc = myact_read_angle_multi(&ctx, &after);
@@ -363,6 +470,29 @@ int main(int argc, char** argv) {
         printf("raw-motion-smoke before: %.2f deg\n", myact_raw_0p01_to_deg(before));
         printf("raw-motion-smoke after: %.2f deg\n", myact_raw_0p01_to_deg(after));
         printf("raw-motion-smoke delta: %.2f deg\n", myact_raw_0p01_to_deg(after - before));
+        rc = RET_OK;
+        goto done;
+    }
+
+    if (opts.rt_inc_burst) {
+        unsigned i;
+        int32_t original = 0, cur = 0;
+        rc = test_axis_enable(&ctx, &opts, &s1);
+        if (rc < 0) { rc = RET_COMMS_FAIL; goto done; }
+        rc = myact_read_angle_multi(&ctx, &original);
+        if (rc < 0) { rc = RET_COMMS_FAIL; goto done; }
+        for (i = 0; i < opts.cycles; ++i) {
+            rc = myact_position_inc_send(&ctx, (uint16_t)opts.inc_speed_dps, myact_deg_to_raw_0p01(opts.inc_delta_deg));
+            if (rc < 0) { rc = RET_COMMS_FAIL; goto done; }
+            msleep(opts.inc_wait_ms);
+            rc = myact_read_angle_multi(&ctx, &cur); if (rc < 0) { rc = RET_COMMS_FAIL; goto done; }
+            printf("rt-inc-burst cycle %u +: angle=%.2f delta=%.2f\n", i + 1, myact_raw_0p01_to_deg(cur), myact_raw_0p01_to_deg(cur - original));
+            rc = myact_position_inc_send(&ctx, (uint16_t)opts.inc_speed_dps, myact_deg_to_raw_0p01(-opts.inc_delta_deg));
+            if (rc < 0) { rc = RET_COMMS_FAIL; goto done; }
+            msleep(opts.inc_wait_ms);
+            rc = myact_read_angle_multi(&ctx, &cur); if (rc < 0) { rc = RET_COMMS_FAIL; goto done; }
+            printf("rt-inc-burst cycle %u -: angle=%.2f delta=%.2f\n", i + 1, myact_raw_0p01_to_deg(cur), myact_raw_0p01_to_deg(cur - original));
+        }
         rc = RET_OK;
         goto done;
     }
@@ -389,7 +519,12 @@ int main(int argc, char** argv) {
     rc = run_motion_tests(&ctx, motion_mask);
 
 done:
-    cleanup_send_only(&ctx);
+    if (opts.no_shutdown_on_exit) {
+        test_axis_disable(&ctx, false);
+        printf("WARNING: leaving motor not shutdown; brake may remain released.\n");
+    } else {
+        test_axis_disable(&ctx, true);
+    }
     close(bus.s);
     return rc < 0 ? RET_COMMS_FAIL : rc;
 }
