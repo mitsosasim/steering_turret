@@ -326,14 +326,19 @@ int main(int argc, char** argv) {
     if (opts.raw_motion_smoke) {
         int32_t before = angle_multi_0p01;
         int32_t after = 0;
+        myact_basic_feedback_t fb;
         rc = prepare_sync(&ctx);
         if (rc < 0) goto done;
         rc = myact_read_angle_multi(&ctx, &before);
         if (rc < 0) goto done;
         rc = motion_preflight(&ctx, &opts, &s1);
         if (rc < 0) { rc = RET_OK; goto done; }
-        rc = myact_position_inc(&ctx, 10, myact_deg_to_raw_0p01(1.0), NULL);
-        if (rc < 0) goto done;
+        printf("raw-motion-smoke: sending A8 +1.00 deg at 10 dps\n");
+        rc = myact_position_inc(&ctx, 10, myact_deg_to_raw_0p01(1.0), &fb);
+        if (rc < 0) {
+            printf("raw-motion-smoke: A8 failed: %s (%d)\n", myact_strerror(rc), rc);
+            goto done;
+        }
         msleep(1200);
         (void)myact_stop_send(&ctx);
         rc = myact_read_angle_multi(&ctx, &after);
