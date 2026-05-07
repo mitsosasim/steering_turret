@@ -764,8 +764,10 @@ int myact_stop(myact_ctx_t* ctx) {
 int myact_torque(myact_ctx_t* ctx, int16_t iq_0p01a, myact_basic_feedback_t* out) {
     uint8_t tx[8] = { MYACT_CMD_TORQUE, 0,0,0,0,0,0,0 };
     myact_can_frame_t rx;
+    myact_basic_feedback_t tmp;
     int rc;
-    if (!ctx || !out) return MYACT_EINVAL;
+    if (!ctx) return MYACT_EINVAL;
+    if (!out) out = &tmp;
     wr_u16_le(&tx[4], (uint16_t)iq_0p01a);
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_TORQUE, &rx);
     if (rc < 0) return rc;
@@ -775,8 +777,10 @@ int myact_torque(myact_ctx_t* ctx, int16_t iq_0p01a, myact_basic_feedback_t* out
 int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t* out) {
     uint8_t tx[8] = { MYACT_CMD_SPEED, 0,0,0,0,0,0,0 };
     myact_can_frame_t rx;
+    myact_basic_feedback_t tmp;
     int rc;
-    if (!ctx || !out) return MYACT_EINVAL;
+    if (!ctx) return MYACT_EINVAL;
+    if (!out) out = &tmp;
     wr_u32_le(&tx[4], (uint32_t)speed_0p01dps);
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_SPEED, &rx);
     if (rc < 0) return rc;
@@ -786,8 +790,10 @@ int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t*
 int myact_position_abs(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg, myact_basic_feedback_t* out) {
     uint8_t tx[8] = { MYACT_CMD_POSITION_ABS, 0,0,0,0,0,0,0 };
     myact_can_frame_t rx;
+    myact_basic_feedback_t tmp;
     int rc;
-    if (!ctx || !out) return MYACT_EINVAL;
+    if (!ctx) return MYACT_EINVAL;
+    if (!out) out = &tmp;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)angle_0p01deg);
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_POSITION_ABS, &rx);
@@ -812,8 +818,10 @@ int myact_position_single(myact_ctx_t* ctx, uint8_t spin_direction, uint16_t max
 int myact_position_inc(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg, myact_basic_feedback_t* out) {
     uint8_t tx[8] = { MYACT_CMD_POSITION_INC, 0,0,0,0,0,0,0 };
     myact_can_frame_t rx;
+    myact_basic_feedback_t tmp;
     int rc;
-    if (!ctx || !out) return MYACT_EINVAL;
+    if (!ctx) return MYACT_EINVAL;
+    if (!out) out = &tmp;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)delta_angle_0p01deg);
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_POSITION_INC, &rx);
