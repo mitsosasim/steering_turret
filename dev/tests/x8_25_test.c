@@ -46,6 +46,8 @@ typedef struct {
     bool reset_first;
     bool raw_motion_smoke;
     double min_motion_voltage;
+    unsigned brake_release_retries;
+    unsigned brake_release_wait_ms;
 } test_opts_t;
 
 static uint64_t now_ms(void* user) {
@@ -129,6 +131,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     int i;
     memset(o, 0, sizeof(*o));
     o->min_motion_voltage = DEFAULT_MIN_MOTION_VOLTAGE_V;
+    o->brake_release_retries = 3;
+    o->brake_release_wait_ms = 1000;
     for (i = 3; i < argc; ++i) {
         if (!strcmp(argv[i], "--motion")) o->motion = true;
         else if (!strcmp(argv[i], "--motion-torque")) o->motion_torque = true;
@@ -141,6 +145,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--reset-first")) o->reset_first = true;
         else if (!strcmp(argv[i], "--raw-motion-smoke")) o->raw_motion_smoke = true;
         else if (!strcmp(argv[i], "--min-motion-voltage") && i + 1 < argc) o->min_motion_voltage = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--brake-release-retries") && i + 1 < argc) o->brake_release_retries = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--brake-release-wait-ms") && i + 1 < argc) o->brake_release_wait_ms = (unsigned)atoi(argv[++i]);
         else return RET_BAD_CLI;
     }
     return RET_OK;
@@ -188,21 +194,33 @@ static int read_full_diagnostics(myact_ctx_t* ctx, myact_status1_t* s1, int32_t*
 }
 
 static int motion_preflight(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1) {
+    unsigned attempt;
     int rc = prepare_sync(ctx);
     if (rc < 0) return rc;
 
     rc = myact_read_status1(ctx, s1);
     if (rc < 0) return rc;
 
-    if (!s1->brake_release_command_state) {
-        (void)myact_brake_release(ctx);
-        msleep(300);
+    printf("brake preflight: before=%s/%s\n",
+           s1->brake_release_command_state ? "released" : "locked",
+           s1->brake_release_command_state ? "on" : "off");
+
+    for (attempt = 1; attempt <= o->brake_release_retries && !s1->brake_release_command_state; ++attempt) {
+        rc = myact_brake_release(ctx);
+        if (rc < 0) return rc;
+        printf("brake release attempt %u/%u: sent 0x77, reply OK, waiting %u ms\n",
+               attempt, o->brake_release_retries, o->brake_release_wait_ms);
+        msleep(o->brake_release_wait_ms);
         rc = myact_read_status1(ctx, s1);
         if (rc < 0) return rc;
+        printf("brake preflight: after=%s/%s\n",
+               s1->brake_release_command_state ? "released" : "locked",
+               s1->brake_release_command_state ? "on" : "off");
     }
 
     if (!s1->brake_release_command_state && !o->force_motion_brake) {
-        printf("MOTION SKIPPED: brake release command state is still locked/off\n");
+        printf("MOTION SKIPPED: brake release command state is still locked/off after %u attempts\n",
+               o->brake_release_retries);
         return MYACT_ESTATE;
     }
 
@@ -210,6 +228,9 @@ static int motion_preflight(myact_ctx_t* ctx, const test_opts_t* o, myact_status
         printf("MOTION SKIPPED: bus voltage %.1f V below configured minimum %.1f V\n",
                s1->voltage_0p1v / 10.0, o->min_motion_voltage);
         return MYACT_ESTATE;
+    }
+    if ((s1->voltage_0p1v / 10.0) < o->min_motion_voltage && o->force_motion_low_voltage) {
+        printf("WARNING: low-voltage motion forced at %.1f V\n", s1->voltage_0p1v / 10.0);
     }
 
     return MYACT_OK;
@@ -305,13 +326,20 @@ int main(int argc, char** argv) {
     if (opts.raw_motion_smoke) {
         int32_t before = angle_multi_0p01;
         int32_t after = 0;
+        rc = prepare_sync(&ctx);
+        if (rc < 0) goto done;
+        rc = myact_read_angle_multi(&ctx, &before);
+        if (rc < 0) goto done;
         rc = motion_preflight(&ctx, &opts, &s1);
         if (rc < 0) { rc = RET_OK; goto done; }
         rc = myact_position_inc(&ctx, 10, myact_deg_to_raw_0p01(1.0), NULL);
         if (rc < 0) goto done;
-        msleep(1000);
+        msleep(1200);
+        (void)myact_stop_send(&ctx);
         rc = myact_read_angle_multi(&ctx, &after);
         if (rc < 0) goto done;
+        printf("raw-motion-smoke before: %.2f deg\n", myact_raw_0p01_to_deg(before));
+        printf("raw-motion-smoke after: %.2f deg\n", myact_raw_0p01_to_deg(after));
         printf("raw-motion-smoke delta: %.2f deg\n", myact_raw_0p01_to_deg(after - before));
         rc = RET_OK;
         goto done;
@@ -321,7 +349,15 @@ int main(int argc, char** argv) {
     printf("motion plan: angle_multi=%.2f deg bus=%.1fV brake=%s test=0x%X ",
            myact_raw_0p01_to_deg(angle_multi_0p01), s1.voltage_0p1v / 10.0,
            s1.brake_release_command_state ? "released" : "locked", motion_mask);
-    printf("targets: torque:+0.20A(300ms) speed:+10dps(700ms) inc:+2.00deg@20dps(wait1200ms)\n");
+    if (motion_mask == MOTION_INC) {
+        printf("selected=incremental delta=+2.00 deg max_speed=20 dps wait=1200 ms\n");
+    } else {
+        printf("targets:");
+        if (motion_mask & MOTION_TORQUE) printf(" torque:+0.20A(300ms)");
+        if (motion_mask & MOTION_SPEED) printf(" speed:+10dps(700ms)");
+        if (motion_mask & MOTION_INC) printf(" inc:+2.00deg@20dps(wait1200ms)");
+        printf("\n");
+    }
 
     if (!opts.no_motion_countdown) msleep(2000);
 
