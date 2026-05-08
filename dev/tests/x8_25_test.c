@@ -139,6 +139,7 @@ typedef struct {
     bool active_telemetry_rt_test;
     bool bench_all;
     bool run_mit_in_bench_all;
+    bool allow_hold_with_runmode0;
 
     double min_motion_voltage;
     double smoke_delta_deg;
@@ -186,6 +187,9 @@ typedef struct {
     unsigned active_duration_ms;
     double active_move_delta_deg;
     double active_move_speed_dps;
+
+    unsigned runmode_timeout_ms;
+    unsigned runmode_poll_ms;
 } test_opts_t;
 
 static uint64_t now_ms(void* user) {
@@ -321,6 +325,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     o->active_duration_ms = 3000;
     o->active_move_delta_deg = 10.0;
     o->active_move_speed_dps = 60.0;
+    o->runmode_timeout_ms = 1500;
+    o->runmode_poll_ms = 50;
 
     for (i = 3; i < argc; ++i) {
 #define FLAG(name, field) \
@@ -346,6 +352,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--bench-all", bench_all)
         FLAG("--bench-all-mit", run_mit_in_bench_all)
         FLAG("--mit-dry-run", mit_dry_run)
+        FLAG("--allow-hold-with-runmode0", allow_hold_with_runmode0)
 
         if (!strcmp(argv[i], "--speed-step-dps") && i + 1 < argc) o->speed_step_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
@@ -375,6 +382,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--active-duration-ms") && i + 1 < argc) o->active_duration_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--active-move-delta-deg") && i + 1 < argc) o->active_move_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--active-move-speed-dps") && i + 1 < argc) o->active_move_speed_dps = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--runmode-timeout-ms") && i + 1 < argc) o->runmode_timeout_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--runmode-poll-ms") && i + 1 < argc) o->runmode_poll_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--smoke-delta-deg") && i + 1 < argc) o->smoke_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--smoke-speed-dps") && i + 1 < argc) o->smoke_speed_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--smoke-wait-ms") && i + 1 < argc) o->smoke_wait_ms = (unsigned)atoi(argv[++i]);
@@ -879,8 +888,30 @@ static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     return MYACT_ESTATE;
 }
 
+static int wait_runmode(myact_ctx_t* ctx,
+                        myact_runmode_t expected,
+                        unsigned timeout_ms,
+                        unsigned poll_ms,
+                        myact_runmode_t* out_last) {
+    uint64_t t0 = now_ms(NULL);
+    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
+    int rc;
+
+    do {
+        rc = myact_read_operating_mode(ctx, &rm);
+        if (rc < 0) return rc;
+        if (out_last) *out_last = rm;
+        if (rm == expected) return (int)(now_ms(NULL) - t0);
+        if (now_ms(NULL) - t0 >= timeout_ms) break;
+        msleep(poll_ms);
+    } while (1);
+
+    return MYACT_ETIMEDOUT;
+}
+
 static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
+    uint64_t t0;
     int rc;
 
     rc = prepare_sync(c);
@@ -901,22 +932,41 @@ static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t
         if (rc < 0) return rc;
     }
 
-    rc = test_axis_enable(c, o, s1);
-    if (rc < 0) return rc;
-
-    rc = myact_read_operating_mode(c, &rm);
-    if (rc < 0) return rc;
+    if (!s1->brake_release_command_state) {
+        rc = myact_brake_release(c);
+        if (rc < 0) return rc;
+        t0 = now_ms(NULL);
+        while (now_ms(NULL) - t0 < o->brake_release_timeout_ms) {
+            rc = myact_read_status1(c, s1);
+            if (rc < 0) return rc;
+            if (s1->brake_release_command_state) {
+                printf("enable-hold: brake released after %llums\n",
+                       (unsigned long long)(now_ms(NULL) - t0));
+                break;
+            }
+            msleep(o->brake_poll_ms);
+        }
+    }
 
     rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
-
-    if (rm != MYACT_RUNMODE_SPEED) {
-        printf("enable-hold: axis enable failed: runmode=%u (expected 2)\n", (unsigned)rm);
-        return MYACT_ESTATE;
-    }
     if (!s1->brake_release_command_state) {
         printf("enable-hold: axis enable failed: brake still locked\n");
         return MYACT_ESTATE;
+    }
+
+    rc = wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
+    if (rc >= 0) {
+        printf("enable-hold: runmode reached 2 after %dms\n", rc);
+    } else if (rc == MYACT_ETIMEDOUT && rm == MYACT_RUNMODE_IDLE_OR_OFF) {
+        printf("enable-hold: brake released but runmode stayed 0 after %ums\n", o->runmode_timeout_ms);
+        if (!o->allow_hold_with_runmode0) return MYACT_ESTATE;
+        printf("enable-hold: WARNING allowing hold with runmode=0 due to --allow-hold-with-runmode0\n");
+    } else if (rc == MYACT_ETIMEDOUT) {
+        printf("enable-hold: axis enable failed: runmode=%u (expected 2)\n", (unsigned)rm);
+        return MYACT_ESTATE;
+    } else {
+        return rc;
     }
 
     printf("enable-hold: brake released and motor held enabled.\n");
