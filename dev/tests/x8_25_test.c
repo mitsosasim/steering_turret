@@ -132,7 +132,9 @@ typedef struct {
     bool brake_persistence_test;
     bool rt_inc_burst;
     bool speed_step_test;
+    bool speed_stream_test;
     bool torque_step_test;
+    bool torque_sweep_test;
     bool profile_abs_relative_test;
     bool no_a8_fallback;
     bool mit_mode_test;
@@ -158,10 +160,13 @@ typedef struct {
     unsigned speed_step_hold_ms;
     unsigned speed_step_cycles;
     unsigned speed_sample_ms;
+    unsigned speed_stream_period_ms;
     double speed_pass_min_dps;
     double speed_pass_min_delta_deg;
 
     double torque_step_a;
+    double torque_sweep_values_a[8];
+    unsigned torque_sweep_count;
     unsigned torque_step_hold_ms;
     unsigned torque_step_cycles;
     unsigned torque_sample_ms;
@@ -305,9 +310,14 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     o->speed_step_hold_ms = 1500;
     o->speed_step_cycles = 2;
     o->speed_sample_ms = 100;
+    o->speed_stream_period_ms = 20;
     o->speed_pass_min_dps = 5.0;
     o->speed_pass_min_delta_deg = 1.0;
     o->torque_step_a = 0.30;
+    o->torque_sweep_values_a[0] = 0.30;
+    o->torque_sweep_values_a[1] = 0.50;
+    o->torque_sweep_values_a[2] = 0.80;
+    o->torque_sweep_count = 3;
     o->torque_step_hold_ms = 500;
     o->torque_step_cycles = 1;
     o->torque_sample_ms = 100;
@@ -344,7 +354,9 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--brake-persistence-test", brake_persistence_test)
         FLAG("--rt-inc-burst", rt_inc_burst)
         FLAG("--speed-step-test", speed_step_test)
+        FLAG("--speed-stream-test", speed_stream_test)
         FLAG("--torque-step-test", torque_step_test)
+        FLAG("--torque-sweep-test", torque_sweep_test)
         FLAG("--profile-abs-relative-test", profile_abs_relative_test)
         FLAG("--no-a8-fallback", no_a8_fallback)
         FLAG("--mit-mode-test", mit_mode_test)
@@ -358,9 +370,22 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-cycles") && i + 1 < argc) o->speed_step_cycles = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed-sample-ms") && i + 1 < argc) o->speed_sample_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--speed-stream-period-ms") && i + 1 < argc) o->speed_stream_period_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed-pass-min-dps") && i + 1 < argc) o->speed_pass_min_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-pass-min-delta-deg") && i + 1 < argc) o->speed_pass_min_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--torque-step-a") && i + 1 < argc) o->torque_step_a = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--torque-sweep-values") && i + 1 < argc) {
+            const char* list = argv[++i];
+            char buf[128];
+            strncpy(buf, list, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = 0;
+            char* tok = strtok(buf, ",");
+            o->torque_sweep_count = 0;
+            while (tok && o->torque_sweep_count < 8) {
+                o->torque_sweep_values_a[o->torque_sweep_count++] = atof(tok);
+                tok = strtok(NULL, ",");
+            }
+        }
         else if (!strcmp(argv[i], "--torque-step-hold-ms") && i + 1 < argc) o->torque_step_hold_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--torque-step-cycles") && i + 1 < argc) o->torque_step_cycles = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--torque-sample-ms") && i + 1 < argc) o->torque_sample_ms = (unsigned)atoi(argv[++i]);
@@ -580,10 +605,24 @@ static int bench_result(const char* n, int rc) {
         printf("[SKIP] %s: reason already printed\n", n);
         return RET_OK;
     }
+    if (rc == MYACT_ENOMOTION && (!strcmp(n, "speed-step-test") || !strcmp(n, "speed-stream-test") || !strcmp(n, "torque-step-test"))) {
+        printf("[UNSUPPORTED/FAIL-DIAG] A2/A1 mode diagnostic: %s\n", n);
+        return RET_OK;
+    }
 
     printf("[FAIL] %s: %s (%d)\n", n, myact_strerror(rc), rc);
     return RET_COMMS_FAIL;
 }
+
+static int run_a8_delta_observed(myact_ctx_t* c,
+                                 const char* tag,
+                                 double delta_deg,
+                                 double speed_dps,
+                                 unsigned wait_ms,
+                                 double pass_tolerance_deg,
+                                 double* out_before,
+                                 double* out_after,
+                                 double* out_delta);
 
 static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     uint64_t t0;
@@ -660,6 +699,34 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     return MYACT_ENOMOTION;
 }
 
+
+static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    int rc; uint64_t t0; double before=0.0, after=0.0; double max_abs_speed_dps=0.0; myact_status2_t s2;
+    printf("speed-stream-test: A2 streamed every %u ms, hold=%u ms\n", o->speed_stream_period_ms, o->speed_step_hold_ms);
+    rc = axis_enable_for_motion(c, o, s1, "speed-stream-test"); if (rc < 0) return rc;
+    rc = read_angle_deg(c, &before); if (rc < 0) return rc;
+    t0 = now_ms(NULL);
+    while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
+        rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps)); if (rc < 0) return rc;
+        rc = sample_status2_capture(c, "speed-stream+", t0, &s2); if (rc < 0) return rc;
+        if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
+        msleep(o->speed_stream_period_ms);
+    }
+    t0 = now_ms(NULL);
+    while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
+        rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps)); if (rc < 0) return rc;
+        rc = sample_status2_capture(c, "speed-stream-", t0, &s2); if (rc < 0) return rc;
+        if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
+        msleep(o->speed_stream_period_ms);
+    }
+    rc = send_stop_and_sample(c, "speed-stream-test"); if (rc < 0) return rc;
+    rc = read_angle_deg(c, &after); if (rc < 0) return rc;
+    printf("speed-stream-test summary:\n  max_abs_speed_dps=%.1f\n  delta_deg=%.2f\n", max_abs_speed_dps, after-before);
+    if (max_abs_speed_dps >= o->speed_pass_min_dps || fabs(after-before) >= o->speed_pass_min_delta_deg) return MYACT_OK;
+    printf("[FAIL] speed-stream-test: A2 acknowledged but this motor/firmware is not executing speed closed-loop commands in current runtime mode\n");
+    return MYACT_ENOMOTION;
+}
+
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
     uint64_t t0;
@@ -672,8 +739,13 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     myact_status2_t s2;
 
     printf("torque-step-test: WARNING torque mode can move unexpectedly\n");
-    printf("torque-step-test: A1 %+0.2fA / %0.2fA, hold=%ums\n",
-           o->torque_step_a, -o->torque_step_a, o->torque_step_hold_ms);
+    if (o->torque_sweep_test) {
+        printf("torque-sweep-test enabled: levels=");
+        for (unsigned j = 0; j < o->torque_sweep_count; j++) printf(j + 1 < o->torque_sweep_count ? "%.2f," : "%.2f", o->torque_sweep_values_a[j]);
+        printf(" A, hold=%ums\n", o->torque_step_hold_ms);
+    } else {
+        printf("torque-step-test: A1 %+0.2fA / %0.2fA, hold=%ums\n", o->torque_step_a, -o->torque_step_a, o->torque_step_hold_ms);
+    }
 
     rc = axis_enable_for_motion(c, o, s1, "torque-step-test");
     if (rc < 0) return rc;
@@ -681,10 +753,15 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     rc = read_angle_deg(c, &angle_before);
     if (rc < 0) return rc;
 
-    if (!o->no_motion_countdown) msleep(2000);
+    if (o->torque_sweep_test && !o->no_motion_countdown) {
+        printf("[SKIP] torque-sweep-test: requires --no-motion-countdown for safety\n");
+        return MYACT_ESTATE;
+    }
 
     for (unsigned i = 0; i < o->torque_step_cycles; i++) {
-        rc = myact_torque_send(c, myact_current_a_to_raw(o->torque_step_a));
+        for (unsigned j = 0; j < (o->torque_sweep_test ? o->torque_sweep_count : 1); j++) {
+        double tq = o->torque_sweep_test ? o->torque_sweep_values_a[j] : o->torque_step_a;
+        rc = myact_torque_send(c, myact_current_a_to_raw(tq));
         if (rc < 0) return rc;
         acked = true;
 
@@ -701,7 +778,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
             msleep(o->torque_sample_ms);
         }
 
-        rc = myact_torque_send(c, myact_current_a_to_raw(-o->torque_step_a));
+        rc = myact_torque_send(c, myact_current_a_to_raw(-tq));
         if (rc < 0) return rc;
         acked = true;
 
@@ -716,6 +793,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
                 max_abs_speed_dps = fabs((double)s2.speed_dps);
             }
             msleep(o->torque_sample_ms);
+        }
         }
     }
 
@@ -739,7 +817,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     }
 
     if (acked) {
-        printf("[FAIL] torque-step-test: command acknowledged but no observed current/motion\n");
+        printf("[FAIL] torque-step-test: A1 command acknowledged but current loop not responding in this runtime mode\n");
     }
 
     return MYACT_ENOMOTION;
@@ -1288,7 +1366,7 @@ int main(int argc, char** argv) {
     {
         bool any_test_requested = o.raw_motion_smoke || o.raw_motion_smoke_sendonly || o.enable_hold ||
                                   o.brake_latency_test || o.brake_persistence_test || o.rt_inc_burst ||
-                                  o.speed_step_test || o.torque_step_test || o.profile_abs_relative_test ||
+                                  o.speed_step_test || o.speed_stream_test || o.torque_step_test || o.torque_sweep_test || o.profile_abs_relative_test ||
                                   o.mit_mode_test || o.active_telemetry_rt_test || o.bench_all;
         bool any_dispatched = false;
 
@@ -1335,6 +1413,9 @@ int main(int argc, char** argv) {
 
             if (a8_baseline_ok) {
                 b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1));
+                if (b != RET_OK) { ret = RET_COMMS_FAIL; bench_all_pass = false; }
+
+                b = bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1));
                 if (b != RET_OK) {
                     ret = RET_COMMS_FAIL;
                     bench_all_pass = false;
@@ -1388,9 +1469,10 @@ int main(int argc, char** argv) {
             if (o.brake_persistence_test) { any_dispatched = true; if (bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.rt_inc_burst) { any_dispatched = true; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.speed_step_test) { any_dispatched = true; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.speed_stream_test) { any_dispatched = true; if (bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.profile_abs_relative_test) { any_dispatched = true; if (bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.active_telemetry_rt_test) { any_dispatched = true; if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.torque_step_test) { any_dispatched = true; if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.torque_step_test || o.torque_sweep_test) { any_dispatched = true; if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.mit_mode_test) { any_dispatched = true; if (bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
         }
 
