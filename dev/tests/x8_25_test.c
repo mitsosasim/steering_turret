@@ -1,3 +1,91 @@
+/*
+# Build
+gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
+  dev/src/x8_25.c dev/tests/x8_25_test.c \
+  -Idev/include -lm -o build/x8_25_test_can
+
+# Diagnostics
+./build/x8_25_test_can can0 1
+
+# Brake latency
+./build/x8_25_test_can can0 1 --brake-latency-test --force-motion-low-voltage
+
+# Enable and hold
+./build/x8_25_test_can can0 1 --enable-hold --force-motion-low-voltage --no-shutdown-on-exit
+
+# Known-good A8 smoke
+./build/x8_25_test_can can0 1 \
+  --raw-motion-smoke \
+  --force-motion-low-voltage \
+  --smoke-delta-deg 10 \
+  --smoke-speed-dps 60 \
+  --smoke-wait-ms 1500
+
+# Known-good A8 burst
+./build/x8_25_test_can can0 1 \
+  --rt-inc-burst \
+  --force-motion-low-voltage \
+  --no-shutdown-on-exit \
+  --cycles 2 \
+  --inc-delta-deg 10 \
+  --inc-speed-dps 60 \
+  --inc-wait-ms 1500
+
+# A2 speed
+./build/x8_25_test_can can0 1 \
+  --speed-step-test \
+  --force-motion-low-voltage \
+  --no-shutdown-on-exit \
+  --speed-step-dps 60 \
+  --speed-step-hold-ms 1500 \
+  --speed-step-cycles 2 \
+  --speed-sample-ms 100
+
+# A4 absolute/profile
+./build/x8_25_test_can can0 1 \
+  --profile-abs-relative-test \
+  --force-motion-low-voltage \
+  --no-shutdown-on-exit \
+  --abs-delta-deg 10 \
+  --abs-speed-dps 60 \
+  --abs-tolerance-deg 1.0 \
+  --abs-timeout-ms 3000 \
+  --abs-poll-ms 100
+
+# A1 torque
+./build/x8_25_test_can can0 1 \
+  --torque-step-test \
+  --force-motion-low-voltage \
+  --no-motion-countdown \
+  --no-shutdown-on-exit \
+  --torque-step-a 0.30 \
+  --torque-step-hold-ms 500 \
+  --torque-step-cycles 1 \
+  --torque-sample-ms 100
+
+# Active telemetry
+./build/x8_25_test_can can0 1 \
+  --active-telemetry-rt-test \
+  --force-motion-low-voltage \
+  --no-shutdown-on-exit \
+  --active-interval-ms 50 \
+  --active-duration-ms 3000 \
+  --active-move-delta-deg 10 \
+  --active-move-speed-dps 60
+
+# MIT dry run
+./build/x8_25_test_can can0 1 \
+  --mit-mode-test \
+  --mit-dry-run \
+  --force-motion-low-voltage
+
+# Bench all without MIT
+./build/x8_25_test_can can0 1 \
+  --bench-all \
+  --force-motion-low-voltage \
+  --no-shutdown-on-exit
+*/
+
 #include "x8_25.h"
 
 #include <errno.h>
@@ -1160,15 +1248,87 @@ int main(int argc, char** argv) {
         }
 
         if (o.bench_all) {
+            int b;
+            bool a8_baseline_ok = true;
+            bool bench_all_pass = true;
+
             any_dispatched = true;
-            if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
-            if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
-            if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
-            if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
-            if (bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
-            if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
-            if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
-            if (o.run_mit_in_bench_all && bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+
+            printf("[PASS] diagnostics\n");
+
+            b = bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1));
+            if (b != RET_OK) {
+                ret = RET_COMMS_FAIL;
+                bench_all_pass = false;
+            }
+
+            b = bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1));
+            if (b != RET_OK) {
+                ret = RET_COMMS_FAIL;
+                bench_all_pass = false;
+            }
+
+            b = bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false));
+            if (b != RET_OK) {
+                ret = RET_COMMS_FAIL;
+                bench_all_pass = false;
+                a8_baseline_ok = false;
+            }
+
+            b = bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1));
+            if (b != RET_OK) {
+                ret = RET_COMMS_FAIL;
+                bench_all_pass = false;
+                a8_baseline_ok = false;
+            }
+
+            if (a8_baseline_ok) {
+                b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1));
+                if (b != RET_OK) {
+                    ret = RET_COMMS_FAIL;
+                    bench_all_pass = false;
+                }
+
+                b = bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1));
+                if (b != RET_OK) {
+                    ret = RET_COMMS_FAIL;
+                    bench_all_pass = false;
+                }
+
+                b = bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1));
+                if (b != RET_OK) {
+                    ret = RET_COMMS_FAIL;
+                    bench_all_pass = false;
+                }
+
+                b = bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1));
+                if (b != RET_OK) {
+                    ret = RET_COMMS_FAIL;
+                    bench_all_pass = false;
+                }
+
+                if (o.run_mit_in_bench_all) {
+                    b = bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1));
+                    if (b != RET_OK) {
+                        ret = RET_COMMS_FAIL;
+                        bench_all_pass = false;
+                    }
+                } else {
+                    printf("[SKIP] mit-mode-test: not requested (use --bench-all-mit)\n");
+                }
+            } else {
+                printf("[SKIP] speed-step-test: skipped because A8 baseline failed\n");
+                printf("[SKIP] profile-abs-relative-test: skipped because A8 baseline failed\n");
+                printf("[SKIP] active-telemetry-rt-test: skipped because A8 baseline failed\n");
+                printf("[SKIP] torque-step-test: skipped because A8 baseline failed\n");
+                if (o.run_mit_in_bench_all) {
+                    printf("[SKIP] mit-mode-test: skipped because A8 baseline failed\n");
+                } else {
+                    printf("[SKIP] mit-mode-test: not requested (use --bench-all-mit)\n");
+                }
+            }
+
+            printf("bench-all overall: %s\n", bench_all_pass ? "PASS" : "FAIL");
         } else {
             if (o.brake_latency_test) { any_dispatched = true; if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.enable_hold) { any_dispatched = true; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
