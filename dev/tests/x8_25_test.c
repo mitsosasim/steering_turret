@@ -40,6 +40,7 @@ typedef struct {
     bool no_shutdown_on_exit;
     bool enable_hold;
     bool brake_latency_test;
+    bool brake_latency_shutdown_first;
     bool brake_persistence_test;
     bool rt_inc_burst;
     bool speed_step_test;
@@ -236,6 +237,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--no-shutdown-on-exit", no_shutdown_on_exit)
         FLAG("--enable-hold", enable_hold)
         FLAG("--brake-latency-test", brake_latency_test)
+        FLAG("--brake-latency-shutdown-first", brake_latency_shutdown_first)
         FLAG("--brake-persistence-test", brake_persistence_test)
         FLAG("--rt-inc-burst", rt_inc_burst)
         FLAG("--speed-step-test", speed_step_test)
@@ -570,8 +572,59 @@ out:
 }
 
 static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    printf("brake-latency-test: heading\n");
-    return axis_enable_for_motion(c, o, s1, "brake-latency-test");
+    uint64_t t0;
+    int rc;
+
+    rc = prepare_sync(c);
+    if (rc < 0) return rc;
+
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
+
+    printf("brake preflight: before=%s/off\n",
+           s1->brake_release_command_state ? "released" : "locked");
+
+    if (s1->brake_release_command_state) {
+        if (o->reset_first || o->brake_latency_shutdown_first) {
+            rc = myact_shutdown_send(c);
+            if (rc < 0) return rc;
+            msleep(100);
+
+            rc = myact_read_status1(c, s1);
+            if (rc < 0) return rc;
+            printf("brake preflight: after-shutdown=%s/off\n",
+                   s1->brake_release_command_state ? "released" : "locked");
+        } else {
+            printf("brake latency: already released\n");
+            return MYACT_OK;
+        }
+    }
+
+    t0 = now_ms(NULL);
+    rc = myact_brake_release(c);
+    if (rc < 0) return rc;
+    printf("brake release: sent 0x77\n");
+
+    while (now_ms(NULL) - t0 < o->brake_release_timeout_ms) {
+        rc = myact_read_status1(c, s1);
+        if (rc < 0) return rc;
+        if (s1->brake_release_command_state) {
+            printf("brake latency: %llums\n",
+                   (unsigned long long)(now_ms(NULL) - t0));
+            return MYACT_OK;
+        }
+        msleep(o->brake_poll_ms);
+    }
+
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
+    if (s1->brake_release_command_state) {
+        printf("brake latency: %llums\n",
+               (unsigned long long)(now_ms(NULL) - t0));
+        return MYACT_OK;
+    }
+    printf("brake latency: timeout (%ums)\n", o->brake_release_timeout_ms);
+    return MYACT_ESTATE;
 }
 
 static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
