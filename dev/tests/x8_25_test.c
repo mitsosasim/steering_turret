@@ -615,9 +615,44 @@ static int run_brake_persistence_test(myact_ctx_t* c, const test_opts_t* o, myac
 }
 
 static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    (void)c; (void)o; (void)s1;
-    printf("rt-inc-burst: heading\n");
-    return MYACT_ESTATE;
+    int rc;
+
+    printf("rt-inc-burst: A8 inc mode, +%0.2f/-%0.2f deg at %.0f dps, wait=%u ms, cycles=%u\n",
+           o->inc_delta_deg, o->inc_delta_deg, o->inc_speed_dps, o->inc_wait_ms, o->cycles);
+
+    rc = axis_enable_for_motion(c, o, s1, "rt-inc-burst");
+    if (rc < 0) return rc;
+
+    for (unsigned i = 0; i < o->cycles; i++) {
+        double orig_deg;
+        double angle_deg;
+        int32_t req_delta_raw;
+
+        rc = read_angle_deg(c, &orig_deg);
+        if (rc < 0) return rc;
+
+        req_delta_raw = myact_deg_to_raw_0p01(o->inc_delta_deg);
+        rc = myact_position_inc_send(c, (uint16_t)o->inc_speed_dps, req_delta_raw);
+        if (rc < 0) return rc;
+
+        msleep(o->inc_wait_ms);
+
+        rc = read_angle_deg(c, &angle_deg);
+        if (rc < 0) return rc;
+        printf("rt-inc-burst cycle %u +: angle=%.2f delta=%.2f\n", i + 1, angle_deg, angle_deg - orig_deg);
+
+        req_delta_raw = myact_deg_to_raw_0p01(-o->inc_delta_deg);
+        rc = myact_position_inc_send(c, (uint16_t)o->inc_speed_dps, req_delta_raw);
+        if (rc < 0) return rc;
+
+        msleep(o->inc_wait_ms);
+
+        rc = read_angle_deg(c, &angle_deg);
+        if (rc < 0) return rc;
+        printf("rt-inc-burst cycle %u -: angle=%.2f delta=%.2f\n", i + 1, angle_deg, angle_deg - orig_deg);
+    }
+
+    return myact_stop_send(c);
 }
 
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
