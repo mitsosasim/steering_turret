@@ -334,6 +334,7 @@ static int check_motion_voltage_or_skip(const test_opts_t* o, const myact_status
 }
 
 static int test_axis_enable(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1) {
+    uint64_t t0;
     int rc = prepare_sync(ctx);
     if (rc < 0) return rc;
 
@@ -344,8 +345,25 @@ static int test_axis_enable(myact_ctx_t* ctx, const test_opts_t* o, myact_status
     rc = myact_brake_release(ctx);
     if (rc < 0) return rc;
 
-    msleep(o->brake_poll_ms);
-    return myact_read_status1(ctx, s1);
+    t0 = now_ms(NULL);
+    while (now_ms(NULL) - t0 < o->brake_release_timeout_ms) {
+        rc = myact_read_status1(ctx, s1);
+        if (rc < 0) return rc;
+        if (s1->brake_release_command_state) {
+            printf("brake released after %llums\n",
+                   (unsigned long long)(now_ms(NULL) - t0));
+            return MYACT_OK;
+        }
+        msleep(o->brake_poll_ms);
+    }
+
+    rc = myact_read_status1(ctx, s1);
+    if (rc < 0) return rc;
+
+    printf("brake release timeout: still %s after %ums\n",
+           s1->brake_release_command_state ? "released" : "locked",
+           o->brake_release_timeout_ms);
+    return s1->brake_release_command_state ? MYACT_OK : MYACT_ESTATE;
 }
 
 static int axis_enable_for_motion(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1, const char* n) {
@@ -357,6 +375,11 @@ static int axis_enable_for_motion(myact_ctx_t* ctx, const test_opts_t* o, myact_
 
     rc = check_motion_voltage_or_skip(o, s1, n);
     if (rc < 0) return rc;
+
+    if (!s1->brake_release_command_state) {
+        printf("%s: axis enable failed: brake still locked\n", n);
+        return MYACT_ESTATE;
+    }
 
     printf("%s: axis enabled, brake=%s, bus=%.1fV\n", n,
            s1->brake_release_command_state ? "released" : "locked",
