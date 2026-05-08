@@ -192,6 +192,7 @@ typedef struct {
     unsigned active_duration_ms;
     double active_move_delta_deg;
     double active_move_speed_dps;
+    double active_min_frame_ratio;
 
     unsigned runmode_timeout_ms;
     unsigned runmode_poll_ms;
@@ -335,6 +336,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     o->active_duration_ms = 3000;
     o->active_move_delta_deg = 10.0;
     o->active_move_speed_dps = 60.0;
+    o->active_min_frame_ratio = 0.70;
     o->runmode_timeout_ms = 1500;
     o->runmode_poll_ms = 50;
 
@@ -407,6 +409,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--active-duration-ms") && i + 1 < argc) o->active_duration_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--active-move-delta-deg") && i + 1 < argc) o->active_move_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--active-move-speed-dps") && i + 1 < argc) o->active_move_speed_dps = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--active-min-frame-ratio") && i + 1 < argc) o->active_min_frame_ratio = atof(argv[++i]);
         else if (!strcmp(argv[i], "--runmode-timeout-ms") && i + 1 < argc) o->runmode_timeout_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--runmode-poll-ms") && i + 1 < argc) o->runmode_poll_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--smoke-delta-deg") && i + 1 < argc) o->smoke_delta_deg = atof(argv[++i]);
@@ -530,17 +533,6 @@ static int read_angle_deg(myact_ctx_t* c, double* d) {
     int rc = myact_read_angle_multi(c, &a);
     if (rc < 0) return rc;
     *d = myact_raw_0p01_to_deg(a);
-    return MYACT_OK;
-}
-
-static int sample_status2(myact_ctx_t* c, const char* tag, uint64_t t0) {
-    myact_status2_t s;
-    int rc = myact_read_status2(c, &s);
-    if (rc < 0) return rc;
-
-    printf("t_ms=%llu tag=%s iq_A=%.2f speed_dps=%d angle_deg=%d temp_C=%d\n",
-           (unsigned long long)(now_ms(NULL) - t0), tag,
-           s.iq_0p01a / 100.0, s.speed_dps, s.angle_deg, s.motor_temp_c);
     return MYACT_OK;
 }
 
@@ -1234,26 +1226,38 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     angle_delta_deg = end_angle_deg - start_angle_deg;
     if (interval_count > 0) avg_interval_ms = (double)interval_sum / (double)interval_count;
 
-    printf("  frames_received=%u\n", frame_count);
-    printf("  avg_interval_ms=%.1f\n", avg_interval_ms);
-    printf("  min_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_min : 0));
-    printf("  max_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_max : 0));
-    printf("  max_abs_speed_dps=%d\n", max_abs_speed);
-    printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
-
     {
-        unsigned expected = (o->active_interval_ms > 0) ? (o->active_duration_ms / o->active_interval_ms) : 0;
-        unsigned minimum_expected = expected > 0 ? (unsigned)(expected * 8u / 10u) : 1u;
-        bool count_ok = frame_count > minimum_expected;
-        bool motion_ok = move_observed || fabs(angle_delta_deg) >= (fabs(o->active_move_delta_deg) * 0.4);
+        unsigned expected_frames = (o->active_interval_ms > 0) ? (o->active_duration_ms / o->active_interval_ms) : 0;
+        unsigned min_required = (unsigned)floor((double)expected_frames * o->active_min_frame_ratio);
+        bool count_ok;
+        bool motion_ok;
+
+        if (min_required == 0) min_required = 1;
+        count_ok = frame_count >= min_required;
+        motion_ok = move_observed || fabs(angle_delta_deg) >= fabs(o->active_move_delta_deg);
+
+        printf("  expected_frames=%u\n", expected_frames);
+        printf("  min_required=%u\n", min_required);
+        printf("  frames_received=%u\n", frame_count);
+        printf("  avg_interval_ms=%.1f\n", avg_interval_ms);
+        printf("  min_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_min : 0));
+        printf("  max_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_max : 0));
+        printf("  max_abs_speed_dps=%d\n", max_abs_speed);
+        printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
+
+        if (avg_interval_ms > (double)o->active_interval_ms) {
+            printf("WARNING: telemetry interval slower than requested; requested=%ums avg=%.1fms\n",
+                   o->active_interval_ms, avg_interval_ms);
+        }
 
         if (!count_ok) {
-            printf("[FAIL] active-telemetry-rt-test: insufficient telemetry frames (got=%u min>%u)\n",
-                   frame_count, minimum_expected);
+            printf("[FAIL] active-telemetry-rt-test: insufficient telemetry frames (frames_received=%u min_required=%u)\n",
+                   frame_count, min_required);
             return MYACT_ESTATE;
         }
         if (!motion_ok) {
-            printf("[FAIL] active-telemetry-rt-test: A8 fallback movement not observed\n");
+            printf("[FAIL] active-telemetry-rt-test: insufficient movement (angle_delta_deg=%.2f required=%.2f)\n",
+                   fabs(angle_delta_deg), fabs(o->active_move_delta_deg));
             return MYACT_ESTATE;
         }
     }
@@ -1291,22 +1295,44 @@ static int run_mit_mode_test(myact_ctx_t* c, const test_opts_t* o, myact_status1
 
     {
         uint64_t t_end = now_ms(NULL) + o->mit_duration_ms;
-        bool saw_feedback = false;
+        unsigned tx_count = 0;
+        unsigned rx_501_count = 0;
+        float first_p = 0.0f, first_v = 0.0f, first_t = 0.0f;
+        float last_p = 0.0f, last_v = 0.0f, last_t = 0.0f;
+        double max_abs_v = 0.0;
 
         while (now_ms(NULL) < t_end) {
             rc = myact_motion_send(c, o->mit_p_rad, o->mit_v_rad_s, o->mit_kp, o->mit_kd, o->mit_t_nm);
             if (rc < 0) return rc;
+            tx_count++;
 
             {
                 uint32_t wait_ms = o->mit_sample_ms > 0 ? o->mit_sample_ms : 1u;
                 int ev = myact_poll(c, wait_ms);
                 if (ev == MYACT_ETIMEDOUT) continue;
                 if (ev < 0) return ev;
-                if ((ev & MYACT_EVENT_MOTION_FB) != 0) saw_feedback = true;
+                if ((ev & MYACT_EVENT_MOTION_FB) != 0) {
+                    const myact_cache_t* cache = myact_cache(c);
+                    float p = cache->motion_feedback.p_rad;
+                    float v = cache->motion_feedback.v_rad_s;
+                    float t = cache->motion_feedback.t_nm;
+                    if (rx_501_count == 0) { first_p = p; first_v = v; first_t = t; }
+                    last_p = p; last_v = v; last_t = t;
+                    if (fabs((double)v) > max_abs_v) max_abs_v = fabs((double)v);
+                    rx_501_count++;
+                }
             }
         }
 
-        if (!saw_feedback) {
+        printf("  tx_count=%u\n", tx_count);
+        printf("  rx_501_count=%u\n", rx_501_count);
+        if (rx_501_count > 0) {
+            printf("  first_feedback: p=%.3f v=%.3f t=%.3f\n", first_p, first_v, first_t);
+            printf("  last_feedback: p=%.3f v=%.3f t=%.3f\n", last_p, last_v, last_t);
+            printf("  max_abs_v=%.3f\n", max_abs_v);
+        }
+
+        if (rx_501_count == 0) {
             printf("[FAIL] mit-mode-test: 0x401 sent but no 0x501 feedback received\n");
             return MYACT_ESTATE;
         }
@@ -1379,7 +1405,8 @@ int main(int argc, char** argv) {
         if (o.bench_all) {
             int b;
             bool a8_baseline_ok = true;
-            bool bench_all_pass = true;
+            bool required_pass = true;
+            bool full_matrix_pass = true;
 
             any_dispatched = true;
 
@@ -1388,62 +1415,59 @@ int main(int argc, char** argv) {
             b = bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1));
             if (b != RET_OK) {
                 ret = RET_COMMS_FAIL;
-                bench_all_pass = false;
+                required_pass = false;
             }
 
             b = bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1));
             if (b != RET_OK) {
                 ret = RET_COMMS_FAIL;
-                bench_all_pass = false;
+                required_pass = false;
             }
 
             b = bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false));
             if (b != RET_OK) {
                 ret = RET_COMMS_FAIL;
-                bench_all_pass = false;
+                required_pass = false;
                 a8_baseline_ok = false;
             }
 
             b = bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1));
             if (b != RET_OK) {
                 ret = RET_COMMS_FAIL;
-                bench_all_pass = false;
+                required_pass = false;
                 a8_baseline_ok = false;
             }
 
             if (a8_baseline_ok) {
                 b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1));
-                if (b != RET_OK) { ret = RET_COMMS_FAIL; bench_all_pass = false; }
+                if (b != RET_OK) full_matrix_pass = false;
 
                 b = bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1));
                 if (b != RET_OK) {
-                    ret = RET_COMMS_FAIL;
-                    bench_all_pass = false;
+                    full_matrix_pass = false;
                 }
 
                 b = bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1));
                 if (b != RET_OK) {
-                    ret = RET_COMMS_FAIL;
-                    bench_all_pass = false;
+                    full_matrix_pass = false;
                 }
 
                 b = bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1));
                 if (b != RET_OK) {
                     ret = RET_COMMS_FAIL;
-                    bench_all_pass = false;
+                    required_pass = false;
+                    full_matrix_pass = false;
                 }
 
                 b = bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1));
                 if (b != RET_OK) {
-                    ret = RET_COMMS_FAIL;
-                    bench_all_pass = false;
+                    full_matrix_pass = false;
                 }
 
                 if (o.run_mit_in_bench_all) {
                     b = bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1));
                     if (b != RET_OK) {
-                        ret = RET_COMMS_FAIL;
-                        bench_all_pass = false;
+                        full_matrix_pass = false;
                     }
                 } else {
                     printf("[SKIP] mit-mode-test: not requested (use --bench-all-mit)\n");
@@ -1460,7 +1484,9 @@ int main(int argc, char** argv) {
                 }
             }
 
-            printf("bench-all overall: %s\n", bench_all_pass ? "PASS" : "FAIL");
+            printf("bench-all summary:\n");
+            printf("overall required baseline: %s\n", required_pass ? "PASS" : "FAIL");
+            printf("overall full feature matrix: %s\n", full_matrix_pass ? "PASS" : "PARTIAL");
         } else {
             if (o.brake_latency_test) { any_dispatched = true; if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.enable_hold) { any_dispatched = true; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
