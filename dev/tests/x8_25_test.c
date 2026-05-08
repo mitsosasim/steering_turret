@@ -46,6 +46,7 @@ typedef struct {
     bool speed_step_test;
     bool torque_step_test;
     bool profile_abs_relative_test;
+    bool no_a8_fallback;
     bool mit_mode_test;
     bool active_telemetry_rt_test;
     bool bench_all;
@@ -251,6 +252,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--speed-step-test", speed_step_test)
         FLAG("--torque-step-test", torque_step_test)
         FLAG("--profile-abs-relative-test", profile_abs_relative_test)
+        FLAG("--no-a8-fallback", no_a8_fallback)
         FLAG("--mit-mode-test", mit_mode_test)
         FLAG("--active-telemetry-rt-test", active_telemetry_rt_test)
         FLAG("--bench-all", bench_all)
@@ -649,6 +651,11 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
 static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     double orig;
     double target_plus;
+    double final_a4 = 0.0;
+    double final_a8 = 0.0;
+    int32_t target_raw;
+    uint16_t abs_speed_raw;
+    uint8_t a4_frame[8] = {0};
     int rc;
 
     rc = axis_enable_for_motion(c, o, s1, "profile-abs-relative-test");
@@ -658,17 +665,67 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
     if (rc < 0) return rc;
 
     target_plus = orig + o->abs_delta_deg;
+    target_raw = myact_deg_to_raw_0p01(target_plus);
+    abs_speed_raw = (uint16_t)o->abs_speed_dps;
+    a4_frame[0] = 0xA4;
+    a4_frame[1] = 0x00;
+    a4_frame[2] = (uint8_t)(abs_speed_raw & 0xFF);
+    a4_frame[3] = (uint8_t)((abs_speed_raw >> 8) & 0xFF);
+    a4_frame[4] = (uint8_t)(target_raw & 0xFF);
+    a4_frame[5] = (uint8_t)((target_raw >> 8) & 0xFF);
+    a4_frame[6] = (uint8_t)((target_raw >> 16) & 0xFF);
+    a4_frame[7] = (uint8_t)((target_raw >> 24) & 0xFF);
+
     printf("profile-abs-relative-test: original=%.2f target_plus=%.2f return=%.2f speed=%.1f\n",
            orig, target_plus, orig, o->abs_speed_dps);
 
-    rc = myact_position_abs_send(c, (uint16_t)o->abs_speed_dps, myact_deg_to_raw_0p01(target_plus));
+    rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
 
     rc = wait_until_angle_near(c, target_plus, o->abs_tolerance_deg,
                                o->abs_timeout_ms, o->abs_poll_ms, "abs+");
+    if (rc == MYACT_ETIMEDOUT) {
+        double err;
+
+        (void)read_angle_deg(c, &final_a4);
+        err = target_plus - final_a4;
+        printf("profile-abs-relative-test: A4 timeout\n");
+        printf("profile-abs-relative-test: A4 frame = %02X %02X %02X %02X %02X %02X %02X %02X\n",
+               a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3],
+               a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
+        printf("profile-abs-relative-test: A4 original=%.2f target=%.2f final=%.2f error=%.2f\n",
+               orig, target_plus, final_a4, err);
+
+        if (!o->no_a8_fallback) {
+            int32_t fallback_delta_raw = myact_deg_to_raw_0p01(o->abs_delta_deg);
+            printf("profile-abs-relative-test: A4 timed out; running A8 fallback with same delta\n");
+            printf("profile-abs-relative-test: A8 fallback delta = %.2f deg\n", o->abs_delta_deg);
+
+            rc = myact_position_inc_send(c, abs_speed_raw, fallback_delta_raw);
+            if (rc < 0) goto out;
+
+            rc = wait_until_angle_near(c, target_plus, o->abs_tolerance_deg,
+                                       o->abs_timeout_ms, o->abs_poll_ms, "a8-fallback");
+            if (rc == MYACT_OK) {
+                printf("[FAIL] profile-abs-relative-test: A4 failed but A8 fallback succeeded\n");
+                rc = MYACT_EPROTO;
+                goto out;
+            }
+
+            (void)read_angle_deg(c, &final_a8);
+            printf("profile-abs-relative-test: A8 fallback final=%.2f target=%.2f error=%.2f\n",
+                   final_a8, target_plus, target_plus - final_a8);
+            printf("[FAIL] profile-abs-relative-test: A4 failed and A8 fallback failed\n");
+            rc = MYACT_EPROTO;
+            goto out;
+        }
+
+        rc = MYACT_ETIMEDOUT;
+        goto out;
+    }
     if (rc < 0) goto out;
 
-    rc = myact_position_abs_send(c, (uint16_t)o->abs_speed_dps, myact_deg_to_raw_0p01(orig));
+    rc = myact_position_abs_send(c, abs_speed_raw, myact_deg_to_raw_0p01(orig));
     if (rc < 0) goto out;
 
     rc = wait_until_angle_near(c, orig, o->abs_tolerance_deg,
