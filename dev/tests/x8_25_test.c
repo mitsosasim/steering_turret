@@ -311,6 +311,11 @@ static int read_full_diagnostics(myact_ctx_t* c, myact_status1_t* s1, int32_t* a
     rc = myact_read_status3(c, &s3); if (rc < 0) return rc;
 
     printf("diag model:%s version:%u runtime_ms:%u runmode:%u\n", m, v, rt, (unsigned)rm);
+    printf("diag angle_multi:%.2f angle_single:%.2f enc60:%d enc61:%d enc62:%d\n",
+           myact_raw_0p01_to_deg(*a), myact_raw_0p01_to_deg((int32_t)as), em, er, eo);
+    printf("diag status1 brake:%s bus:%.1fV err:0x%04X\n",
+           s1->brake_release_command_state ? "released" : "locked",
+           s1->voltage_0p1v / 10.0, s1->error_flags);
     return MYACT_OK;
 }
 
