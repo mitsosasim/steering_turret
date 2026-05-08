@@ -45,7 +45,8 @@ typedef enum {
     MYACT_ERANGE      = -5,
     MYACT_ESTATE      = -6,
     MYACT_ENOTSUP     = -7,
-    MYACT_EBUS        = -8
+    MYACT_EBUS        = -8,
+    MYACT_ENOMOTION   = -9
 } myact_rc_t;
 
 const char* myact_strerror(int rc);

@@ -560,7 +560,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     if (acked) {
         printf("[FAIL] speed-step-test: command acknowledged but no observed speed/motion\n");
     }
-    return MYACT_EPROTO;
+    return MYACT_ENOMOTION;
 }
 
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
@@ -645,7 +645,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
         printf("[FAIL] torque-step-test: command acknowledged but no observed current/motion\n");
     }
 
-    return MYACT_EPROTO;
+    return MYACT_ENOMOTION;
 }
 
 static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
