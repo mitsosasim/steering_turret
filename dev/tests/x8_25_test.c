@@ -628,8 +628,47 @@ static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_st
 }
 
 static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    printf("enable-hold: heading\n");
-    return axis_enable_for_motion(c, o, s1, "enable-hold");
+    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
+    int rc;
+
+    rc = prepare_sync(c);
+    if (rc < 0) return rc;
+
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
+
+    rc = check_motion_voltage_or_skip(o, s1, "enable-hold");
+    if (rc < 0) return rc;
+
+    if (s1->brake_release_command_state) {
+        rc = myact_shutdown_send(c);
+        if (rc < 0) return rc;
+        msleep(100);
+
+        rc = myact_read_status1(c, s1);
+        if (rc < 0) return rc;
+    }
+
+    rc = test_axis_enable(c, o, s1);
+    if (rc < 0) return rc;
+
+    rc = myact_read_operating_mode(c, &rm);
+    if (rc < 0) return rc;
+
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
+
+    if (rm != MYACT_RUNMODE_SPEED) {
+        printf("enable-hold: axis enable failed: runmode=%u (expected 2)\n", (unsigned)rm);
+        return MYACT_ESTATE;
+    }
+    if (!s1->brake_release_command_state) {
+        printf("enable-hold: axis enable failed: brake still locked\n");
+        return MYACT_ESTATE;
+    }
+
+    printf("enable-hold: brake released and motor held enabled.\n");
+    return MYACT_OK;
 }
 
 static int run_raw_motion_smoke(myact_ctx_t* c,
