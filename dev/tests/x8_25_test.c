@@ -935,9 +935,113 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
 }
 
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    (void)c; (void)o; (void)s1;
-    printf("active-telemetry-rt-test: heading\n");
-    return MYACT_ESTATE;
+    uint64_t t_start;
+    uint64_t t_end;
+    uint64_t prev_ts = 0;
+    uint64_t interval_sum = 0;
+    uint64_t interval_min = UINT64_MAX;
+    uint64_t interval_max = 0;
+    unsigned interval_count = 0;
+    unsigned frame_count = 0;
+    int max_abs_speed = 0;
+    double start_angle_deg = 0.0;
+    double end_angle_deg = 0.0;
+    double angle_delta_deg;
+    double avg_interval_ms = 0.0;
+    bool move_observed = false;
+    int rc;
+
+    printf("active-telemetry-rt-test:\n");
+    printf("  interval_ms=%u duration_ms=%u\n", o->active_interval_ms, o->active_duration_ms);
+
+    rc = axis_enable_for_motion(c, o, s1, "active-telemetry-rt-test");
+    if (rc < 0) return rc;
+
+    rc = prepare_sync(c);
+    if (rc < 0) return rc;
+
+    rc = read_angle_deg(c, &start_angle_deg);
+    if (rc < 0) return rc;
+
+    rc = myact_active_reply_config(c, MYACT_CMD_STATUS2, true, (uint16_t)(o->active_interval_ms / 10));
+    if (rc < 0) return rc;
+
+    msleep(o->active_interval_ms + 20);
+
+    rc = myact_position_inc_send(c,
+                                 (uint16_t)o->active_move_speed_dps,
+                                 myact_deg_to_raw_0p01(o->active_move_delta_deg));
+    if (rc < 0) {
+        (void)myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
+        return rc;
+    }
+
+    t_start = now_ms(NULL);
+    t_end = t_start + o->active_duration_ms;
+
+    while (now_ms(NULL) < t_end) {
+        int ev = myact_poll(c, o->active_interval_ms + 20);
+        if (ev == MYACT_ETIMEDOUT) continue;
+        if (ev < 0) {
+            (void)myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
+            return ev;
+        }
+        if ((ev & MYACT_EVENT_STATUS2) != 0) {
+            const myact_cache_t* cache = myact_cache(c);
+            uint64_t ts = cache->status2.ts_ms;
+            int abs_speed;
+            frame_count++;
+            abs_speed = cache->status2.speed_dps >= 0 ? cache->status2.speed_dps : -cache->status2.speed_dps;
+            if (abs_speed > max_abs_speed) max_abs_speed = abs_speed;
+            if (abs_speed > 0) move_observed = true;
+            if (prev_ts != 0 && ts > prev_ts) {
+                uint64_t dt = ts - prev_ts;
+                if (dt < interval_min) interval_min = dt;
+                if (dt > interval_max) interval_max = dt;
+                interval_sum += dt;
+                interval_count++;
+            }
+            prev_ts = ts;
+        }
+    }
+
+    rc = myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
+    if (rc < 0) return rc;
+
+    rc = prepare_sync(c);
+    if (rc < 0) return rc;
+
+    rc = read_angle_deg(c, &end_angle_deg);
+    if (rc < 0) return rc;
+
+    angle_delta_deg = end_angle_deg - start_angle_deg;
+    if (interval_count > 0) avg_interval_ms = (double)interval_sum / (double)interval_count;
+
+    printf("  frames_received=%u\n", frame_count);
+    printf("  avg_interval_ms=%.1f\n", avg_interval_ms);
+    printf("  min_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_min : 0));
+    printf("  max_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_max : 0));
+    printf("  max_abs_speed_dps=%d\n", max_abs_speed);
+    printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
+
+    {
+        unsigned expected = (o->active_interval_ms > 0) ? (o->active_duration_ms / o->active_interval_ms) : 0;
+        unsigned minimum_expected = expected > 0 ? (unsigned)(expected * 8u / 10u) : 1u;
+        bool count_ok = frame_count > minimum_expected;
+        bool motion_ok = move_observed || fabs(angle_delta_deg) >= (fabs(o->active_move_delta_deg) * 0.4);
+
+        if (!count_ok) {
+            printf("[FAIL] active-telemetry-rt-test: insufficient telemetry frames (got=%u min>%u)\n",
+                   frame_count, minimum_expected);
+            return MYACT_ESTATE;
+        }
+        if (!motion_ok) {
+            printf("[FAIL] active-telemetry-rt-test: A8 fallback movement not observed\n");
+            return MYACT_ESTATE;
+        }
+    }
+
+    return MYACT_OK;
 }
 
 static int run_mit_mode_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
