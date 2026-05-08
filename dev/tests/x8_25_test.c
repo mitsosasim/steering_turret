@@ -68,6 +68,8 @@ typedef struct {
     unsigned speed_step_hold_ms;
     unsigned speed_step_cycles;
     unsigned speed_sample_ms;
+    double speed_pass_min_dps;
+    double speed_pass_min_delta_deg;
 
     double torque_step_a;
     unsigned torque_step_hold_ms;
@@ -208,6 +210,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     o->speed_step_hold_ms = 1500;
     o->speed_step_cycles = 2;
     o->speed_sample_ms = 100;
+    o->speed_pass_min_dps = 5.0;
+    o->speed_pass_min_delta_deg = 1.0;
     o->torque_step_a = 0.30;
     o->torque_step_hold_ms = 500;
     o->torque_step_cycles = 1;
@@ -253,6 +257,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-cycles") && i + 1 < argc) o->speed_step_cycles = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--speed-sample-ms") && i + 1 < argc) o->speed_sample_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--speed-pass-min-dps") && i + 1 < argc) o->speed_pass_min_dps = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--speed-pass-min-delta-deg") && i + 1 < argc) o->speed_pass_min_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--torque-step-a") && i + 1 < argc) o->torque_step_a = atof(argv[++i]);
         else if (!strcmp(argv[i], "--torque-step-hold-ms") && i + 1 < argc) o->torque_step_hold_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--torque-step-cycles") && i + 1 < argc) o->torque_step_cycles = (unsigned)atoi(argv[++i]);
@@ -408,6 +414,16 @@ static int sample_status2(myact_ctx_t* c, const char* tag, uint64_t t0) {
     return MYACT_OK;
 }
 
+static int sample_status2_capture(myact_ctx_t* c, const char* tag, uint64_t t0, myact_status2_t* out) {
+    int rc = myact_read_status2(c, out);
+    if (rc < 0) return rc;
+
+    printf("t_ms=%llu tag=%s iq_A=%.2f speed_dps=%d angle_deg=%d temp_C=%d\n",
+           (unsigned long long)(now_ms(NULL) - t0), tag,
+           out->iq_0p01a / 100.0, out->speed_dps, out->angle_deg, out->motor_temp_c);
+    return MYACT_OK;
+}
+
 static int wait_until_angle_near(myact_ctx_t* c, double tgt, double tol, unsigned to, unsigned p, const char* tag) {
     uint64_t s = now_ms(NULL);
     for (;;) {
@@ -466,7 +482,13 @@ static int bench_result(const char* n, int rc) {
 
 static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     uint64_t t0;
+    double angle_before = 0.0;
+    double angle_after = 0.0;
+    double delta_deg;
+    double max_abs_speed_dps = 0.0;
+    bool acked = false;
     int rc;
+    myact_status2_t s2;
 
     printf("speed-step-test: A2 speed mode, %+0.1f dps / %0.1f dps, hold=%u ms, cycles=%u\n",
            o->speed_step_dps, -o->speed_step_dps, o->speed_step_hold_ms, o->speed_step_cycles);
@@ -474,31 +496,63 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     rc = axis_enable_for_motion(c, o, s1, "speed-step-test");
     if (rc < 0) return rc;
 
+    rc = read_angle_deg(c, &angle_before);
+    if (rc < 0) return rc;
+
     for (unsigned i = 0; i < o->speed_step_cycles; i++) {
         printf("speed-step-test cycle %u: sending A2 +speed\n", i + 1);
         rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps));
         if (rc < 0) return rc;
+        acked = true;
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-            rc = sample_status2(c, "speed+", t0);
+            rc = sample_status2_capture(c, "speed+", t0, &s2);
             if (rc < 0) return rc;
+            if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
+                max_abs_speed_dps = fabs((double)s2.speed_dps);
+            }
             msleep(o->speed_sample_ms);
         }
 
         printf("speed-step-test cycle %u: sending A2 -speed\n", i + 1);
         rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps));
         if (rc < 0) return rc;
+        acked = true;
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-            rc = sample_status2(c, "speed-", t0);
+            rc = sample_status2_capture(c, "speed-", t0, &s2);
             if (rc < 0) return rc;
+            if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
+                max_abs_speed_dps = fabs((double)s2.speed_dps);
+            }
             msleep(o->speed_sample_ms);
         }
     }
 
-    return send_stop_and_sample(c, "speed-step-test");
+    rc = send_stop_and_sample(c, "speed-step-test");
+    if (rc < 0) return rc;
+
+    rc = read_angle_deg(c, &angle_after);
+    if (rc < 0) return rc;
+
+    delta_deg = angle_after - angle_before;
+    printf("speed-step-test summary:\n");
+    printf("  requested_dps=%.1f\n", o->speed_step_dps);
+    printf("  max_abs_speed_dps=%.1f\n", max_abs_speed_dps);
+    printf("  angle_before=%.2f\n", angle_before);
+    printf("  angle_after=%.2f\n", angle_after);
+    printf("  delta_deg=%.2f\n", delta_deg);
+
+    if (max_abs_speed_dps >= o->speed_pass_min_dps || fabs(delta_deg) >= o->speed_pass_min_delta_deg) {
+        return MYACT_OK;
+    }
+
+    if (acked) {
+        printf("[FAIL] speed-step-test: command acknowledged but no observed speed/motion\n");
+    }
+    return MYACT_EPROTO;
 }
 
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
