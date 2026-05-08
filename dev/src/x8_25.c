@@ -78,6 +78,7 @@ const char* myact_strerror(int rc) {
         case MYACT_ESTATE:    return "ESTATE";
         case MYACT_ENOTSUP:   return "ENOTSUP";
         case MYACT_EBUS:      return "EBUS";
+        case MYACT_ENOMOTION: return "ENOMOTION";
         default:              return "UNKNOWN";
     }
 }
