@@ -556,10 +556,56 @@ static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t
     return axis_enable_for_motion(c, o, s1, "enable-hold");
 }
 
-static int run_raw_motion_smoke(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    (void)c; (void)s1;
-    printf("raw-motion-smoke: heading sendonly=%s\n", o->raw_motion_smoke_sendonly ? "true" : "false");
-    return MYACT_ESTATE;
+static int run_raw_motion_smoke(myact_ctx_t* c,
+                                const test_opts_t* o,
+                                myact_status1_t* s1,
+                                bool sendonly) {
+    double before_deg = 0.0;
+    double after_deg = 0.0;
+    double observed_delta;
+    double allowed_err;
+    int32_t req_delta_raw;
+    int rc;
+
+    rc = axis_enable_for_motion(c, o, s1, "raw-motion-smoke");
+    if (rc < 0) return rc;
+
+    rc = read_angle_deg(c, &before_deg);
+    if (rc < 0) return rc;
+    printf("raw-motion-smoke: before angle read OK\n");
+
+    printf("raw-motion-smoke: sending A8 %+0.2f deg at %.0f dps\n",
+           o->smoke_delta_deg, o->smoke_speed_dps);
+
+    req_delta_raw = myact_deg_to_raw_0p01(o->smoke_delta_deg);
+    if (sendonly) {
+        rc = myact_position_inc_send(c, (uint16_t)o->smoke_speed_dps, req_delta_raw);
+    } else {
+        myact_basic_feedback_t fb;
+        rc = myact_position_inc(c, (uint16_t)o->smoke_speed_dps, req_delta_raw, &fb);
+    }
+    if (rc < 0) return rc;
+    printf("raw-motion-smoke: A8 reply OK\n");
+
+    msleep(o->smoke_wait_ms);
+
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    printf("raw-motion-smoke: stop sent\n");
+
+    rc = read_angle_deg(c, &after_deg);
+    if (rc < 0) return rc;
+
+    observed_delta = after_deg - before_deg;
+    printf("raw-motion-smoke before: %.2f deg\n", before_deg);
+    printf("raw-motion-smoke after: %.2f deg\n", after_deg);
+    printf("raw-motion-smoke delta: %.2f deg\n", observed_delta);
+
+    allowed_err = fmax(1.0, 0.20 * fabs(o->smoke_delta_deg));
+    if (fabs(observed_delta) < 0.01) return MYACT_ESTATE;
+    if (fabs(observed_delta - o->smoke_delta_deg) > allowed_err) return MYACT_ESTATE;
+
+    return MYACT_OK;
 }
 
 static int run_brake_persistence_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
@@ -660,7 +706,8 @@ int main(int argc, char** argv) {
         } else {
             if (o.brake_latency_test) { any_dispatched = true; if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.enable_hold) { any_dispatched = true; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.raw_motion_smoke || o.raw_motion_smoke_sendonly) { any_dispatched = true; if (bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.raw_motion_smoke) { any_dispatched = true; if (bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.raw_motion_smoke_sendonly) { any_dispatched = true; if (bench_result("raw-motion-smoke-sendonly", run_raw_motion_smoke(&ctx, &o, &s1, true)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.brake_persistence_test) { any_dispatched = true; if (bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.rt_inc_burst) { any_dispatched = true; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.speed_step_test) { any_dispatched = true; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
