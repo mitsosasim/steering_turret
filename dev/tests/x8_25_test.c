@@ -546,6 +546,46 @@ out:
     return rc;
 }
 
+static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    printf("brake-latency-test: heading\n");
+    return axis_enable_for_motion(c, o, s1, "brake-latency-test");
+}
+
+static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    printf("enable-hold: heading\n");
+    return axis_enable_for_motion(c, o, s1, "enable-hold");
+}
+
+static int run_raw_motion_smoke(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    (void)c; (void)s1;
+    printf("raw-motion-smoke: heading sendonly=%s\n", o->raw_motion_smoke_sendonly ? "true" : "false");
+    return MYACT_ESTATE;
+}
+
+static int run_brake_persistence_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    (void)c; (void)o; (void)s1;
+    printf("brake-persistence-test: heading\n");
+    return MYACT_ESTATE;
+}
+
+static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    (void)c; (void)o; (void)s1;
+    printf("rt-inc-burst: heading\n");
+    return MYACT_ESTATE;
+}
+
+static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    (void)c; (void)o; (void)s1;
+    printf("active-telemetry-rt-test: heading\n");
+    return MYACT_ESTATE;
+}
+
+static int run_mit_mode_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    (void)c; (void)o; (void)s1;
+    printf("mit-mode-test: heading\n");
+    return MYACT_ESTATE;
+}
+
 int main(int argc, char** argv) {
     sockcan_bus_t bus;
     myact_io_t io;
@@ -594,28 +634,47 @@ int main(int argc, char** argv) {
     rc = read_full_diagnostics(&ctx, &s1, &a);
     if (rc < 0) goto done;
 
-    if (!o.raw_motion_smoke && !o.raw_motion_smoke_sendonly && !o.enable_hold &&
-        !o.brake_latency_test && !o.brake_persistence_test && !o.rt_inc_burst &&
-        !o.speed_step_test && !o.torque_step_test && !o.profile_abs_relative_test &&
-        !o.mit_mode_test && !o.active_telemetry_rt_test && !o.bench_all) {
+    {
+        bool any_test_requested = o.raw_motion_smoke || o.raw_motion_smoke_sendonly || o.enable_hold ||
+                                  o.brake_latency_test || o.brake_persistence_test || o.rt_inc_burst ||
+                                  o.speed_step_test || o.torque_step_test || o.profile_abs_relative_test ||
+                                  o.mit_mode_test || o.active_telemetry_rt_test || o.bench_all;
+        bool any_dispatched = false;
+
+        if (!any_test_requested) {
         printf("DIAG-ONLY mode: no motion requested.\n");
         rc = RET_OK;
         goto done;
-    }
+        }
 
-    if (o.speed_step_test || o.bench_all) {
-        int tr = run_speed_step_test(&ctx, &o, &s1);
-        if (bench_result("speed-step-test", tr) != RET_OK) ret = RET_COMMS_FAIL;
-    }
+        if (o.bench_all) {
+            any_dispatched = true;
+            if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+            if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+            if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+            if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+            if (bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+            if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+            if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+            if (o.run_mit_in_bench_all && bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL;
+        } else {
+            if (o.brake_latency_test) { any_dispatched = true; if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.enable_hold) { any_dispatched = true; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.raw_motion_smoke || o.raw_motion_smoke_sendonly) { any_dispatched = true; if (bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.brake_persistence_test) { any_dispatched = true; if (bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.rt_inc_burst) { any_dispatched = true; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.speed_step_test) { any_dispatched = true; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.profile_abs_relative_test) { any_dispatched = true; if (bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.active_telemetry_rt_test) { any_dispatched = true; if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.torque_step_test) { any_dispatched = true; if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.mit_mode_test) { any_dispatched = true; if (bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+        }
 
-    if (o.torque_step_test || o.bench_all) {
-        int tr = run_torque_step_test(&ctx, &o, &s1);
-        if (bench_result("torque-step-test", tr) != RET_OK) ret = RET_COMMS_FAIL;
-    }
-
-    if (o.profile_abs_relative_test || o.bench_all) {
-        int tr = run_profile_abs_relative_test(&ctx, &o, &s1);
-        if (bench_result("profile-abs-relative-test", tr) != RET_OK) ret = RET_COMMS_FAIL;
+        if (any_test_requested && !any_dispatched) {
+            fprintf(stderr, "internal error: requested flag was parsed but not dispatched\n");
+            rc = RET_BAD_CLI;
+            goto done;
+        }
     }
 
     rc = ret;
