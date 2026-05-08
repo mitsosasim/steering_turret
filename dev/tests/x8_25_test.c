@@ -749,7 +749,6 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
     double orig;
     double target_plus;
     double final_a4 = 0.0;
-    double final_a8 = 0.0;
     int32_t target_raw;
     uint16_t abs_speed_raw;
     uint8_t a4_frame[8] = {0};
@@ -783,37 +782,49 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
                                o->abs_timeout_ms, o->abs_poll_ms, "abs+");
     if (rc == MYACT_ETIMEDOUT) {
         double err;
+        myact_status1_t diag_s1;
+        myact_status2_t diag_s2;
 
         (void)read_angle_deg(c, &final_a4);
         err = target_plus - final_a4;
         printf("profile-abs-relative-test: A4 timeout\n");
+        printf("profile-abs-relative-test: A4 command acknowledged? yes\n");
         printf("profile-abs-relative-test: A4 frame = %02X %02X %02X %02X %02X %02X %02X %02X\n",
                a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3],
                a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
         printf("profile-abs-relative-test: A4 original=%.2f target=%.2f final=%.2f error=%.2f\n",
                orig, target_plus, final_a4, err);
+        if (myact_read_status1(c, &diag_s1) == MYACT_OK) {
+            printf("profile-abs-relative-test: status1 brake=%u bus=%.1fV error=0x%04X\n",
+                   (unsigned)diag_s1.brake_release_command_state,
+                   diag_s1.voltage_0p1v / 10.0,
+                   diag_s1.error_flags);
+        }
+        if (myact_read_status2(c, &diag_s2) == MYACT_OK) {
+            printf("profile-abs-relative-test: status2 iq=%.2f speed=%d angle=%d\n",
+                   diag_s2.iq_0p01a / 100.0,
+                   (int)diag_s2.speed_dps,
+                   (int)diag_s2.angle_deg);
+        }
 
         if (!o->no_a8_fallback) {
-            int32_t fallback_delta_raw = myact_deg_to_raw_0p01(o->abs_delta_deg);
-            printf("profile-abs-relative-test: A4 timed out; running A8 fallback with same delta\n");
-            printf("profile-abs-relative-test: A8 fallback delta = %.2f deg\n", o->abs_delta_deg);
-
-            rc = myact_position_inc_send(c, abs_speed_raw, fallback_delta_raw);
+            printf("profile-abs-relative-test: sending stop before A8 fallback\n");
+            (void)myact_stop_send(c);
+            msleep(200);
+            rc = prepare_sync(c);
             if (rc < 0) goto out;
 
-            rc = wait_until_angle_near(c, target_plus, o->abs_tolerance_deg,
-                                       o->abs_timeout_ms, o->abs_poll_ms, "a8-fallback");
+            rc = run_a8_delta_observed(c, "profile-abs-relative-test A8 fallback",
+                                       o->abs_delta_deg, o->abs_speed_dps, o->smoke_wait_ms,
+                                       fmax(1.0, 0.20 * fabs(o->abs_delta_deg)),
+                                       NULL, NULL, NULL);
             if (rc == MYACT_OK) {
                 printf("[FAIL] profile-abs-relative-test: A4 failed but A8 fallback succeeded\n");
-                rc = MYACT_EPROTO;
+                rc = MYACT_ENOTSUP;
                 goto out;
             }
-
-            (void)read_angle_deg(c, &final_a8);
-            printf("profile-abs-relative-test: A8 fallback final=%.2f target=%.2f error=%.2f\n",
-                   final_a8, target_plus, target_plus - final_a8);
             printf("[FAIL] profile-abs-relative-test: A4 failed and A8 fallback failed\n");
-            rc = MYACT_EPROTO;
+            rc = MYACT_ESTATE;
             goto out;
         }
 
@@ -973,55 +984,63 @@ static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t
     return MYACT_OK;
 }
 
+static int run_a8_delta_observed(myact_ctx_t* c,
+                                 const char* tag,
+                                 double delta_deg,
+                                 double speed_dps,
+                                 unsigned wait_ms,
+                                 double pass_tolerance_deg,
+                                 double* out_before,
+                                 double* out_after,
+                                 double* out_delta) {
+    double before_deg = 0.0;
+    double after_deg = 0.0;
+    double observed_delta;
+    int rc;
+
+    rc = prepare_sync(c);
+    if (rc < 0) return rc;
+    rc = read_angle_deg(c, &before_deg);
+    if (rc < 0) return rc;
+    rc = myact_position_inc_send(c, (uint16_t)speed_dps, myact_deg_to_raw_0p01(delta_deg));
+    if (rc < 0) return rc;
+    msleep(wait_ms);
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    msleep(100);
+    rc = read_angle_deg(c, &after_deg);
+    if (rc < 0) return rc;
+
+    observed_delta = after_deg - before_deg;
+    printf("%s before=%.2f after=%.2f delta=%.2f\n", tag, before_deg, after_deg, observed_delta);
+    if (out_before) *out_before = before_deg;
+    if (out_after) *out_after = after_deg;
+    if (out_delta) *out_delta = observed_delta;
+
+    if (fabs(observed_delta - delta_deg) > pass_tolerance_deg) return MYACT_ESTATE;
+    return MYACT_OK;
+}
+
 static int run_raw_motion_smoke(myact_ctx_t* c,
                                 const test_opts_t* o,
                                 myact_status1_t* s1,
                                 bool sendonly) {
-    double before_deg = 0.0;
-    double after_deg = 0.0;
-    double observed_delta;
-    double allowed_err;
-    int32_t req_delta_raw;
     int rc;
 
     rc = axis_enable_for_motion(c, o, s1, "raw-motion-smoke");
     if (rc < 0) return rc;
 
-    rc = read_angle_deg(c, &before_deg);
-    if (rc < 0) return rc;
-    printf("raw-motion-smoke: before angle read OK\n");
-
-    printf("raw-motion-smoke: sending A8 %+0.2f deg at %.0f dps\n",
-           o->smoke_delta_deg, o->smoke_speed_dps);
-
-    req_delta_raw = myact_deg_to_raw_0p01(o->smoke_delta_deg);
     if (sendonly) {
+        int32_t req_delta_raw = myact_deg_to_raw_0p01(o->smoke_delta_deg);
+        printf("raw-motion-smoke: sendonly A8 %+0.2f deg at %.0f dps\n",
+               o->smoke_delta_deg, o->smoke_speed_dps);
         rc = myact_position_inc_send(c, (uint16_t)o->smoke_speed_dps, req_delta_raw);
-    } else {
-        myact_basic_feedback_t fb;
-        rc = myact_position_inc(c, (uint16_t)o->smoke_speed_dps, req_delta_raw, &fb);
+        return rc;
     }
+    rc = run_a8_delta_observed(c, "raw-motion-smoke", o->smoke_delta_deg, o->smoke_speed_dps,
+                               o->smoke_wait_ms, fmax(1.0, 0.20 * fabs(o->smoke_delta_deg)),
+                               NULL, NULL, NULL);
     if (rc < 0) return rc;
-    printf("raw-motion-smoke: A8 reply OK\n");
-
-    msleep(o->smoke_wait_ms);
-
-    rc = myact_stop_send(c);
-    if (rc < 0) return rc;
-    printf("raw-motion-smoke: stop sent\n");
-
-    rc = read_angle_deg(c, &after_deg);
-    if (rc < 0) return rc;
-
-    observed_delta = after_deg - before_deg;
-    printf("raw-motion-smoke before: %.2f deg\n", before_deg);
-    printf("raw-motion-smoke after: %.2f deg\n", after_deg);
-    printf("raw-motion-smoke delta: %.2f deg\n", observed_delta);
-
-    allowed_err = fmax(1.0, 0.20 * fabs(o->smoke_delta_deg));
-    if (fabs(observed_delta) < 0.01) return MYACT_ESTATE;
-    if (fabs(observed_delta - o->smoke_delta_deg) > allowed_err) return MYACT_ESTATE;
-
     return MYACT_OK;
 }
 
@@ -1041,32 +1060,14 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
     if (rc < 0) return rc;
 
     for (unsigned i = 0; i < o->cycles; i++) {
-        double orig_deg;
-        double angle_deg;
-        int32_t req_delta_raw;
-
-        rc = read_angle_deg(c, &orig_deg);
+        rc = run_a8_delta_observed(c, "rt-inc-burst +", o->inc_delta_deg, o->inc_speed_dps,
+                                   o->inc_wait_ms, fmax(1.0, 0.20 * fabs(o->inc_delta_deg)),
+                                   NULL, NULL, NULL);
         if (rc < 0) return rc;
-
-        req_delta_raw = myact_deg_to_raw_0p01(o->inc_delta_deg);
-        rc = myact_position_inc_send(c, (uint16_t)o->inc_speed_dps, req_delta_raw);
+        rc = run_a8_delta_observed(c, "rt-inc-burst -", -o->inc_delta_deg, o->inc_speed_dps,
+                                   o->inc_wait_ms, fmax(1.0, 0.20 * fabs(o->inc_delta_deg)),
+                                   NULL, NULL, NULL);
         if (rc < 0) return rc;
-
-        msleep(o->inc_wait_ms);
-
-        rc = read_angle_deg(c, &angle_deg);
-        if (rc < 0) return rc;
-        printf("rt-inc-burst cycle %u +: angle=%.2f delta=%.2f\n", i + 1, angle_deg, angle_deg - orig_deg);
-
-        req_delta_raw = myact_deg_to_raw_0p01(-o->inc_delta_deg);
-        rc = myact_position_inc_send(c, (uint16_t)o->inc_speed_dps, req_delta_raw);
-        if (rc < 0) return rc;
-
-        msleep(o->inc_wait_ms);
-
-        rc = read_angle_deg(c, &angle_deg);
-        if (rc < 0) return rc;
-        printf("rt-inc-burst cycle %u -: angle=%.2f delta=%.2f\n", i + 1, angle_deg, angle_deg - orig_deg);
     }
 
     return myact_stop_send(c);
