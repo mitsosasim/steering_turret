@@ -1045,9 +1045,57 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
 }
 
 static int run_mit_mode_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    (void)c; (void)o; (void)s1;
-    printf("mit-mode-test: heading\n");
-    return MYACT_ESTATE;
+    uint8_t packed[8] = {0};
+    int rc;
+    (void)s1;
+
+    rc = myact_motion_pack(o->mit_p_rad, o->mit_v_rad_s, o->mit_kp, o->mit_kd, o->mit_t_nm, packed);
+    if (rc < 0) return rc;
+
+    if (o->mit_dry_run) {
+        printf("mit-mode-test dry-run:\n");
+        printf("  p_rad=%.3f\n", o->mit_p_rad);
+        printf("  v_rad_s=%.3f\n", o->mit_v_rad_s);
+        printf("  kp=%.3f\n", o->mit_kp);
+        printf("  kd=%.3f\n", o->mit_kd);
+        printf("  t_nm=%.3f\n", o->mit_t_nm);
+        printf("  packed=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+               packed[0], packed[1], packed[2], packed[3],
+               packed[4], packed[5], packed[6], packed[7]);
+        return MYACT_OK;
+    }
+
+    rc = axis_enable_for_motion(c, o, s1, "mit-mode-test");
+    if (rc != RET_OK) return rc;
+
+    printf("mit-mode-test live:\n");
+    printf("  sending 0x401 frames\n");
+    printf("  waiting for 0x501 feedback\n");
+
+    {
+        uint64_t t_end = now_ms(NULL) + o->mit_duration_ms;
+        bool saw_feedback = false;
+
+        while (now_ms(NULL) < t_end) {
+            rc = myact_motion_send(c, o->mit_p_rad, o->mit_v_rad_s, o->mit_kp, o->mit_kd, o->mit_t_nm);
+            if (rc < 0) return rc;
+
+            {
+                uint32_t wait_ms = o->mit_sample_ms > 0 ? o->mit_sample_ms : 1u;
+                int ev = myact_poll(c, wait_ms);
+                if (ev == MYACT_ETIMEDOUT) continue;
+                if (ev < 0) return ev;
+                if ((ev & MYACT_EVENT_MOTION_FB) != 0) saw_feedback = true;
+            }
+        }
+
+        if (!saw_feedback) {
+            printf("[FAIL] mit-mode-test: 0x401 sent but no 0x501 feedback received\n");
+            return MYACT_ESTATE;
+        }
+    }
+
+    return MYACT_OK;
 }
 
 int main(int argc, char** argv) {
