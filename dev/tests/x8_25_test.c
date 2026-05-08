@@ -1036,21 +1036,24 @@ static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t
         return MYACT_ESTATE;
     }
 
-    rc = wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
-    if (rc >= 0) {
-        printf("enable-hold: runmode reached 2 after %dms\n", rc);
-    } else if (rc == MYACT_ETIMEDOUT && rm == MYACT_RUNMODE_IDLE_OR_OFF) {
-        printf("enable-hold: brake released but runmode stayed 0 after %ums\n", o->runmode_timeout_ms);
-        if (!o->allow_hold_with_runmode0) return MYACT_ESTATE;
-        printf("enable-hold: WARNING allowing hold with runmode=0 due to --allow-hold-with-runmode0\n");
-    } else if (rc == MYACT_ETIMEDOUT) {
-        printf("enable-hold: axis enable failed: runmode=%u (expected 2)\n", (unsigned)rm);
+    printf("enable-hold: status1 brake=%s bus=%.1fV error=0x%04X\n",
+           s1->brake_release_command_state ? "released" : "locked",
+           s1->voltage_0p1v / 10.0,
+           s1->error_flags);
+    if (s1->error_flags != 0u) {
+        printf("enable-hold: axis enable failed: error_flags=0x%04X\n", s1->error_flags);
         return MYACT_ESTATE;
-    } else {
-        return rc;
     }
 
-    printf("enable-hold: brake released and motor held enabled.\n");
+    rc = myact_read_operating_mode(c, &rm);
+    if (rc < 0) return rc;
+    if (rm == MYACT_RUNMODE_IDLE_OR_OFF) {
+        printf("enable-hold: runmode=0 idle/off, no motion command active\n");
+        printf("INFO: runmode stayed 0 because brake release alone does not select a control mode.\n");
+    } else {
+        printf("enable-hold: runmode=%u\n", (unsigned)rm);
+    }
+
     return MYACT_OK;
 }
 
