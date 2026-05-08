@@ -75,6 +75,8 @@ typedef struct {
     unsigned torque_step_hold_ms;
     unsigned torque_step_cycles;
     unsigned torque_sample_ms;
+    double torque_pass_min_iq_a;
+    double torque_pass_min_delta_deg;
 
     double abs_delta_deg;
     double abs_speed_dps;
@@ -216,6 +218,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     o->torque_step_hold_ms = 500;
     o->torque_step_cycles = 1;
     o->torque_sample_ms = 100;
+    o->torque_pass_min_iq_a = 0.10;
+    o->torque_pass_min_delta_deg = 0.5;
     o->abs_delta_deg = 10.0;
     o->abs_speed_dps = 60.0;
     o->abs_tolerance_deg = 1.0;
@@ -263,6 +267,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--torque-step-hold-ms") && i + 1 < argc) o->torque_step_hold_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--torque-step-cycles") && i + 1 < argc) o->torque_step_cycles = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--torque-sample-ms") && i + 1 < argc) o->torque_sample_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--torque-pass-min-iq-a") && i + 1 < argc) o->torque_pass_min_iq_a = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--torque-pass-min-delta-deg") && i + 1 < argc) o->torque_pass_min_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--abs-delta-deg") && i + 1 < argc) o->abs_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--abs-speed-dps") && i + 1 < argc) o->abs_speed_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--abs-tolerance-deg") && i + 1 < argc) o->abs_tolerance_deg = atof(argv[++i]);
@@ -558,6 +564,13 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
     uint64_t t0;
+    double angle_before = 0.0;
+    double angle_after = 0.0;
+    double angle_delta_deg;
+    double max_abs_iq_a = 0.0;
+    double max_abs_speed_dps = 0.0;
+    bool acked = false;
+    myact_status2_t s2;
 
     printf("torque-step-test: WARNING torque mode can move unexpectedly\n");
     printf("torque-step-test: A1 %+0.2fA / %0.2fA, hold=%ums\n",
@@ -566,31 +579,71 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     rc = axis_enable_for_motion(c, o, s1, "torque-step-test");
     if (rc < 0) return rc;
 
+    rc = read_angle_deg(c, &angle_before);
+    if (rc < 0) return rc;
+
     if (!o->no_motion_countdown) msleep(2000);
 
     for (unsigned i = 0; i < o->torque_step_cycles; i++) {
         rc = myact_torque_send(c, myact_current_a_to_raw(o->torque_step_a));
         if (rc < 0) return rc;
+        acked = true;
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
-            rc = sample_status2(c, "torque+", t0);
+            rc = sample_status2_capture(c, "torque+", t0, &s2);
             if (rc < 0) return rc;
+            if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) {
+                max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
+            }
+            if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
+                max_abs_speed_dps = fabs((double)s2.speed_dps);
+            }
             msleep(o->torque_sample_ms);
         }
 
         rc = myact_torque_send(c, myact_current_a_to_raw(-o->torque_step_a));
         if (rc < 0) return rc;
+        acked = true;
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
-            rc = sample_status2(c, "torque-", t0);
+            rc = sample_status2_capture(c, "torque-", t0, &s2);
             if (rc < 0) return rc;
+            if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) {
+                max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
+            }
+            if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
+                max_abs_speed_dps = fabs((double)s2.speed_dps);
+            }
             msleep(o->torque_sample_ms);
         }
     }
 
-    return send_stop_and_sample(c, "torque-step-test");
+    rc = send_stop_and_sample(c, "torque-step-test");
+    if (rc < 0) return rc;
+
+    rc = read_angle_deg(c, &angle_after);
+    if (rc < 0) return rc;
+
+    angle_delta_deg = angle_after - angle_before;
+    printf("torque-step-test summary:\n");
+    printf("  requested_iq_a=%.2f\n", o->torque_step_a);
+    printf("  max_abs_iq_A=%.2f\n", max_abs_iq_a);
+    printf("  max_abs_speed_dps=%.1f\n", max_abs_speed_dps);
+    printf("  angle_before=%.2f\n", angle_before);
+    printf("  angle_after=%.2f\n", angle_after);
+    printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
+
+    if (max_abs_iq_a >= o->torque_pass_min_iq_a || fabs(angle_delta_deg) >= o->torque_pass_min_delta_deg) {
+        return MYACT_OK;
+    }
+
+    if (acked) {
+        printf("[FAIL] torque-step-test: command acknowledged but no observed current/motion\n");
+    }
+
+    return MYACT_EPROTO;
 }
 
 static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
