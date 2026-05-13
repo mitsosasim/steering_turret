@@ -2,6 +2,7 @@
 #include "stc_log.h"
 #include <string.h>
 
+#ifdef SIMULATION
 int sim_motion_backend_start(const motion_backend_cfg_t*, motion_backend_t**);
 void sim_motion_backend_stop(motion_backend_t*);
 int sim_motion_backend_discover(motion_backend_t*);
@@ -11,6 +12,7 @@ int sim_motion_backend_quick_stop(motion_backend_t*, uint32_t);
 int sim_motion_backend_clear_faults(motion_backend_t*, uint32_t);
 int sim_motion_backend_set_laser(motion_backend_t*, uint8_t, uint8_t);
 int sim_motion_backend_get_snapshot(motion_backend_t*, motion_snapshot_t*);
+#endif
 
 int myact_motion_backend_start(const motion_backend_cfg_t*, motion_backend_t**);
 void myact_motion_backend_stop(motion_backend_t*);
@@ -28,7 +30,13 @@ typedef struct {
 } routed_backend_t;
 
 static routed_backend_t g_backend;
-static int use_sim(void){ return strcmp(g_backend.type, "simulator")==0; }
+static int use_sim(void){
+#ifdef SIMULATION
+  return strcmp(g_backend.type, "simulator")==0;
+#else
+  return 0;
+#endif
+}
 
 int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend){
   if(!cfg||!out_backend) return -1;
@@ -36,9 +44,16 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   g_backend.type = (cfg->backend[0] ? cfg->backend : "simulator");
   STC_LOG_INFO("backend_selected=%s can_if=%s node_id=%u tx=0x%03x rx=0x%03x watchdog_ms=%d telem_interval_ms=%d native_speed_mode=%d",
     g_backend.type,cfg->can_if?cfg->can_if:"",cfg->primary_node_id,cfg->primary_tx_id,cfg->primary_rx_id,cfg->speed_watchdog_ms,cfg->telemetry_interval_ms,cfg->experimental_native_speed_mode);
-  int rc = (strcmp(g_backend.type,"myactuator")==0)
-    ? myact_motion_backend_start(cfg,&g_backend.impl)
-    : sim_motion_backend_start(cfg,&g_backend.impl);
+  int rc;
+  if (strcmp(g_backend.type,"myactuator")==0) {
+    rc = myact_motion_backend_start(cfg,&g_backend.impl);
+  } else if (use_sim()) {
+    rc = sim_motion_backend_start(cfg,&g_backend.impl);
+  } else {
+    STC_LOG_WARN("simulator backend requested but not built; falling back to myactuator backend");
+    g_backend.type = "myactuator";
+    rc = myact_motion_backend_start(cfg,&g_backend.impl);
+  }
   if(rc==0) *out_backend=g_backend.impl;
   return rc;
 }
