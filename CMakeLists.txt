@@ -66,7 +66,7 @@ if(USE_SIMULATOR)
   target_compile_definitions(stc_server PRIVATE SIMULATION)
   target_link_libraries(stc_server PRIVATE simulator)
 else()
-  target_sources(stc_server PRIVATE dev/src/can_backend.c)
+  target_sources(stc_server PRIVATE dev/src/myact_backend.c)
 endif()
 
 add_executable(test_actions
@@ -154,7 +154,7 @@ if(USE_SIMULATOR)
   target_compile_definitions(test_can_worker_concurrency PRIVATE SIMULATION)
   target_link_libraries(test_can_worker_concurrency PRIVATE simulator)
 else()
-  target_sources(test_can_worker_concurrency PRIVATE dev/src/can_backend.c)
+  target_sources(test_can_worker_concurrency PRIVATE dev/src/myact_backend.c)
 endif()
 
 add_executable(test_can_worker_concurrency_tsan
@@ -182,7 +182,7 @@ if(USE_SIMULATOR)
   target_compile_definitions(test_can_worker_concurrency_tsan PRIVATE SIMULATION)
   target_link_libraries(test_can_worker_concurrency_tsan PRIVATE simulator)
 else()
-  target_sources(test_can_worker_concurrency_tsan PRIVATE dev/src/can_backend.c)
+  target_sources(test_can_worker_concurrency_tsan PRIVATE dev/src/myact_backend.c)
 endif()
 
 if(BUILD_DIAG_GUI)
