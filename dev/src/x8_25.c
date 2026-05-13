@@ -806,7 +806,26 @@ int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t an
     if (!ctx) return MYACT_EINVAL;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)angle_0p01deg);
+    if (ctx->log_fn) {
+        char msg[220];
+        (void)snprintf(msg, sizeof(msg),
+                       "A4 tx target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X",
+                       ((double)angle_0p01deg) / 100.0,
+                       (long)angle_0p01deg,
+                       (unsigned)max_speed_dps,
+                       tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7]);
+        ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
+    }
     return myact_send_frame(ctx, ctx->cmd_id, tx);
+}
+
+int myact_position_abs_deg_send(myact_ctx_t* ctx, double target_deg, uint16_t max_speed_dps) {
+    double raw_f;
+    if (!ctx) return MYACT_EINVAL;
+    if (!isfinite(target_deg)) return MYACT_ERANGE;
+    raw_f = round(target_deg * 100.0);
+    if (raw_f < (double)INT32_MIN || raw_f > (double)INT32_MAX) return MYACT_ERANGE;
+    return myact_position_abs_send(ctx, max_speed_dps, (int32_t)raw_f);
 }
 
 int myact_position_single_send(myact_ctx_t* ctx, uint8_t spin_direction, uint16_t max_speed_dps, uint16_t angle_0p01deg) {
@@ -883,6 +902,16 @@ int myact_position_abs(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0
     if (!out) out = &tmp;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)angle_0p01deg);
+    if (ctx->log_fn) {
+        char msg[220];
+        (void)snprintf(msg, sizeof(msg),
+                       "A4 txrx target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X",
+                       ((double)angle_0p01deg) / 100.0,
+                       (long)angle_0p01deg,
+                       (unsigned)max_speed_dps,
+                       tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7]);
+        ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
+    }
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_POSITION_ABS, &rx);
     if (rc < 0) return rc;
     return parse_basic_feedback(&rx, myact_now_ms(ctx), out);
