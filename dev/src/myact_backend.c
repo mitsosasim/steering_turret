@@ -41,7 +41,9 @@ struct motion_backend {
   axis_mode_t mode[STC_AXIS_COUNT];
   double target_deg[STC_AXIS_COUNT];
   double manual_speed_deg_s[STC_AXIS_COUNT];
+  double profile_vel_deg_s[STC_AXIS_COUNT];
   uint64_t last_speed_cmd_ms[STC_AXIS_COUNT];
+  uint8_t sat_mask[STC_AXIS_COUNT];
 };
 
 static uint64_t now_ms(void) {
@@ -111,6 +113,40 @@ static int32_t local_axis_deg_to_counts(const axis_cfg_t* cfg, double deg) {
   return (int32_t)llround(deg * gr * cpd);
 }
 
+static double clamp_range(double v, double lo, double hi, int* clipped) {
+  if (v < lo) {
+    if (clipped) *clipped = 1;
+    return lo;
+  }
+  if (v > hi) {
+    if (clipped) *clipped = 1;
+    return hi;
+  }
+  return v;
+}
+
+static double accel_step(double current, double desired, double max_accel, double dt_s) {
+  double dv = desired - current;
+  const double max_dv = max_accel * dt_s;
+  if (dv > max_dv) dv = max_dv;
+  if (dv < -max_dv) dv = -max_dv;
+  return current + dv;
+}
+
+static double goto_position_profile(double err_deg, double current_vel_deg_s, double max_speed_deg_s, double max_accel_deg_s2, double dt_s) {
+  const double stop_dist = (current_vel_deg_s * current_vel_deg_s) / (2.0 * max_accel_deg_s2);
+  double desired_v = (err_deg > 0.0) ? max_speed_deg_s : -max_speed_deg_s;
+  if (fabs(err_deg) <= stop_dist) desired_v = 0.0;
+  return accel_step(current_vel_deg_s, desired_v, max_accel_deg_s2, dt_s);
+}
+
+static double jog_velocity_profile(double requested_vel_deg_s, double current_vel_deg_s, double max_speed_deg_s, double max_accel_deg_s2, double dt_s, int* saturated) {
+  int sat = 0;
+  const double v = clamp_range(requested_vel_deg_s, -max_speed_deg_s, max_speed_deg_s, &sat);
+  if (saturated) *saturated = sat;
+  return accel_step(current_vel_deg_s, v, max_accel_deg_s2, dt_s);
+}
+
 static void axis_stop(struct motion_backend* b, size_t axis) {
   const uint8_t node_id = b->cfg.axis_node_id[axis];
   if (node_id) (void)send_myact_cmd(b, node_id, MYACT_CMD_STOP, 0, 0);
@@ -133,29 +169,65 @@ static void axis_step_profile(struct motion_backend* b, size_t axis, double dt_s
   }
 
   double delta_deg = 0.0;
+  int reached_target = 0;
+  int sat = 0;
+  const axis_cfg_t* cfg = &b->cfg.axis_cfg[axis];
+  const double travel_min = cfg->az_min_deg;
+  const double travel_max = cfg->az_max_deg;
+  const double max_speed = fmax(0.1, cfg->max_speed_deg_s);
+  const double max_accel = fmax(0.1, b->cfg.profile_max_accel_deg_s2);
+  const double target_tol_deg = 0.05;
+
   if (b->mode[axis] == AXIS_MANUAL) {
-    delta_deg = b->manual_speed_deg_s[axis] * dt_s;
+    b->profile_vel_deg_s[axis] = jog_velocity_profile(
+      b->manual_speed_deg_s[axis], b->profile_vel_deg_s[axis], max_speed, max_accel, dt_s, &sat);
+    delta_deg = b->profile_vel_deg_s[axis] * dt_s;
   } else if (b->mode[axis] == AXIS_TARGET) {
-    const double pos_deg = counts_to_axis_deg(&b->cfg.axis_cfg[axis], b->snap.pos_raw[axis]);
-    double err = b->target_deg[axis] - pos_deg;
-    const double vmax = fmax(1.0, b->cfg.axis_cfg[axis].max_speed_deg_s);
-    const double max_step = vmax * dt_s;
-    if (err > max_step) err = max_step;
-    if (err < -max_step) err = -max_step;
-    if (fabs(err) > 0.01) delta_deg = err;
+    const double pos_deg = counts_to_axis_deg(cfg, b->snap.pos_raw[axis]);
+    double target = b->target_deg[axis];
+    target = clamp_range(target, travel_min, travel_max, &sat);
+    b->target_deg[axis] = target;
+    const double err = target - pos_deg;
+    if (fabs(err) <= target_tol_deg) {
+      reached_target = 1;
+      b->mode[axis] = AXIS_IDLE;
+      b->profile_vel_deg_s[axis] = 0.0;
+    } else {
+      b->profile_vel_deg_s[axis] = goto_position_profile(err, b->profile_vel_deg_s[axis], max_speed, max_accel, dt_s);
+      delta_deg = b->profile_vel_deg_s[axis] * dt_s;
+      if (fabs(delta_deg) > fabs(err)) delta_deg = err;
+    }
   }
 
-  if (fabs(delta_deg) <= 1e-6) return;
+  if (reached_target) {
+    b->snap.status_word[axis] |= (1u << 10);
+    b->snap.mode_display[axis] = 3;
+    b->snap.vel_raw[axis] = 0;
+    b->sat_mask[axis] = (uint8_t)sat;
+    return;
+  }
 
-  const double gr = (b->cfg.axis_cfg[axis].gear_ratio > 0.0) ? b->cfg.axis_cfg[axis].gear_ratio : 1.0;
+  if (fabs(delta_deg) <= 1e-6) {
+    b->sat_mask[axis] = (uint8_t)sat;
+    return;
+  }
+
+  double pos_deg = counts_to_axis_deg(cfg, b->snap.pos_raw[axis]);
+  double next_pos_deg = pos_deg + delta_deg;
+  next_pos_deg = clamp_range(next_pos_deg, travel_min, travel_max, &sat);
+  delta_deg = next_pos_deg - pos_deg;
+
+  const double gr = (cfg->gear_ratio > 0.0) ? cfg->gear_ratio : 1.0;
   const int32_t delta_motor_0p01deg = (int32_t)llround(delta_deg * gr * 100.0);
-  const uint16_t max_speed_dps = (uint16_t)fmax(1.0, fmin(65535.0, b->cfg.axis_cfg[axis].max_speed_deg_s * gr));
+  const uint16_t max_speed_dps = (uint16_t)fmax(1.0, fmin(65535.0, max_speed * gr));
 
   if (send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, max_speed_dps, delta_motor_0p01deg) == 0) {
-    b->snap.pos_raw[axis] += axis_deg_to_counts(&b->cfg.axis_cfg[axis], delta_deg);
-    b->snap.vel_raw[axis] = axis_deg_to_counts(&b->cfg.axis_cfg[axis], delta_deg / dt_s);
+    b->snap.pos_raw[axis] += local_axis_deg_to_counts(cfg, delta_deg);
+    b->snap.vel_raw[axis] = local_axis_deg_to_counts(cfg, delta_deg / dt_s);
     b->snap.mode_display[axis] = (b->mode[axis] == AXIS_MANUAL) ? 2 : 3;
+    b->snap.status_word[axis] &= (uint16_t)~(1u << 10);
     b->snap.last_rx_ms[axis] = t_ms;
+    b->sat_mask[axis] = (uint8_t)sat;
   }
 }
 
