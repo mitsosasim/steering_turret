@@ -347,7 +347,7 @@ static int sockcan_open(sockcan_bus_t* bus, const char* ifname) {
 }
 
 static int prepare_sync(myact_ctx_t* ctx) {
-    int rc = myact_disable_all_active_replies(ctx);
+    int rc = myact_active_reply_disable_all(ctx);
     if (rc < 0) return rc;
 
     rc = myact_drain_rx(ctx, 300);
@@ -357,7 +357,7 @@ static int prepare_sync(myact_ctx_t* ctx) {
 }
 
 static void test_axis_disable(myact_ctx_t* ctx, bool shutdown) {
-    (void)myact_disable_all_active_replies(ctx);
+    (void)myact_active_reply_disable_all(ctx);
     (void)myact_drain_rx(ctx, 500);
     (void)myact_stop_send(ctx);
     if (shutdown) {
