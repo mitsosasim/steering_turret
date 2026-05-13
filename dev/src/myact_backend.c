@@ -20,6 +20,7 @@ enum {
   MYACT_CMD_STOP = 0x81,
   MYACT_CMD_SPEED = 0xA2,
   MYACT_CMD_POS_ABS = 0xA4,
+  MYACT_CMD_BRAKE_RELEASE = 0x77,
   MYACT_CAN_BASE = 0x140,
   TELEMETRY_PERIOD_NS = 20 * 1000 * 1000,
 };
@@ -52,6 +53,8 @@ struct motion_backend {
   uint64_t applied_seq[STC_AXIS_COUNT];
   uint64_t last_speed_cmd_ms[STC_AXIS_COUNT];
   int speed_active[STC_AXIS_COUNT];
+  int velocity_session_ready[STC_AXIS_COUNT];
+  int32_t last_speed_raw_0p01dps[STC_AXIS_COUNT];
 };
 
 static uint64_t now_ms(void) {
@@ -76,6 +79,9 @@ static int open_can_socket(const char* ifname) {
   memset(&addr, 0, sizeof(addr));
   addr.can_family = AF_CAN;
   addr.can_ifindex = ifr.ifr_ifindex;
+  const int nonblock = 1;
+  if (ioctl(fd, FIONBIO, &nonblock) < 0) { close(fd); return -1; }
+
   if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     close(fd);
     return -1;
@@ -114,10 +120,42 @@ static double clamp_range(double v, double lo, double hi) {
   return v;
 }
 
+
+static void normalize_snapshot_from_feedback(struct motion_backend* b, size_t axis, int16_t iq_0p01a, int16_t speed_dps, int16_t angle_deg, uint64_t t_ms) {
+  const axis_cfg_t* cfg = &b->cfg.axis_cfg[axis];
+  const double gr = (cfg->gear_ratio > 0.0) ? cfg->gear_ratio : 1.0;
+  const double cpd = (cfg->counts_per_rev != 0) ? ((double)cfg->counts_per_rev / 360.0) : 1.0;
+  const double axis_speed_deg_s = ((double)speed_dps) / gr;
+  const double axis_angle_deg = ((double)angle_deg) / gr;
+  b->snap.vel_raw[axis] = (int32_t)llround(axis_speed_deg_s * cpd);
+  b->snap.pos_raw[axis] = (int32_t)llround(axis_angle_deg * cpd);
+  b->snap.status_word[axis] = (uint16_t)iq_0p01a;
+  b->snap.last_rx_ms[axis] = t_ms;
+}
+
+static void refresh_feedback_locked(struct motion_backend* b, uint64_t t_ms) {
+  struct can_frame f;
+  while (read(b->can_socket, &f, sizeof(f)) == (ssize_t)sizeof(f)) {
+    if (f.can_dlc < 8 || f.can_id < MYACT_CAN_BASE) continue;
+    const uint8_t node_id = (uint8_t)(f.can_id - MYACT_CAN_BASE);
+    size_t axis;
+    for (axis = 0; axis < STC_AXIS_COUNT; axis++) if (b->cfg.axis_node_id[axis] == node_id) break;
+    if (axis >= STC_AXIS_COUNT) continue;
+    if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS) {
+      const int16_t iq_0p01a = (int16_t)((uint16_t)f.data[2] | ((uint16_t)f.data[3] << 8));
+      const int16_t speed_dps = (int16_t)((uint16_t)f.data[4] | ((uint16_t)f.data[5] << 8));
+      const int16_t angle_deg = (int16_t)((uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8));
+      normalize_snapshot_from_feedback(b, axis, iq_0p01a, speed_dps, angle_deg, t_ms);
+    }
+  }
+}
+
 static void axis_stop_locked(struct motion_backend* b, size_t axis, uint64_t t_ms) {
   const uint8_t node_id = b->cfg.axis_node_id[axis];
   if (node_id) (void)send_myact_cmd(b, node_id, MYACT_CMD_STOP, 0, 0);
   b->speed_active[axis] = 0;
+  b->velocity_session_ready[axis] = 0;
+  b->last_speed_raw_0p01dps[axis] = 0;
   b->snap.vel_raw[axis] = 0;
   b->snap.mode_display[axis] = 0;
   b->snap.last_rx_ms[axis] = t_ms;
@@ -128,7 +166,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
   if (!node_id) return;
 
   const axis_mailbox_t* m = &b->mailbox[axis];
-  if (m->seq == b->applied_seq[axis]) return;
+  if (m->seq == b->applied_seq[axis] && !(m->kind == AXIS_CMD_SPEED && b->speed_active[axis])) return;
 
   const axis_cfg_t* cfg = &b->cfg.axis_cfg[axis];
   const double gr = (cfg->gear_ratio > 0.0) ? cfg->gear_ratio : 1.0;
@@ -137,11 +175,23 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
   if (m->kind == AXIS_CMD_SPEED) {
     const double clamped = clamp_range(m->value, -max_speed, max_speed);
     const int32_t speed_0p01dps = (int32_t)llround(clamped * gr * 100.0);
+    const int is_refresh = (m->seq == b->applied_seq[axis]);
+    const int need_reissue = is_refresh && b->speed_active[axis] && ((t_ms - b->last_speed_cmd_ms[axis]) <= (uint64_t)b->cfg.speed_watchdog_ms);
+    if (!is_refresh && !need_reissue && b->speed_active[axis] && speed_0p01dps == b->last_speed_raw_0p01dps[axis]) {
+      b->last_speed_cmd_ms[axis] = m->cmd_ts_ms;
+      b->applied_seq[axis] = m->seq;
+      return;
+    }
+    if (!b->velocity_session_ready[axis]) {
+      (void)send_myact_cmd(b, node_id, MYACT_CMD_BRAKE_RELEASE, 0, 0);
+      b->velocity_session_ready[axis] = 1;
+    }
     if (send_myact_cmd(b, node_id, MYACT_CMD_SPEED, 0, speed_0p01dps) == 0) {
-      b->speed_active[axis] = 1;
+      b->speed_active[axis] = (speed_0p01dps != 0);
+      b->last_speed_raw_0p01dps[axis] = speed_0p01dps;
       b->last_speed_cmd_ms[axis] = m->cmd_ts_ms;
       b->snap.vel_raw[axis] = local_axis_deg_to_counts(cfg, clamped);
-      b->snap.mode_display[axis] = 2;
+      b->snap.mode_display[axis] = (speed_0p01dps != 0) ? 2 : 0;
       b->snap.status_word[axis] &= (uint16_t)~(1u << 10);
       b->snap.last_rx_ms[axis] = t_ms;
     }
@@ -175,8 +225,15 @@ static void enforce_watchdog_locked(struct motion_backend* b, uint64_t t_ms) {
   if (b->cfg.speed_watchdog_ms == 0) return;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!b->cfg.axis_node_id[axis] || !b->speed_active[axis]) continue;
-    if ((t_ms - b->last_speed_cmd_ms[axis]) > (uint64_t)b->cfg.speed_watchdog_ms) {
+    const uint64_t dt = t_ms - b->last_speed_cmd_ms[axis];
+    if (dt > (uint64_t)b->cfg.speed_watchdog_ms) {
       axis_stop_locked(b, axis, t_ms);
+      continue;
+    }
+    if (dt > (uint64_t)(b->cfg.speed_watchdog_ms / 2)) {
+      b->mailbox[axis].kind = AXIS_CMD_SPEED;
+      b->mailbox[axis].value = ((double)b->last_speed_raw_0p01dps[axis]) / 100.0;
+      b->mailbox[axis].cmd_ts_ms = t_ms;
     }
   }
 }
@@ -188,6 +245,7 @@ static void* backend_loop(void* arg) {
   while (b->running) {
     const uint64_t t_ms = now_ms();
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) apply_axis_command_locked(b, axis, t_ms);
+    refresh_feedback_locked(b, t_ms);
     refresh_telemetry_locked(b, t_ms);
     enforce_watchdog_locked(b, t_ms);
 
