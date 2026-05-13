@@ -174,6 +174,8 @@ typedef struct {
     bool set_position_kp_valid;
     bool set_position_ki_valid;
     bool set_position_kd_valid;
+    bool set_positive_limit_deg_valid;
+    bool set_negative_limit_deg_valid;
     bool selftest_pack;
 
     double min_motion_voltage;
@@ -238,6 +240,8 @@ typedef struct {
     float set_position_kp;
     float set_position_ki;
     float set_position_kd;
+    double set_positive_limit_deg;
+    double set_negative_limit_deg;
 } test_opts_t;
 
 static uint64_t now_ms(void* user) {
@@ -371,7 +375,8 @@ static bool commissioning_set_requested(const test_opts_t* o) {
     return o->set_speed_accel_valid || o->set_speed_decel_valid ||
            o->set_position_accel_valid || o->set_position_decel_valid ||
            o->set_speed_kp_valid || o->set_speed_ki_valid ||
-           o->set_position_kp_valid || o->set_position_ki_valid || o->set_position_kd_valid;
+           o->set_position_kp_valid || o->set_position_ki_valid || o->set_position_kd_valid ||
+           o->set_positive_limit_deg_valid || o->set_negative_limit_deg_valid;
 }
 
 static int parse_cli(int argc, char** argv, test_opts_t* o) {
@@ -519,6 +524,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--set-position-kp") && i + 1 < argc) { o->set_position_kp = (float)atof(argv[++i]); o->set_position_kp_valid = true; }
         else if (!strcmp(argv[i], "--set-position-ki") && i + 1 < argc) { o->set_position_ki = (float)atof(argv[++i]); o->set_position_ki_valid = true; }
         else if (!strcmp(argv[i], "--set-position-kd") && i + 1 < argc) { o->set_position_kd = (float)atof(argv[++i]); o->set_position_kd_valid = true; }
+        else if (!strcmp(argv[i], "--set-positive-limit-deg") && i + 1 < argc) { o->set_positive_limit_deg = atof(argv[++i]); o->set_positive_limit_deg_valid = true; }
+        else if (!strcmp(argv[i], "--set-negative-limit-deg") && i + 1 < argc) { o->set_negative_limit_deg = atof(argv[++i]); o->set_negative_limit_deg_valid = true; }
         else return RET_BAD_CLI;
 #undef FLAG
     }
@@ -1092,6 +1099,23 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     printf("native-a4-abs-test: target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
            target_abs, (long)target_raw, (unsigned)abs_speed_raw,
            a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
+    if (o->set_positive_limit_deg_valid || o->set_negative_limit_deg_valid) {
+        bool above_pos = o->set_positive_limit_deg_valid && target_abs > o->set_positive_limit_deg;
+        bool below_neg = o->set_negative_limit_deg_valid && target_abs < o->set_negative_limit_deg;
+        printf("native-a4-abs-test: software limits are write-only in firmware; using application-configured values only.\n");
+        printf("native-a4-abs-test: configured limits positive=%s negative=%s\n",
+               o->set_positive_limit_deg_valid ? "known" : "unknown",
+               o->set_negative_limit_deg_valid ? "known" : "unknown");
+        if (o->set_positive_limit_deg_valid) {
+            printf("native-a4-abs-test: positive_limit_deg=%.2f\n", o->set_positive_limit_deg);
+        }
+        if (o->set_negative_limit_deg_valid) {
+            printf("native-a4-abs-test: negative_limit_deg=%.2f\n", o->set_negative_limit_deg);
+        }
+        printf("native-a4-abs-test: target_vs_limits=%s\n", (above_pos || below_neg) ? "OUTSIDE" : "INSIDE");
+    } else {
+        printf("native-a4-abs-test: software limits unknown to app; skipping target-vs-limit check (firmware provides no readback).\n");
+    }
     print_motion_commissioning_snapshot("native-a4-abs-test", snap_rc, &snap);
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
@@ -1628,6 +1652,18 @@ static int run_commissioning_writes(myact_ctx_t* c, const test_opts_t* o) {
         if (o->set_position_kp_valid) { rc = commissioning_write_float(c, "position_kp", MYACT_PID_POSITION_KP, o->set_position_kp, write_rom); if (rc < 0) return rc; }
         if (o->set_position_ki_valid) { rc = commissioning_write_float(c, "position_ki", MYACT_PID_POSITION_KI, o->set_position_ki, write_rom); if (rc < 0) return rc; }
         if (o->set_position_kd_valid) { rc = commissioning_write_float(c, "position_kd", MYACT_PID_POSITION_KD, o->set_position_kd, write_rom); if (rc < 0) return rc; }
+    }
+    if (o->set_positive_limit_deg_valid) {
+        int32_t raw = myact_deg_to_raw_0p01(o->set_positive_limit_deg);
+        rc = myact_set_positive_limit_deg(c, o->set_positive_limit_deg); if (rc < 0) return rc;
+        printf("positive_limit_deg requested=%.2f raw_0p01deg=%ld (write-only; no readback)\n",
+               o->set_positive_limit_deg, (long)raw);
+    }
+    if (o->set_negative_limit_deg_valid) {
+        int32_t raw = myact_deg_to_raw_0p01(o->set_negative_limit_deg);
+        rc = myact_set_negative_limit_deg(c, o->set_negative_limit_deg); if (rc < 0) return rc;
+        printf("negative_limit_deg requested=%.2f raw_0p01deg=%ld (write-only; no readback)\n",
+               o->set_negative_limit_deg, (long)raw);
     }
 
     return MYACT_OK;
