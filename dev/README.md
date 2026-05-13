@@ -95,3 +95,74 @@ Development host should provide:
 - **Python 3** for helper scripts/utilities (if needed during bench automation)
 
 ---
+
+---
+
+## Task Iota Acceptance (PD4-C + X8-25)
+
+Use one high-level path for both backends: `GUI -> stc_server TCP ICD -> backend router -> device`.
+
+### Preconditions
+
+1. Build once:
+
+```bash
+cmake -S . -B build -DBUILD_DIAG_GUI=ON
+cmake --build build -j"$(nproc)"
+```
+
+2. Bring up transport for the backend under test:
+   - PD4-C backend: configure CAN link/device for PD4-C.
+   - X8-25 backend: configure CAN link/device for X8-25.
+
+3. Start server:
+
+```bash
+./build/stc_server
+```
+
+### Scripted server-path acceptance
+
+Run the same scripted high-level commands for each backend:
+
+```bash
+./dev/tests/task_iota_acceptance.sh 127.0.0.1 7000 all
+```
+
+Scenarios covered:
+- native speed move
+- position move
+- quick-stop
+- hold/release
+- active telemetry
+- server roundtrip
+
+### GUI roundtrip acceptance
+
+In a second terminal, run:
+
+```bash
+./build/diag_gui_qt
+```
+
+Execute this sequence in GUI for **both** backends:
+1. Connect TCP to server.
+2. Hold/Enable toggle: HOLD -> ENABLED -> HOLD.
+3. Send speed command and then STOP / E-STOP.
+4. Send target absolute position command twice with same setpoint to confirm deterministic response.
+5. Confirm telemetry panels keep updating (age remains live and values refresh).
+
+### Determinism + native/fallback reporting checks
+
+For each backend run:
+
+```bash
+./build/icd_tx_tcp 127.0.0.1 7000 turret abs 5.0 0.0
+./build/icd_tx_tcp 127.0.0.1 7000 turret abs 5.0 0.0
+```
+
+Acceptance expectations:
+- Identical high-level `turret abs` command path for PD4-C and X8-25.
+- Position command behavior is deterministic for repeated same-command inputs.
+- Backend capability/mode indication is visible in GUI status labels (native capability vs translated/fallback path).
+- A2 speed command behavior remains independent from A8 position fallback behavior (validate by issuing A2 speed sequence and A8/absolute sequence separately and confirming no cross-coupled behavior).
