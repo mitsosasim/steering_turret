@@ -528,7 +528,7 @@ int myact_send_raw_motion(myact_ctx_t* ctx, const uint8_t data[8]) {
 
 /* PID / accel */
 
-/* Commissioning/private API: intentionally not declared in the public header. */
+/* Commissioning/private API: intentionally not declared in the runtime header. */
 int myact_pid_read(myact_ctx_t* ctx, myact_pid_index_t index, float* out_value) {
     uint8_t tx[8] = { MYACT_CMD_READ_PID, (uint8_t)index, 0, 0, 0, 0, 0, 0 };
     myact_can_frame_t rx;
@@ -543,7 +543,6 @@ int myact_pid_read(myact_ctx_t* ctx, myact_pid_index_t index, float* out_value) 
     return MYACT_OK;
 }
 
-#ifdef STC_ENABLE_COMMISSIONING
 static int pid_write_common(myact_ctx_t* ctx, uint8_t cmd, myact_pid_index_t index, float value) {
     uint8_t tx[8] = { 0 };
     uint32_t raw;
@@ -583,7 +582,6 @@ int myact_accel_write_rom(myact_ctx_t* ctx, myact_accel_index_t index, uint32_t 
 
 /* reads */
 
-#endif /* STC_ENABLE_COMMISSIONING */
 
 int myact_read_encoder_multi(myact_ctx_t* ctx, int32_t* out_encoder) {
     uint8_t tx[8] = { MYACT_CMD_READ_ENCODER_MULTI, 0,0,0,0,0,0,0 };
@@ -888,6 +886,10 @@ int myact_system_reset(myact_ctx_t* ctx) {
 int myact_brake_release(myact_ctx_t* ctx) {
     uint8_t tx[8] = { MYACT_CMD_BRAKE_RELEASE, 0,0,0,0,0,0,0 };
     return myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_BRAKE_RELEASE, NULL);
+}
+
+int myact_fault_clear(myact_ctx_t* ctx) {
+    return myact_shutdown(ctx);
 }
 
 int myact_brake_lock(myact_ctx_t* ctx) {
