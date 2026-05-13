@@ -37,6 +37,8 @@ add_executable(stc_server
   dev/src/stc_state.c
   dev/src/stc_faults.c
   dev/src/stc_diag.c
+  dev/src/motion_backend_router.c
+  dev/src/myact_backend.c
 )
 
 add_executable(icd_tx_tcp
@@ -65,8 +67,6 @@ target_link_libraries(stc_server PRIVATE pthread m)
 if(USE_SIMULATOR)
   target_compile_definitions(stc_server PRIVATE SIMULATION)
   target_link_libraries(stc_server PRIVATE simulator)
-else()
-  target_sources(stc_server PRIVATE dev/src/myact_backend.c)
 endif()
 
 add_executable(test_actions
@@ -83,6 +83,8 @@ add_executable(stc_state_test
   dev/src/stc_state.c
   dev/src/stc_faults.c
   dev/src/stc_diag.c
+  dev/src/motion_backend_router.c
+  dev/src/myact_backend.c
 )
 
 target_include_directories(stc_state_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
@@ -91,12 +93,16 @@ target_compile_options(stc_state_test PRIVATE -Wall -Wextra)
 add_executable(stc_diag_test
   dev/tests/test_diag_codes.c
   dev/src/stc_diag.c
+  dev/src/motion_backend_router.c
+  dev/src/myact_backend.c
 )
 
 add_executable(test_diag_state_integration
   dev/tests/test_diag_state_integration.c
   dev/src/stc_state.c
   dev/src/stc_diag.c
+  dev/src/motion_backend_router.c
+  dev/src/myact_backend.c
 )
 
 add_executable(test_icd_codec
@@ -142,6 +148,8 @@ add_executable(test_can_worker_concurrency
   dev/src/stc_state.c
   dev/src/stc_faults.c
   dev/src/stc_diag.c
+  dev/src/motion_backend_router.c
+  dev/src/myact_backend.c
 )
 
 target_include_directories(test_can_worker_concurrency PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
@@ -153,8 +161,6 @@ target_link_libraries(test_can_worker_concurrency PRIVATE pthread m)
 if(USE_SIMULATOR)
   target_compile_definitions(test_can_worker_concurrency PRIVATE SIMULATION)
   target_link_libraries(test_can_worker_concurrency PRIVATE simulator)
-else()
-  target_sources(test_can_worker_concurrency PRIVATE dev/src/myact_backend.c)
 endif()
 
 add_executable(test_can_worker_concurrency_tsan
@@ -169,6 +175,8 @@ add_executable(test_can_worker_concurrency_tsan
   dev/src/stc_state.c
   dev/src/stc_faults.c
   dev/src/stc_diag.c
+  dev/src/motion_backend_router.c
+  dev/src/myact_backend.c
 )
 
 target_include_directories(test_can_worker_concurrency_tsan PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
@@ -181,8 +189,6 @@ target_link_libraries(test_can_worker_concurrency_tsan PRIVATE pthread m)
 if(USE_SIMULATOR)
   target_compile_definitions(test_can_worker_concurrency_tsan PRIVATE SIMULATION)
   target_link_libraries(test_can_worker_concurrency_tsan PRIVATE simulator)
-else()
-  target_sources(test_can_worker_concurrency_tsan PRIVATE dev/src/myact_backend.c)
 endif()
 
 if(BUILD_DIAG_GUI)
