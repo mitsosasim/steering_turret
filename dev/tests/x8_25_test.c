@@ -177,6 +177,7 @@ typedef struct {
     bool set_positive_limit_deg_valid;
     bool set_negative_limit_deg_valid;
     bool selftest_pack;
+    bool trace_frames;
 
     double min_motion_voltage;
     double smoke_delta_deg;
@@ -244,6 +245,16 @@ typedef struct {
     double set_negative_limit_deg;
 } test_opts_t;
 
+
+typedef struct {
+    bool enabled;
+    uint8_t expected_reply_opcode;
+} trace_state_t;
+
+static trace_state_t g_trace = {false, 0};
+static uint8_t expected_reply_opcode_for_tx(uint8_t op);
+static void trace_frame_line(const char* dir, const myact_can_frame_t* fr, uint8_t expected_reply);
+
 static uint64_t now_ms(void* user) {
     struct timespec ts;
     (void)user;
@@ -296,6 +307,10 @@ static int sockcan_send_cb(const myact_can_frame_t* fr, void* user) {
     c.can_id = fr->id & CAN_SFF_MASK;
     c.can_dlc = fr->dlc;
     memcpy(c.data, fr->data, 8);
+    if (g_trace.enabled) {
+        g_trace.expected_reply_opcode = (fr->dlc > 0) ? expected_reply_opcode_for_tx(fr->data[0]) : 0;
+        trace_frame_line("TX", fr, g_trace.expected_reply_opcode);
+    }
     return write(b->s, &c, sizeof(c)) == (ssize_t)sizeof(c) ? MYACT_OK : MYACT_EIO;
 }
 
@@ -318,6 +333,8 @@ static int sockcan_recv_cb(myact_can_frame_t* out, uint32_t to_ms, void* user) {
     out->id = c.can_id & CAN_SFF_MASK;
     out->dlc = (uint8_t)c.can_dlc;
     memcpy(out->data, c.data, 8);
+    trace_frame_line("RX", out, g_trace.expected_reply_opcode);
+    g_trace.expected_reply_opcode = 0;
     return MYACT_OK;
 }
 
@@ -370,6 +387,50 @@ static void test_axis_disable(myact_ctx_t* ctx, bool shutdown) {
 }
 
 static void print_usage(const char* p) { fprintf(stderr, "usage: %s <can_if> <node_id> [flags...]\n", p); }
+
+static const char* opcode_name(uint8_t op) {
+    switch (op) {
+        case 0x19: return "shutdown";
+        case 0x76: return "stop";
+        case 0x77: return "brake-release";
+        case 0x80: return "read-multi-angle";
+        case 0x88: return "read-status1";
+        case 0x9A: return "read-status2";
+        case 0x9C: return "read-status3";
+        case 0xA2: return "speed-cmd";
+        case 0xA4: return "abs-pos-cmd";
+        case 0xA8: return "inc-pos-cmd";
+        default: return "unknown";
+    }
+}
+
+static uint8_t expected_reply_opcode_for_tx(uint8_t op) {
+    switch (op) {
+        case 0x19: case 0x76: case 0x77:
+        case 0x80: case 0x88: case 0x9A: case 0x9C:
+        case 0xA2: case 0xA4: case 0xA8:
+            return op;
+        default:
+            return 0;
+    }
+}
+
+static void trace_frame_line(const char* dir, const myact_can_frame_t* fr, uint8_t expected_reply) {
+    size_t i;
+    struct timespec ts;
+    if (!g_trace.enabled || !fr) return;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    printf("[%lld.%09ld] %s id=%03X dlc=%u data=",
+           (long long)ts.tv_sec, ts.tv_nsec, dir, fr->id & CAN_SFF_MASK, (unsigned)fr->dlc);
+    for (i = 0; i < fr->dlc; ++i) printf("%s%02X", (i == 0) ? "" : " ", fr->data[i]);
+    if (fr->dlc == 0) printf("--");
+    if (fr->dlc > 0) printf(" opcode=0x%02X(%s)", fr->data[0], opcode_name(fr->data[0]));
+    else printf(" opcode=--");
+    if (expected_reply) printf(" expected=0x%02X(%s)", expected_reply, opcode_name(expected_reply));
+    else printf(" expected=--");
+    printf("\n");
+}
+
 
 static bool commissioning_set_requested(const test_opts_t* o) {
     return o->set_speed_accel_valid || o->set_speed_decel_valid ||
@@ -460,6 +521,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--write-pid-ram", write_pid_ram)
         FLAG("--write-pid-rom", write_pid_rom)
         FLAG("--selftest-pack", selftest_pack)
+        FLAG("--trace-frames", trace_frames)
 
         if (!strcmp(argv[i], "--speed-step-dps") && i + 1 < argc) o->speed_step_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
@@ -1829,6 +1891,11 @@ int main(int argc, char** argv) {
     }
 
     myact_set_timeout_ms(&ctx, 300);
+    g_trace.enabled = o.trace_frames;
+    if (g_trace.enabled &&
+        (o.speed_step_test || o.native_a4_abs_test || o.rt_inc_burst || o.raw_motion_smoke || o.raw_motion_smoke_sendonly)) {
+        printf("candump filter: candump -tz -ae can0,141:7FF,241:7FF,401:7FF,501:7FF\n");
+    }
 
     if (o.reset_first) {
         (void)myact_system_reset(&ctx);
