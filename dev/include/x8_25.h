@@ -321,7 +321,7 @@ typedef struct {
     myact_cache_t cache;
 } myact_ctx_t;
 
-/* lifecycle */
+/* lifecycle / context / config */
 int  myact_init(myact_ctx_t* ctx, uint8_t node_id, const myact_io_t* io);
 void myact_reset_cache(myact_ctx_t* ctx);
 void myact_set_timeout_ms(myact_ctx_t* ctx, uint32_t timeout_ms);
@@ -329,99 +329,38 @@ void myact_set_logger(myact_ctx_t* ctx, myact_log_fn log_fn, void* user);
 void myact_set_node_id(myact_ctx_t* ctx, uint8_t node_id);
 const myact_cache_t* myact_cache(const myact_ctx_t* ctx);
 
-/* polling */
+/* service / poll helpers */
 int myact_poll(myact_ctx_t* ctx, uint32_t timeout_ms);
-
-/* raw transport helpers */
 int myact_send_raw_single(myact_ctx_t* ctx, const uint8_t data[8]);
 int myact_send_raw_motion(myact_ctx_t* ctx, const uint8_t data[8]);
+int myact_drain_rx(myact_ctx_t* ctx, uint32_t duration_ms);
+int myact_wait_quiet(myact_ctx_t* ctx, uint32_t quiet_ms, uint32_t max_wait_ms);
+int myact_timed_txrx(myact_ctx_t* ctx, uint8_t cmd, const uint8_t tx_data[8], myact_can_frame_t* out_reply, uint32_t* out_latency_us);
 
-/* configuration */
-int myact_pid_read(myact_ctx_t* ctx, myact_pid_index_t index, float* out_value);
-int myact_pid_write_ram(myact_ctx_t* ctx, myact_pid_index_t index, float value);
-int myact_pid_write_rom(myact_ctx_t* ctx, myact_pid_index_t index, float value);
+/* stop / shutdown / brake */
+int myact_shutdown_send(myact_ctx_t* ctx);
+int myact_stop_send(myact_ctx_t* ctx);
+int myact_shutdown(myact_ctx_t* ctx);
+int myact_stop(myact_ctx_t* ctx);
+int myact_brake_release(myact_ctx_t* ctx);
 
-int myact_accel_read(myact_ctx_t* ctx, myact_accel_index_t index, int32_t* out_accel_dps2);
-int myact_accel_write_rom(myact_ctx_t* ctx, myact_accel_index_t index, uint32_t accel_dps2);
-
-/* sensors / identity */
-int myact_read_encoder_multi(myact_ctx_t* ctx, int32_t* out_encoder);
-int myact_read_encoder_raw(myact_ctx_t* ctx, int32_t* out_encoder_raw);
-int myact_read_encoder_offset(myact_ctx_t* ctx, int32_t* out_encoder_offset);
-int myact_write_zero_offset(myact_ctx_t* ctx, int32_t encoder_offset);
-int myact_write_zero_from_current(myact_ctx_t* ctx, int32_t* out_encoder_offset);
-int myact_read_singleturn_encoder(myact_ctx_t* ctx, myact_singleturn_encoder_t* out);
+/* read identity / status / basic feedback / angle */
+int myact_read_status1(myact_ctx_t* ctx, myact_status1_t* out);
+int myact_read_status2(myact_ctx_t* ctx, myact_status2_t* out);
+int myact_read_status3(myact_ctx_t* ctx, myact_status3_t* out);
 int myact_read_angle_multi(myact_ctx_t* ctx, int32_t* out_angle_0p01deg);
 int myact_read_angle_single(myact_ctx_t* ctx, uint16_t* out_angle_0p01deg);
-int myact_read_operating_mode(myact_ctx_t* ctx, myact_runmode_t* out_mode);
 int myact_read_runtime(myact_ctx_t* ctx, uint32_t* out_runtime_ms);
 int myact_read_version_date(myact_ctx_t* ctx, uint32_t* out_yyyymmdd);
 int myact_read_model(myact_ctx_t* ctx, char out_ascii7[8]);
 
-/* status */
-int myact_read_status1(myact_ctx_t* ctx, myact_status1_t* out);
-int myact_read_status2(myact_ctx_t* ctx, myact_status2_t* out);
-int myact_read_status3(myact_ctx_t* ctx, myact_status3_t* out);
-
-/* send-only fast path */
-int myact_shutdown_send(myact_ctx_t* ctx);
-int myact_stop_send(myact_ctx_t* ctx);
-int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a);
-int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps);
-int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg);
-int myact_position_single_send(myact_ctx_t* ctx, uint8_t spin_direction, uint16_t max_speed_dps, uint16_t angle_0p01deg);
-int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg);
-
-/* synchronous command + readback */
-int myact_shutdown(myact_ctx_t* ctx);
-int myact_stop(myact_ctx_t* ctx);
-int myact_torque(myact_ctx_t* ctx, int16_t iq_0p01a, myact_basic_feedback_t* out);
-int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t* out);
-int myact_position_abs(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg, myact_basic_feedback_t* out);
-int myact_position_single(myact_ctx_t* ctx, uint8_t spin_direction, uint16_t max_speed_dps, uint16_t angle_0p01deg, myact_singleturn_feedback_t* out);
-int myact_position_inc(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg, myact_basic_feedback_t* out);
-
-/* system / service commands */
-int myact_system_reset(myact_ctx_t* ctx); /* no reply by protocol */
-int myact_brake_release(myact_ctx_t* ctx);
-int myact_brake_lock(myact_ctx_t* ctx);
-int myact_set_comm_protect_ms(myact_ctx_t* ctx, uint32_t timeout_ms);
-int myact_set_baud_code(myact_ctx_t* ctx, myact_baud_code_t code);
+/* telemetry + runtime moves */
 int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, uint16_t interval_10ms);
 int myact_disable_all_active_replies(myact_ctx_t* ctx);
-int myact_drain_rx(myact_ctx_t* ctx, uint32_t duration_ms);
-int myact_wait_quiet(myact_ctx_t* ctx, uint32_t quiet_ms, uint32_t max_wait_ms);
-int myact_function_control(myact_ctx_t* ctx, myact_function_index_t index, int32_t value);
-
-int myact_clear_multi_turn(myact_ctx_t* ctx);
-int myact_set_canid_filter(myact_ctx_t* ctx, bool enable);
-int myact_set_error_status_broadcast(myact_ctx_t* ctx, bool enable);
-int myact_set_multi_turn_save_on_poweroff(myact_ctx_t* ctx, bool enable);
-int myact_set_canid_via_function(myact_ctx_t* ctx, uint8_t new_node_id);
-int myact_set_positive_limit_raw(myact_ctx_t* ctx, int32_t raw_value);
-int myact_set_negative_limit_raw(myact_ctx_t* ctx, int32_t raw_value);
-
-/* dedicated CAN-ID service at 0x300 */
-int myact_canid_read(myact_ctx_t* ctx, uint8_t* out_node_id);
-int myact_canid_write(myact_ctx_t* ctx, uint8_t new_node_id);
-
-/* motion mode */
-#define MYACT_MOTION_P_MIN_RAD   (-12.5f)
-#define MYACT_MOTION_P_MAX_RAD   ( 12.5f)
-#define MYACT_MOTION_V_MIN_RAD_S (-45.0f)
-#define MYACT_MOTION_V_MAX_RAD_S ( 45.0f)
-#define MYACT_MOTION_T_MIN_NM    (-24.0f)
-#define MYACT_MOTION_T_MAX_NM    ( 24.0f)
-#define MYACT_MOTION_KP_MIN      (  0.0f)
-#define MYACT_MOTION_KP_MAX      (500.0f)
-#define MYACT_MOTION_KD_MIN      (  0.0f)
-#define MYACT_MOTION_KD_MAX      (  5.0f)
-
-int myact_motion_pack(float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, uint8_t out_data[8]);
-int myact_motion_unpack_reply(const myact_can_frame_t* frame, myact_motion_feedback_t* out);
-int myact_motion_send(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm);
-int myact_motion_command(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, myact_motion_feedback_t* out);
-int myact_timed_txrx(myact_ctx_t* ctx, uint8_t cmd, const uint8_t tx_data[8], myact_can_frame_t* out_reply, uint32_t* out_latency_us);
+int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps); /* native A2 */
+int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t* out); /* native A2 */
+int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg); /* A8 */
+int myact_position_inc(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg, myact_basic_feedback_t* out); /* A8 */
 
 /* unit helpers */
 int16_t  myact_current_a_to_raw(double amps);
