@@ -745,11 +745,6 @@ static int run_a8_delta_observed(myact_ctx_t* c,
                                  double* out_before,
                                  double* out_after,
                                  double* out_delta);
-static int wait_runmode(myact_ctx_t* ctx,
-                        myact_runmode_t expected,
-                        unsigned timeout_ms,
-                        unsigned poll_ms,
-                        myact_runmode_t* out_last);
 
 static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     uint64_t t0;
@@ -782,9 +777,10 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         rc = myact_speed_dps_send(c, o->speed_step_dps);
         if (rc < 0) return rc;
         acked = true;
-        rc = wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
+        rc = myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
         if (rc < 0) {
-            printf("[RUNMODE_FAIL] speed-step-test: runmode did not enter 0x02 after +A2, last=%u\n", (unsigned)rm);
+            (void)myact_read_operating_mode(c, &rm);
+            printf("[RUNMODE_FAIL] speed-step-test: runmode did not enter 0x02 after +A2, last=%u entered_0x02=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_SPEED ? "yes" : "no");
             return MYACT_ESTATE;
         }
 
@@ -803,9 +799,10 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         rc = myact_speed_dps_send(c, -o->speed_step_dps);
         if (rc < 0) return rc;
         acked = true;
-        rc = wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
+        rc = myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
         if (rc < 0) {
-            printf("[RUNMODE_FAIL] speed-step-test: runmode did not stay at 0x02 after -A2, last=%u\n", (unsigned)rm);
+            (void)myact_read_operating_mode(c, &rm);
+            printf("[RUNMODE_FAIL] speed-step-test: runmode did not stay at 0x02 after -A2, last=%u entered_0x02=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_SPEED ? "yes" : "no");
             return MYACT_ESTATE;
         }
 
@@ -887,6 +884,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     double max_abs_speed_dps = 0.0;
     bool acked = false;
     myact_status2_t s2;
+    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
 
     printf("torque-step-test: WARNING torque mode can move unexpectedly\n");
     if (o->torque_sweep_test) {
@@ -914,6 +912,12 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
         rc = myact_torque_send(c, myact_current_a_to_raw(tq));
         if (rc < 0) return rc;
         acked = true;
+        rc = myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
+        if (rc < 0) {
+            (void)myact_read_operating_mode(c, &rm);
+            printf("[RUNMODE_FAIL] torque-step-test: runmode did not enter 0x01 after +A1, last=%u\n", (unsigned)rm);
+            return MYACT_ESTATE;
+        }
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
@@ -931,6 +935,12 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
         rc = myact_torque_send(c, myact_current_a_to_raw(-tq));
         if (rc < 0) return rc;
         acked = true;
+        rc = myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
+        if (rc < 0) {
+            (void)myact_read_operating_mode(c, &rm);
+            printf("[RUNMODE_FAIL] torque-step-test: runmode did not stay at 0x01 after -A1, last=%u\n", (unsigned)rm);
+            return MYACT_ESTATE;
+        }
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
@@ -1013,9 +1023,10 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
     print_motion_commissioning_snapshot("profile-abs-relative-test", snap_rc, &snap);
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
-    rc = wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
+    rc = myact_wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms);
     if (rc < 0) {
-        printf("[RUNMODE_FAIL] profile-abs-relative-test: runmode did not enter 0x03 after A4, last=%u\n", (unsigned)rm);
+        (void)myact_read_operating_mode(c, &rm);
+        printf("[RUNMODE_FAIL] profile-abs-relative-test: runmode did not enter 0x03 after A4, last=%u entered_0x03=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_POSITION ? "yes" : "no");
         rc = MYACT_ESTATE;
         goto out;
     }
@@ -1145,27 +1156,6 @@ static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     return MYACT_ESTATE;
 }
 
-static int wait_runmode(myact_ctx_t* ctx,
-                        myact_runmode_t expected,
-                        unsigned timeout_ms,
-                        unsigned poll_ms,
-                        myact_runmode_t* out_last) {
-    uint64_t t0 = now_ms(NULL);
-    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
-    int rc;
-
-    do {
-        rc = myact_read_operating_mode(ctx, &rm);
-        if (rc < 0) return rc;
-        if (out_last) *out_last = rm;
-        if (rm == expected) return (int)(now_ms(NULL) - t0);
-        if (now_ms(NULL) - t0 >= timeout_ms) break;
-        msleep(poll_ms);
-    } while (1);
-
-    return MYACT_ETIMEDOUT;
-}
-
 static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
     uint64_t t0;
@@ -1252,6 +1242,8 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     rc = read_angle_deg(c, &before_deg);
     if (rc < 0) return rc;
     rc = myact_position_inc_send(c, (uint16_t)speed_dps, myact_deg_to_raw_0p01(delta_deg));
+    if (rc < 0) return rc;
+    rc = myact_wait_runmode(c, MYACT_RUNMODE_POSITION, 1500u, 50u);
     if (rc < 0) return rc;
     msleep(wait_ms);
     rc = myact_stop_send(c);
