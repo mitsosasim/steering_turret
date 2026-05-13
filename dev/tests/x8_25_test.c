@@ -174,6 +174,7 @@ typedef struct {
     bool set_position_kp_valid;
     bool set_position_ki_valid;
     bool set_position_kd_valid;
+    bool selftest_pack;
 
     double min_motion_voltage;
     double smoke_delta_deg;
@@ -453,6 +454,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--commissioning-write-enable", commissioning_write_enable)
         FLAG("--write-pid-ram", write_pid_ram)
         FLAG("--write-pid-rom", write_pid_rom)
+        FLAG("--selftest-pack", selftest_pack)
 
         if (!strcmp(argv[i], "--speed-step-dps") && i + 1 < argc) o->speed_step_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
@@ -1631,6 +1633,87 @@ static int run_commissioning_writes(myact_ctx_t* c, const test_opts_t* o) {
     return MYACT_OK;
 }
 
+
+static int selftest_send_cb(const myact_can_frame_t* fr, void* user) {
+    myact_can_frame_t* cap = (myact_can_frame_t*)user;
+    if (!fr || !cap) return MYACT_EINVAL;
+    *cap = *fr;
+    return MYACT_OK;
+}
+
+static int selftest_recv_cb(myact_can_frame_t* out, uint32_t timeout_ms, void* user) {
+    (void)out; (void)timeout_ms; (void)user;
+    return MYACT_ETIMEDOUT;
+}
+
+static void print_bytes(const uint8_t b[8]) {
+    printf("%02X %02X %02X %02X %02X %02X %02X %02X",
+           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+}
+
+static int run_selftest_pack(void) {
+    myact_io_t io;
+    myact_ctx_t ctx;
+    myact_can_frame_t cap;
+    int rc;
+    int fails = 0;
+
+    struct {
+        const char* name;
+        uint8_t expected[8];
+        int (*fn)(myact_ctx_t*);
+    } cases[] = {
+        {"A2 +100 dps", {0xA2,0x00,0x00,0x00,0x10,0x27,0x00,0x00}, NULL},
+        {"A2 -100 dps", {0xA2,0x00,0x00,0x00,0xF0,0xD8,0xFF,0xFF}, NULL},
+        {"A4 +360 deg @500 dps", {0xA4,0x00,0xF4,0x01,0xA0,0x8C,0x00,0x00}, NULL},
+        {"A4 -360 deg @500 dps", {0xA4,0x00,0xF4,0x01,0x60,0x73,0xFF,0xFF}, NULL},
+        {"A8 +360 deg @500 dps", {0xA8,0x00,0xF4,0x01,0xA0,0x8C,0x00,0x00}, NULL},
+        {"A8 -360 deg @500 dps", {0xA8,0x00,0xF4,0x01,0x60,0x73,0xFF,0xFF}, NULL},
+    };
+
+    memset(&io, 0, sizeof(io));
+    memset(&cap, 0, sizeof(cap));
+    io.send = selftest_send_cb;
+    io.recv = selftest_recv_cb;
+    io.time_ms = now_ms;
+    io.user = &cap;
+
+    rc = myact_init(&ctx, 1, &io);
+    if (rc < 0) {
+        fprintf(stderr, "selftest-pack init failed rc=%d (%s)\n", rc, myact_strerror(rc));
+        return RET_COMMS_FAIL;
+    }
+
+    #define CHECK_CASE(idx, call_expr) do { \
+        memset(&cap, 0, sizeof(cap)); \
+        rc = (call_expr); \
+        if (rc < 0) { \
+            fprintf(stderr, "[FAIL] %s send rc=%d (%s)\n", cases[idx].name, rc, myact_strerror(rc)); \
+            ++fails; \
+        } else if (memcmp(cap.data, cases[idx].expected, 8) != 0) { \
+            printf("[FAIL] %s expected=", cases[idx].name); print_bytes(cases[idx].expected); \
+            printf(" actual="); print_bytes(cap.data); printf("\n"); \
+            ++fails; \
+        } else { \
+            printf("[PASS] %s\n", cases[idx].name); \
+        } \
+    } while (0)
+
+    CHECK_CASE(0, myact_speed_dps_send(&ctx, 100.0));
+    CHECK_CASE(1, myact_speed_dps_send(&ctx, -100.0));
+    CHECK_CASE(2, myact_position_abs_deg_send(&ctx, 360.0, 500));
+    CHECK_CASE(3, myact_position_abs_deg_send(&ctx, -360.0, 500));
+    CHECK_CASE(4, myact_position_inc_send(&ctx, 500, 36000));
+    CHECK_CASE(5, myact_position_inc_send(&ctx, 500, -36000));
+
+    if (fails) {
+        printf("selftest-pack: %d mismatch(es)\n", fails);
+        return RET_COMMS_FAIL;
+    }
+    printf("selftest-pack: all packing checks passed\n");
+    return RET_OK;
+}
+
 int main(int argc, char** argv) {
     sockcan_bus_t bus;
     myact_io_t io;
@@ -1640,6 +1723,15 @@ int main(int argc, char** argv) {
     int32_t a = 0;
     int rc;
     int ret = RET_OK;
+
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return RET_BAD_CLI;
+    }
+
+    if (argc == 2 && !strcmp(argv[1], "--selftest-pack")) {
+        return run_selftest_pack();
+    }
 
     if (argc < 3) {
         print_usage(argv[0]);
@@ -1651,6 +1743,8 @@ int main(int argc, char** argv) {
         print_usage(argv[0]);
         return RET_BAD_CLI;
     }
+
+    if (o.selftest_pack) return run_selftest_pack();
 
     rc = sockcan_open(&bus, argv[1]);
     if (rc < 0) return RET_COMMS_FAIL;
