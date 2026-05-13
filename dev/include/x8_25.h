@@ -36,6 +36,19 @@ extern "C" {
 #define MYACT_X8_25_PEAK_CURRENT_A         8.0
 #define MYACT_X8_25_ENCODER_BITS          18u
 
+
+/* MIT motion packing ranges (X8-25 firmware format) */
+#define MYACT_MOTION_P_MIN_RAD      (-12.5f)
+#define MYACT_MOTION_P_MAX_RAD      (12.5f)
+#define MYACT_MOTION_V_MIN_RAD_S    (-45.0f)
+#define MYACT_MOTION_V_MAX_RAD_S    (45.0f)
+#define MYACT_MOTION_KP_MIN         (0.0f)
+#define MYACT_MOTION_KP_MAX         (500.0f)
+#define MYACT_MOTION_KD_MIN         (0.0f)
+#define MYACT_MOTION_KD_MAX         (5.0f)
+#define MYACT_MOTION_T_MIN_NM       (-18.0f)
+#define MYACT_MOTION_T_MAX_NM       (18.0f)
+
 typedef enum {
     MYACT_OK          =  0,
     MYACT_EINVAL      = -1,
@@ -331,6 +344,15 @@ int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t de
 int myact_position_inc(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg, myact_basic_feedback_t* out); /* A8 */
 int myact_motion_send(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm); /* MIT */
 int myact_motion_command(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, myact_motion_feedback_t* out); /* MIT */
+
+int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a); /* native A1 */
+int myact_system_reset(myact_ctx_t* ctx);
+int myact_read_operating_mode(myact_ctx_t* ctx, myact_runmode_t* out_mode);
+int myact_read_encoder_multi(myact_ctx_t* ctx, int32_t* out_encoder);
+int myact_read_encoder_raw(myact_ctx_t* ctx, int32_t* out_encoder_raw);
+int myact_read_encoder_offset(myact_ctx_t* ctx, int32_t* out_encoder_offset);
+int myact_motion_pack(float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, uint8_t out_data[8]);
+int myact_motion_unpack_reply(const myact_can_frame_t* fr, myact_motion_feedback_t* out);
 
 /* unit helpers */
 int16_t  myact_current_a_to_raw(double amps);
