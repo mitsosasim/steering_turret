@@ -470,7 +470,6 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
     uint64_t start;
     uint64_t now;
     myact_can_frame_t fr;
-    unsigned active_seen = 0;
     int rc;
 
     if (!ctx) return MYACT_EINVAL;
@@ -486,16 +485,6 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
         if (rc < 0) return rc;
 
         (void)myact_parse_frame(ctx, &fr);
-
-        if (fr.id == ctx->reply_id && fr.dlc >= 1 && fr.data[0] == MYACT_CMD_STATUS2) {
-            active_seen++;
-        }
-        if (active_seen >= 3 && expected_cmd_or_neg1 >= 0 && expected_cmd_or_neg1 != MYACT_CMD_STATUS2) {
-            if (ctx->log_fn) ctx->log_fn(MYACT_LOG_ERROR,
-                "expected synchronous reply but active reply 0x9C is still streaming; disable active reply before synchronous command",
-                ctx->log_user);
-            return MYACT_ESTATE;
-        }
 
         if (fr.id != reply_id) {
             if (fr.id == ctx->reply_id || fr.id == ctx->motion_reply_id) {
@@ -1075,7 +1064,7 @@ int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, 
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
-int myact_disable_all_active_replies(myact_ctx_t* ctx) {
+int myact_active_reply_disable_all(myact_ctx_t* ctx) {
     static const uint8_t cmds[] = { 0x60, 0x61, 0x62, 0x92, 0x9A, 0x9C, 0x9D, 0x9E };
     int rc_final = MYACT_OK;
     size_t i;
@@ -1089,6 +1078,10 @@ int myact_disable_all_active_replies(myact_ctx_t* ctx) {
     }
     (void)myact_drain_rx(ctx, MYACT_ACTIVE_REPLY_DRAIN_MS);
     return rc_final;
+}
+
+int myact_disable_all_active_replies(myact_ctx_t* ctx) {
+    return myact_active_reply_disable_all(ctx);
 }
 
 int myact_drain_rx(myact_ctx_t* ctx, uint32_t duration_ms) {
