@@ -53,6 +53,10 @@ struct motion_backend {
   uint64_t next_seq;
   uint64_t applied_seq[STC_AXIS_COUNT];
   uint64_t last_speed_cmd_ms[STC_AXIS_COUNT];
+  uint64_t last_cmd_ms[STC_AXIS_COUNT];
+  int32_t cmd_pos_raw[STC_AXIS_COUNT];
+  int32_t cmd_vel_raw[STC_AXIS_COUNT];
+  uint8_t cmd_ack_pending[STC_AXIS_COUNT];
   int speed_active[STC_AXIS_COUNT];
   int velocity_session_ready[STC_AXIS_COUNT];
   int32_t last_speed_raw_0p01dps[STC_AXIS_COUNT];
@@ -204,6 +208,9 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->snap.mode_display[axis] = (speed_0p01dps != 0) ? 2 : 0;
       b->snap.status_word[axis] &= (uint16_t)~(1u << 10);
       b->snap.last_rx_ms[axis] = t_ms;
+      b->last_cmd_ms[axis] = m->cmd_ts_ms;
+      b->cmd_vel_raw[axis] = local_axis_deg_to_counts(cfg, clamped);
+      b->cmd_ack_pending[axis] = 1u;
     }
   } else if (m->kind == AXIS_CMD_POSITION) {
     const double target_deg = clamp_range(m->value, cfg->az_min_deg, cfg->az_max_deg);
@@ -227,6 +234,9 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       if (b->last_abs_via_a8_service[axis]) b->snap.status_word[axis] |= (uint16_t)(1u << 10);
       else b->snap.status_word[axis] &= (uint16_t)~(1u << 10);
       b->snap.last_rx_ms[axis] = t_ms;
+      b->last_cmd_ms[axis] = m->cmd_ts_ms;
+      b->cmd_pos_raw[axis] = local_axis_deg_to_counts(cfg, target_deg);
+      b->cmd_ack_pending[axis] = 1u;
     }
   } else if (m->kind == AXIS_CMD_STOP) {
     axis_stop_locked(b, axis, t_ms);
@@ -425,6 +435,16 @@ int myact_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot
   if (!b || !snapshot) return -1;
 
   pthread_mutex_lock(&b->lock);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    b->snap.fault_active[axis] = (b->snap.status_word[axis] & 0x0008u) ? 1u : 0u;
+    const uint64_t cmd_ms = b->last_cmd_ms[axis];
+    b->snap.command_age_ms[axis] = (cmd_ms > 0 && now_ms() >= cmd_ms) ? (uint32_t)(now_ms() - cmd_ms) : 0u;
+    const int32_t pos_err = b->snap.pos_raw[axis] - b->cmd_pos_raw[axis];
+    const int pos_still_far = (pos_err > 20 || pos_err < -20);
+    const int vel_still_zero = (b->snap.vel_raw[axis] < 5 && b->snap.vel_raw[axis] > -5);
+    b->snap.cmd_ack_no_motion[axis] = (b->cmd_ack_pending[axis] && pos_still_far && vel_still_zero && b->snap.command_age_ms[axis] > 200u) ? 1u : 0u;
+    b->snap.diag_ext[axis] = (uint32_t)(b->last_abs_via_a8_service[axis] ? 1u : 0u);
+  }
   *snapshot = b->snap;
   pthread_mutex_unlock(&b->lock);
   return 0;

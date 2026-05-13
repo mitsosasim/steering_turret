@@ -35,6 +35,10 @@ struct motion_backend {
   mtr_mode_t axis_mode[STC_AXIS_COUNT];
   uint64_t axis_last_seen_ms[STC_AXIS_COUNT];
   uint64_t axis_last_healthcheck_ms[STC_AXIS_COUNT];
+  uint64_t axis_last_cmd_ms[STC_AXIS_COUNT];
+  int32_t axis_last_cmd_pos_raw[STC_AXIS_COUNT];
+  int32_t axis_last_cmd_vel_raw[STC_AXIS_COUNT];
+  uint8_t axis_cmd_ack_pending[STC_AXIS_COUNT];
   motion_snapshot_t snap;
 };
 
@@ -326,7 +330,11 @@ int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, 
     int32_t target_counts = axis_deg_to_counts(&b->cfg.axis_cfg[axis], targets_deg[axis]);
     uint16_t pv = b->cfg.axis_cfg[axis].pp_profile_vel;
     if (pd4c_pp_move(&b->ctx[axis], target_counts, pv, 0, b->cfg.ds402_timeout_ms) == PD4C_OK) {
-      b->axis_last_seen_ms[axis] = mono_ms();
+      const uint64_t tms = mono_ms();
+      b->axis_last_seen_ms[axis] = tms;
+      b->axis_last_cmd_ms[axis] = tms;
+      b->axis_last_cmd_pos_raw[axis] = target_counts;
+      b->axis_cmd_ack_pending[axis] = 1u;
     }
   }
   return 0;
@@ -343,7 +351,11 @@ int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, co
     if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
     if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
     if (pd4c_rpdo3_send_target_velocity(&b->ctx[axis], (int16_t)tv_raw) == PD4C_OK) {
-      b->axis_last_seen_ms[axis] = mono_ms();
+      const uint64_t tms = mono_ms();
+      b->axis_last_seen_ms[axis] = tms;
+      b->axis_last_cmd_ms[axis] = tms;
+      b->axis_last_cmd_vel_raw[axis] = tv_raw;
+      b->axis_cmd_ack_pending[axis] = 1u;
     }
   }
   return 0;
@@ -432,6 +444,12 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
       }
     }
     b->snap.last_rx_ms[axis] = b->axis_last_seen_ms[axis];
+    b->snap.fault_active[axis] = (b->snap.status_word[axis] & 0x0008u) ? 1u : 0u;
+    b->snap.command_age_ms[axis] = (b->axis_last_cmd_ms[axis] > 0 && now >= b->axis_last_cmd_ms[axis]) ? (uint32_t)(now - b->axis_last_cmd_ms[axis]) : 0u;
+    const int32_t abs_err = b->snap.pos_raw[axis] - b->axis_last_cmd_pos_raw[axis];
+    const int pos_still_far = (abs_err > 20 || abs_err < -20);
+    const int vel_still_zero = (b->snap.vel_raw[axis] < 5 && b->snap.vel_raw[axis] > -5);
+    b->snap.cmd_ack_no_motion[axis] = (b->axis_cmd_ack_pending[axis] && pos_still_far && vel_still_zero && b->snap.command_age_ms[axis] > 200u) ? 1u : 0u;
   }
   refresh_can_status(b);
   *snapshot = b->snap;
