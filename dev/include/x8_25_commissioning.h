@@ -71,6 +71,8 @@ int myact_set_multi_turn_save_on_poweroff(myact_ctx_t* ctx, bool enable);
 int myact_set_canid_via_function(myact_ctx_t* ctx, uint8_t new_node_id);
 int myact_set_positive_limit_raw(myact_ctx_t* ctx, int32_t raw_value);
 int myact_set_negative_limit_raw(myact_ctx_t* ctx, int32_t raw_value);
+int myact_set_positive_limit_deg(myact_ctx_t* ctx, double deg_value);
+int myact_set_negative_limit_deg(myact_ctx_t* ctx, double deg_value);
 int myact_canid_read(myact_ctx_t* ctx, uint8_t* out_node_id);
 int myact_canid_write(myact_ctx_t* ctx, uint8_t new_node_id);
 

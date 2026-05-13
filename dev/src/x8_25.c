@@ -1148,6 +1148,12 @@ int myact_set_positive_limit_raw(myact_ctx_t* ctx, int32_t raw_value) {
 int myact_set_negative_limit_raw(myact_ctx_t* ctx, int32_t raw_value) {
     return myact_function_control(ctx, MYACT_FUNC_SET_NEGATIVE_LIMIT, raw_value);
 }
+int myact_set_positive_limit_deg(myact_ctx_t* ctx, double deg_value) {
+    return myact_set_positive_limit_raw(ctx, myact_deg_to_raw_0p01(deg_value));
+}
+int myact_set_negative_limit_deg(myact_ctx_t* ctx, double deg_value) {
+    return myact_set_negative_limit_raw(ctx, myact_deg_to_raw_0p01(deg_value));
+}
 
 /* dedicated CAN-ID service */
 
