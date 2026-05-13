@@ -51,6 +51,7 @@ constexpr uint16_t kDefaultTlmHighPort = 6010;
 constexpr uint16_t kDefaultTlmLowPort = 6020;
 constexpr int kRspHeaderSize = 14;
 constexpr int kAxisCount = static_cast<int>(STC_ICD_AXES_COUNT);
+constexpr const char* kDevRawPanelEnv = "STC_DIAG_DEV_RAW_PANEL";
 
 QString stateToString(uint8_t state) {
   switch (state) {
@@ -169,6 +170,13 @@ class DiagnosticsWindow : public QMainWindow {
       ensureTcpConnected();
     });
     connect(clearErrorsButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendClearErrors);
+    connect(sendTargetButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendTargetPosition);
+    connect(jogPosButton_, &QPushButton::clicked, this, [this]() { sendRelativeStep(+1.0); });
+    connect(jogNegButton_, &QPushButton::clicked, this, [this]() { sendRelativeStep(-1.0); });
+    connect(jogSpeedPosButton_, &QPushButton::clicked, this, [this]() { sendJogSpeed(+1.0); });
+    connect(jogSpeedNegButton_, &QPushButton::clicked, this, [this]() { sendJogSpeed(-1.0); });
+    connect(holdEnableButton_, &QPushButton::clicked, this, &DiagnosticsWindow::toggleHoldEnable);
+    connect(estopButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendStopEstop);
     connect(tlmHighPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(tlmLowPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(mirrorIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
@@ -595,6 +603,39 @@ class DiagnosticsWindow : public QMainWindow {
                 .arg(packetLen));
   }
 
+
+
+  bool sendPackedCommand(stc_icd_cmd_t &cmd, const QString &label) {
+    if (!tcpConnected_) { appendLog(label + ": CU TCP disconnected"); ensureTcpConnected(); return false; }
+    uint8_t packet[20 + STC_ICD_MAX_PAYLOAD]{}; size_t packetLen = 0;
+    if (stc_icd_cmd_pack(&cfg_, &cmd, packet, sizeof(packet), &packetLen) != STC_ICD_OK) return false;
+    pendingCommands_.insert(cmd.seq, commandName(cmd.cmd_id));
+    const qint64 wrote = tcpSocket_->write(reinterpret_cast<const char*>(packet), static_cast<qint64>(packetLen));
+    if (wrote != static_cast<qint64>(packetLen)) { pendingCommands_.remove(cmd.seq); return false; }
+    appendLog(QString("%1 seq=%2").arg(label).arg(cmd.seq));
+    return true;
+  }
+
+  void sendTargetPosition() { sendTurretMotion(STC_MOTION_ABSOLUTE, targetPosSpin_->value(), 0.0f, "Target position command sent"); }
+  void sendRelativeStep(double sign) { sendTurretMotion(STC_MOTION_RELATIVE, sign * relativeStepSpin_->value(), 0.0f, "Relative jog command sent"); }
+  void sendJogSpeed(double sign) { sendTurretMotion(STC_MOTION_SPEED, sign * jogSpeedSpin_->value(), 0.0f, "Jog speed command sent"); }
+  void sendStopEstop() {
+    sendTurretMotion(STC_MOTION_SPEED, 0.0, 0.0, "STOP/E-STOP speed zero sent");
+    stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_CU_STATE; cmd.u.cu_state.state = 2; cmd.payload_size = 1;
+    sendPackedCommand(cmd, "STOP/E-STOP state SAFE sent");
+  }
+  void toggleHoldEnable() {
+    holdEnabled_ = !holdEnabled_;
+    holdEnableButton_->setText(holdEnabled_ ? "Hold/Enable: ENABLED" : "Hold/Enable: HOLD");
+    stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_CU_STATE; cmd.u.cu_state.state = holdEnabled_ ? 3 : 2; cmd.payload_size = 1;
+    sendPackedCommand(cmd, holdEnabled_ ? "Enable (OPER) sent" : "Hold (SAFE) sent");
+  }
+
+  void sendTurretMotion(uint8_t motionType, double az, double el, const QString &label) {
+    stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_TURRET; cmd.u.turret.motion_type = motionType; cmd.u.turret.az = static_cast<float>(az); cmd.u.turret.el = static_cast<float>(el); cmd.payload_size = 9;
+    sendPackedCommand(cmd, label);
+  }
+
   void processHighTelemetry() {
     while (udpHigh_->hasPendingDatagrams()) {
       QByteArray packet;
@@ -611,6 +652,13 @@ class DiagnosticsWindow : public QMainWindow {
         axisTable_->item(i, 3)->setText(QString::number(tlm.acceleration[i], 'f', 3));
       }
       highSeqLabel_->setText(QString("High-rate seq: %1").arg(tlm.seq));
+      const qint64 ageMs = QDateTime::currentMSecsSinceEpoch() - static_cast<qint64>(tlm.timestamp_ms);
+      telemetryStatusLabel_->setText(QString("Telemetry: LIVE | age %1 ms").arg(ageMs));
+      angleLiveLabel_->setText(QString("Angle: az=%1 deg el=%2 deg").arg(tlm.position[0],0,'f',3).arg(tlm.position[1],0,'f',3));
+      speedLiveLabel_->setText(QString("Speed: az=%1 deg/s el=%2 deg/s").arg(tlm.rates[0],0,'f',3).arg(tlm.rates[1],0,'f',3));
+      currentLiveLabel_->setText("Current: N/A in ICD telemetry path");
+      voltageLiveLabel_->setText("Voltage: N/A in ICD telemetry path");
+      saturationLiveLabel_->setText(QString("Saturation: inferred %1").arg((tlm.acceleration[0]==0.0f && tlm.acceleration[1]==0.0f)?"clear":"active"));
       tlmhPanel_->setPlainText(QString("seq=%1\nts=%2\naxis0 pos=%3 vel=%4 acc=%5\naxis1 pos=%6 vel=%7 acc=%8")
                                  .arg(tlm.seq)
                                  .arg(tlm.timestamp_ms)
@@ -634,6 +682,7 @@ class DiagnosticsWindow : public QMainWindow {
         continue;
       }
       stateLabel_->setText(QString("State: %1").arg(stateToString(tlm.state)));
+      errorLiveLabel_->setText(QString("Error: count=%1").arg(tlm.error_count));
       currentState_ = tlm.state;
       lowSeqLabel_->setText(QString("Low-rate seq: %1").arg(tlm.seq));
       envLabel_->setText(QString("Temp %1 C, Hum %2 %%, Press %3 hPa")
@@ -1034,7 +1083,7 @@ class DiagnosticsWindow : public QMainWindow {
 
     sendButton_ = new QPushButton("Send", cmdGroup);
     reconnectButton_ = new QPushButton("Reconnect CU link", cmdGroup);
-    canBringupButton_ = new QPushButton("Rediscover/connect CAN devices", cmdGroup);
+    canBringupButton_ = new QPushButton("Developer: rediscover/connect CAN devices", cmdGroup);
     clearErrorsButton_ = new QPushButton("Clear motor faults (DELLOG)", cmdGroup);
     for (QPushButton *button : {sendButton_, reconnectButton_, canBringupButton_, clearErrorsButton_}) {
       button->setMaximumWidth(kButtonWidth);
@@ -1059,6 +1108,18 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow("Command", commandBox_);
     cmdForm->addRow("Payload", payloadStack_);
     cmdForm->addRow(sendButton_);
+    cmdForm->addRow(new QLabel("Operator path (server-facing: turret/application commands)", cmdGroup));
+    targetPosSpin_ = new QDoubleSpinBox(cmdGroup); targetPosSpin_->setRange(-720.0,720.0); targetPosSpin_->setDecimals(3);
+    relativeStepSpin_ = new QDoubleSpinBox(cmdGroup); relativeStepSpin_->setRange(0.001,180.0); relativeStepSpin_->setValue(1.0); relativeStepSpin_->setDecimals(3);
+    jogSpeedSpin_ = new QDoubleSpinBox(cmdGroup); jogSpeedSpin_->setRange(0.001,360.0); jogSpeedSpin_->setValue(5.0); jogSpeedSpin_->setDecimals(3);
+    sendTargetButton_ = new QPushButton("Send Target Position", cmdGroup);
+    jogPosButton_ = new QPushButton("Jog +Step", cmdGroup); jogNegButton_ = new QPushButton("Jog -Step", cmdGroup);
+    jogSpeedPosButton_ = new QPushButton("Jog +Speed", cmdGroup); jogSpeedNegButton_ = new QPushButton("Jog -Speed", cmdGroup);
+    holdEnableButton_ = new QPushButton("Hold/Enable: HOLD", cmdGroup); estopButton_ = new QPushButton("STOP / E-STOP", cmdGroup);
+    cmdForm->addRow("Target position (deg)", targetPosSpin_); cmdForm->addRow(sendTargetButton_);
+    cmdForm->addRow("Relative step (deg)", relativeStepSpin_); cmdForm->addRow(jogPosButton_, jogNegButton_);
+    cmdForm->addRow("Jog speed (deg/s)", jogSpeedSpin_); cmdForm->addRow(jogSpeedPosButton_, jogSpeedNegButton_);
+    cmdForm->addRow(holdEnableButton_); cmdForm->addRow(estopButton_);
     cmdForm->addRow(reconnectButton_);
     cmdForm->addRow(canBringupButton_);
     cmdForm->addRow(clearErrorsButton_);
@@ -1078,10 +1139,19 @@ class DiagnosticsWindow : public QMainWindow {
     connectionLabel_ = new QLabel("Laser status -", statusGroup);
     availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
     ackLabel_ = new QLabel("Last response: -", statusGroup);
+    telemetryStatusLabel_ = new QLabel("Telemetry: waiting", statusGroup);
+    angleLiveLabel_ = new QLabel("Angle: -", statusGroup);
+    speedLiveLabel_ = new QLabel("Speed: -", statusGroup);
+    currentLiveLabel_ = new QLabel("Current: -", statusGroup);
+    voltageLiveLabel_ = new QLabel("Voltage: -", statusGroup);
+    errorLiveLabel_ = new QLabel("Error: -", statusGroup);
+    saturationLiveLabel_ = new QLabel("Saturation: -", statusGroup);
+    backendModeLabel_ = new QLabel("Backend mode: application/server path", statusGroup);
+    pathLabel_ = new QLabel("Simulation path: via STC server sim mode | Real hardware path: via STC server hardware backend", statusGroup);
     simModeBox_ = new QCheckBox("Simulation mode", statusGroup);
 
     for (QLabel *label : {stateLabel_, modeLabel_, inventoryLabel_, highSeqLabel_, lowSeqLabel_, envLabel_,
-                          tcpStatusLabel_, connectionLabel_, availabilityLabel_, ackLabel_}) {
+                          tcpStatusLabel_, connectionLabel_, availabilityLabel_, ackLabel_, telemetryStatusLabel_, angleLiveLabel_, speedLiveLabel_, currentLiveLabel_, voltageLiveLabel_, errorLiveLabel_, saturationLiveLabel_, backendModeLabel_, pathLabel_}) {
       label->setWordWrap(true);
     }
 
@@ -1096,8 +1166,17 @@ class DiagnosticsWindow : public QMainWindow {
     statusLayout->addWidget(tcpStatusLabel_, 4, 0);
     statusLayout->addWidget(ackLabel_, 4, 1);
     statusLayout->addWidget(simModeBox_, 5, 0, 1, 2);
+    statusLayout->addWidget(telemetryStatusLabel_, 6, 0, 1, 2);
+    statusLayout->addWidget(angleLiveLabel_, 7, 0); statusLayout->addWidget(speedLiveLabel_, 7, 1);
+    statusLayout->addWidget(currentLiveLabel_, 8, 0); statusLayout->addWidget(voltageLiveLabel_, 8, 1);
+    statusLayout->addWidget(errorLiveLabel_, 9, 0); statusLayout->addWidget(saturationLiveLabel_, 9, 1);
+    statusLayout->addWidget(backendModeLabel_, 10, 0, 1, 2);
+    statusLayout->addWidget(pathLabel_, 11, 0, 1, 2);
 
     leftColumnLayout->addWidget(statusGroup);
+    const bool devRaw = !QString::fromLocal8Bit(qgetenv(kDevRawPanelEnv)).trimmed().isEmpty();
+    canBringupButton_->setVisible(devRaw);
+    canBringupButton_->setEnabled(devRaw);
 
     layout->addWidget(leftColumn, 2);
     layout->addWidget(buildAxisPanel(), 3);
@@ -1308,6 +1387,16 @@ class DiagnosticsWindow : public QMainWindow {
   QPushButton *reconnectButton_{};
   QPushButton *canBringupButton_{};
   QPushButton *clearErrorsButton_{};
+  QPushButton *sendTargetButton_{};
+  QPushButton *jogPosButton_{};
+  QPushButton *jogNegButton_{};
+  QPushButton *jogSpeedPosButton_{};
+  QPushButton *jogSpeedNegButton_{};
+  QPushButton *holdEnableButton_{};
+  QPushButton *estopButton_{};
+  QDoubleSpinBox *targetPosSpin_{};
+  QDoubleSpinBox *relativeStepSpin_{};
+  QDoubleSpinBox *jogSpeedSpin_{};
 
   QComboBox *cuStateBox_{};
   QComboBox *selfLevActionBox_{};
@@ -1342,6 +1431,15 @@ class DiagnosticsWindow : public QMainWindow {
   QLabel *connectionLabel_{};
   QLabel *availabilityLabel_{};
   QLabel *ackLabel_{};
+  QLabel *telemetryStatusLabel_{};
+  QLabel *angleLiveLabel_{};
+  QLabel *speedLiveLabel_{};
+  QLabel *currentLiveLabel_{};
+  QLabel *voltageLiveLabel_{};
+  QLabel *errorLiveLabel_{};
+  QLabel *saturationLiveLabel_{};
+  QLabel *backendModeLabel_{};
+  QLabel *pathLabel_{};
   QCheckBox *simModeBox_{};
 
   QPlainTextEdit *tlmhPanel_{};
@@ -1352,6 +1450,7 @@ class DiagnosticsWindow : public QMainWindow {
   stc_icd_cfg_t cfg_{};
   uint16_t nextSeq_ = 1;
   uint8_t currentState_ = 0;
+  bool holdEnabled_ = false;
   bool tcpConnected_ = false;
   bool startupCapabilityCheckDone_ = false;
   QByteArray rspBuffer_;
