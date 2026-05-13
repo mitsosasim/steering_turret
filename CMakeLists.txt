@@ -80,27 +80,38 @@ target_compile_options(test_actions PRIVATE -Wall -Wextra)
 
 add_executable(stc_state_test
   dev/tests/stc_state_test.c
+  dev/src/stc_model.c
   dev/src/stc_state.c
   dev/src/stc_faults.c
   dev/src/stc_diag.c
+  dev/src/stc_log.c
   dev/src/motion_backend_router.c
   dev/src/myact_backend.c
 )
 
 target_include_directories(stc_state_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_state_test PRIVATE -Wall -Wextra)
+target_link_libraries(stc_state_test PRIVATE m)
+if(USE_SIMULATOR)
+  target_compile_definitions(stc_state_test PRIVATE SIMULATION)
+  target_link_libraries(stc_state_test PRIVATE simulator)
+endif()
 
 add_executable(stc_diag_test
   dev/tests/test_diag_codes.c
+  dev/src/stc_model.c
   dev/src/stc_diag.c
+  dev/src/stc_log.c
   dev/src/motion_backend_router.c
   dev/src/myact_backend.c
 )
 
 add_executable(test_diag_state_integration
   dev/tests/test_diag_state_integration.c
+  dev/src/stc_model.c
   dev/src/stc_state.c
   dev/src/stc_diag.c
+  dev/src/stc_log.c
   dev/src/motion_backend_router.c
   dev/src/myact_backend.c
 )
@@ -115,8 +126,18 @@ target_compile_options(test_icd_codec PRIVATE -Wall -Wextra)
 
 target_include_directories(stc_diag_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_diag_test PRIVATE -Wall -Wextra)
+target_link_libraries(stc_diag_test PRIVATE m)
+if(USE_SIMULATOR)
+  target_compile_definitions(stc_diag_test PRIVATE SIMULATION)
+  target_link_libraries(stc_diag_test PRIVATE simulator)
+endif()
 target_include_directories(test_diag_state_integration PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(test_diag_state_integration PRIVATE -Wall -Wextra)
+target_link_libraries(test_diag_state_integration PRIVATE m)
+if(USE_SIMULATOR)
+  target_compile_definitions(test_diag_state_integration PRIVATE SIMULATION)
+  target_link_libraries(test_diag_state_integration PRIVATE simulator)
+endif()
 
 
 add_executable(stc_config_test
