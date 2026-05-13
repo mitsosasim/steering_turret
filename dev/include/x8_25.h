@@ -340,6 +340,7 @@ int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps); /* native A2 raw:
 int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps); /* native A2 wrapper: dps -> raw */
 int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t* out); /* native A2 */
 int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg); /* native A4 */
+int myact_position_abs_deg_send(myact_ctx_t* ctx, double target_deg, uint16_t max_speed_dps); /* native A4 wrapper: deg -> raw 0.01deg */
 int myact_position_abs(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg, myact_basic_feedback_t* out); /* native A4 */
 int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg); /* A8 */
 int myact_position_inc(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg, myact_basic_feedback_t* out); /* A8 */

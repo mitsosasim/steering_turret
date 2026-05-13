@@ -107,6 +107,7 @@ gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
 */
 
 #include "x8_25.h"
+#include "x8_25_commissioning.h"
 
 #include <errno.h>
 #include <math.h>
@@ -879,6 +880,7 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
     uint16_t abs_speed_raw;
     uint8_t a4_frame[8] = {0};
     int rc;
+    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
 
     rc = axis_enable_for_motion(c, o, s1, "profile-abs-relative-test");
     if (rc < 0) return rc;
@@ -886,7 +888,7 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
     rc = read_angle_deg(c, &orig);
     if (rc < 0) return rc;
 
-    target_plus = orig + o->abs_delta_deg;
+    target_plus = o->abs_delta_deg;
     target_raw = myact_deg_to_raw_0p01(target_plus);
     abs_speed_raw = (uint16_t)o->abs_speed_dps;
     a4_frame[0] = 0xA4;
@@ -898,11 +900,20 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
     a4_frame[6] = (uint8_t)((target_raw >> 16) & 0xFF);
     a4_frame[7] = (uint8_t)((target_raw >> 24) & 0xFF);
 
-    printf("profile-abs-relative-test: original=%.2f target_plus=%.2f return=%.2f speed=%.1f\n",
+    printf("profile-abs-relative-test: original=%.2f target_abs=%.2f return=%.2f speed=%.1f\n",
            orig, target_plus, orig, o->abs_speed_dps);
+    printf("profile-abs-relative-test: target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+           target_plus, (long)target_raw, (unsigned)abs_speed_raw,
+           a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
 
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
+    rc = wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
+    if (rc < 0) {
+        printf("[RUNMODE_FAIL] profile-abs-relative-test: runmode did not enter 0x03 after A4, last=%u\n", (unsigned)rm);
+        rc = MYACT_ESTATE;
+        goto out;
+    }
 
     rc = wait_until_angle_near(c, target_plus, o->abs_tolerance_deg,
                                o->abs_timeout_ms, o->abs_poll_ms, "abs+");
@@ -933,29 +944,29 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
                    (int)diag_s2.angle_deg);
         }
 
-        if (!o->no_a8_fallback) {
-            printf("profile-abs-relative-test: sending stop before A8 fallback\n");
-            (void)myact_stop_send(c);
-            msleep(200);
-            rc = prepare_sync(c);
-            if (rc < 0) goto out;
-
-            rc = run_a8_delta_observed(c, "profile-abs-relative-test A8 fallback",
-                                       o->abs_delta_deg, o->abs_speed_dps, o->smoke_wait_ms,
-                                       fmax(1.0, 0.20 * fabs(o->abs_delta_deg)),
-                                       NULL, NULL, NULL);
-            if (rc == MYACT_OK) {
-                printf("[PASS] profile-abs-relative-test: A4 failed but fallback A8 absolute service succeeded\n");
-                rc = MYACT_OK;
-                goto out;
+        {
+            int32_t pos_acc = 0, pos_dec = 0;
+            float pos_kp = 0.0f, pos_ki = 0.0f, pos_kd = 0.0f;
+            myact_read_operating_mode(c, &rm);
+            printf("A4_ACK_NO_MOTION\n");
+            printf("diag runmode=%u\n", (unsigned)rm);
+            if (myact_read_status1(c, &diag_s1) == MYACT_OK) {
+                printf("diag status1 error_flags=0x%04X\n", diag_s1.error_flags);
             }
-            printf("[FAIL] profile-abs-relative-test: A4 failed and A8 fallback failed\n");
-            rc = MYACT_ESTATE;
-            goto out;
+            if (myact_read_status2(c, &diag_s2) == MYACT_OK) {
+                printf("diag status2 iq_A=%.2f speed_dps=%d\n", diag_s2.iq_0p01a / 100.0, (int)diag_s2.speed_dps);
+            }
+            if (myact_accel_read(c, MYACT_ACCEL_POSITION_ACC, &pos_acc) == MYACT_OK &&
+                myact_accel_read(c, MYACT_ACCEL_POSITION_DEC, &pos_dec) == MYACT_OK) {
+                printf("diag position_accel_dps2=%ld position_decel_dps2=%ld\n", (long)pos_acc, (long)pos_dec);
+            }
+            if (myact_pid_read(c, MYACT_PID_POSITION_KP, &pos_kp) == MYACT_OK &&
+                myact_pid_read(c, MYACT_PID_POSITION_KI, &pos_ki) == MYACT_OK &&
+                myact_pid_read(c, MYACT_PID_POSITION_KD, &pos_kd) == MYACT_OK) {
+                printf("diag position_pid kp=%.6f ki=%.6f kd=%.6f\n", (double)pos_kp, (double)pos_ki, (double)pos_kd);
+            }
         }
-
-        printf("[UNSUPPORTED] profile-abs-relative-test: A4 unsupported and A8 fallback disabled\n");
-        rc = MYACT_ETIMEDOUT;
+        rc = MYACT_ENOMOTION;
         goto out;
     }
     if (rc < 0) goto out;
