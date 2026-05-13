@@ -20,6 +20,7 @@ enum {
   MYACT_CMD_STOP = 0x81,
   MYACT_CMD_SPEED = 0xA2,
   MYACT_CMD_POS_ABS = 0xA4,
+  MYACT_CMD_POS_INC = 0xA8,
   MYACT_CMD_BRAKE_RELEASE = 0x77,
   MYACT_CAN_BASE = 0x140,
   TELEMETRY_PERIOD_NS = 20 * 1000 * 1000,
@@ -55,6 +56,8 @@ struct motion_backend {
   int speed_active[STC_AXIS_COUNT];
   int velocity_session_ready[STC_AXIS_COUNT];
   int32_t last_speed_raw_0p01dps[STC_AXIS_COUNT];
+  int native_abs_validated[STC_AXIS_COUNT];
+  int last_abs_via_a8_service[STC_AXIS_COUNT];
 };
 
 static uint64_t now_ms(void) {
@@ -114,6 +117,12 @@ static int32_t local_axis_deg_to_counts(const axis_cfg_t* cfg, double deg) {
   return (int32_t)llround(deg * gr * cpd);
 }
 
+static double local_axis_counts_to_deg(const axis_cfg_t* cfg, int32_t counts) {
+  const double gr = (cfg->gear_ratio > 0.0) ? cfg->gear_ratio : 1.0;
+  const double cpd = (cfg->counts_per_rev != 0) ? ((double)cfg->counts_per_rev / 360.0) : 1.0;
+  return ((double)counts) / (gr * cpd);
+}
+
 static double clamp_range(double v, double lo, double hi) {
   if (v < lo) return lo;
   if (v > hi) return hi;
@@ -141,11 +150,12 @@ static void refresh_feedback_locked(struct motion_backend* b, uint64_t t_ms) {
     size_t axis;
     for (axis = 0; axis < STC_AXIS_COUNT; axis++) if (b->cfg.axis_node_id[axis] == node_id) break;
     if (axis >= STC_AXIS_COUNT) continue;
-    if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS) {
+    if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS || f.data[0] == MYACT_CMD_POS_INC) {
       const int16_t iq_0p01a = (int16_t)((uint16_t)f.data[2] | ((uint16_t)f.data[3] << 8));
       const int16_t speed_dps = (int16_t)((uint16_t)f.data[4] | ((uint16_t)f.data[5] << 8));
       const int16_t angle_deg = (int16_t)((uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8));
       normalize_snapshot_from_feedback(b, axis, iq_0p01a, speed_dps, angle_deg, t_ms);
+      if (f.data[0] == MYACT_CMD_POS_ABS) b->native_abs_validated[axis] = 1;
     }
   }
 }
@@ -197,13 +207,25 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
     }
   } else if (m->kind == AXIS_CMD_POSITION) {
     const double target_deg = clamp_range(m->value, cfg->az_min_deg, cfg->az_max_deg);
-    const int32_t target_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
     const uint16_t speed_dps = (uint16_t)fmax(1.0, fmin(65535.0, max_speed * gr));
-    if (send_myact_cmd(b, node_id, MYACT_CMD_POS_ABS, speed_dps, target_0p01deg) == 0) {
+    int cmd_ok = -1;
+    if (b->native_abs_validated[axis]) {
+      const int32_t target_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
+      cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_ABS, speed_dps, target_0p01deg);
+      if (cmd_ok == 0) b->last_abs_via_a8_service[axis] = 0;
+    } else {
+      const double current_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
+      const double delta_deg = target_deg - current_deg;
+      const int32_t delta_0p01deg = (int32_t)llround(delta_deg * gr * 100.0);
+      cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
+      if (cmd_ok == 0) b->last_abs_via_a8_service[axis] = 1;
+    }
+    if (cmd_ok == 0) {
       b->speed_active[axis] = 0;
       b->snap.mode_display[axis] = 3;
       b->snap.vel_raw[axis] = 0;
-      b->snap.status_word[axis] &= (uint16_t)~(1u << 10);
+      if (b->last_abs_via_a8_service[axis]) b->snap.status_word[axis] |= (uint16_t)(1u << 10);
+      else b->snap.status_word[axis] &= (uint16_t)~(1u << 10);
       b->snap.last_rx_ms[axis] = t_ms;
     }
   } else if (m->kind == AXIS_CMD_STOP) {
@@ -216,7 +238,6 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
 static void refresh_telemetry_locked(struct motion_backend* b, uint64_t t_ms) {
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!b->cfg.axis_node_id[axis]) continue;
-    b->snap.status_word[axis] &= (uint16_t)~(1u << 10);
     b->snap.last_rx_ms[axis] = t_ms;
   }
 }
@@ -287,7 +308,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
   }
   b->snap.can_ok = (b->snap.can_connected_devices > 0);
   b->snap.capabilities.supports_native_a2_speed = 1;
-  b->snap.capabilities.supports_native_absolute_position = 1;
+  b->snap.capabilities.supports_native_absolute_position = 0;
   b->snap.backend_mode = 1;
   b->snap.transport_status = 1;
 

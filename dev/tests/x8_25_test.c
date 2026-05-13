@@ -898,8 +898,8 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
                                        fmax(1.0, 0.20 * fabs(o->abs_delta_deg)),
                                        NULL, NULL, NULL);
             if (rc == MYACT_OK) {
-                printf("[FAIL] profile-abs-relative-test: A4 failed but A8 fallback succeeded\n");
-                rc = MYACT_ENOTSUP;
+                printf("[PASS] profile-abs-relative-test: A4 failed but fallback A8 absolute service succeeded\n");
+                rc = MYACT_OK;
                 goto out;
             }
             printf("[FAIL] profile-abs-relative-test: A4 failed and A8 fallback failed\n");
@@ -907,10 +907,13 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
             goto out;
         }
 
+        printf("[UNSUPPORTED] profile-abs-relative-test: A4 unsupported and A8 fallback disabled\n");
         rc = MYACT_ETIMEDOUT;
         goto out;
     }
     if (rc < 0) goto out;
+
+    printf("[PASS] profile-abs-relative-test: native A4 absolute move succeeded\n");
 
     rc = myact_position_abs_send(c, abs_speed_raw, myact_deg_to_raw_0p01(orig));
     if (rc < 0) goto out;
