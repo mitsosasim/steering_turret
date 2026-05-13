@@ -164,6 +164,18 @@ typedef struct {
     bool experimental_all;
     bool run_mit_in_experimental_all;
     bool allow_hold_with_runmode0;
+    bool commissioning_write_enable;
+    bool write_pid_ram;
+    bool write_pid_rom;
+    bool set_speed_accel_valid;
+    bool set_speed_decel_valid;
+    bool set_position_accel_valid;
+    bool set_position_decel_valid;
+    bool set_speed_kp_valid;
+    bool set_speed_ki_valid;
+    bool set_position_kp_valid;
+    bool set_position_ki_valid;
+    bool set_position_kd_valid;
 
     double min_motion_voltage;
     double smoke_delta_deg;
@@ -218,6 +230,15 @@ typedef struct {
 
     unsigned runmode_timeout_ms;
     unsigned runmode_poll_ms;
+    int set_speed_accel_dps2;
+    int set_speed_decel_dps2;
+    int set_position_accel_dps2;
+    int set_position_decel_dps2;
+    float set_speed_kp;
+    float set_speed_ki;
+    float set_position_kp;
+    float set_position_ki;
+    float set_position_kd;
 } test_opts_t;
 
 static uint64_t now_ms(void* user) {
@@ -347,6 +368,13 @@ static void test_axis_disable(myact_ctx_t* ctx, bool shutdown) {
 
 static void print_usage(const char* p) { fprintf(stderr, "usage: %s <can_if> <node_id> [flags...]\n", p); }
 
+static bool commissioning_set_requested(const test_opts_t* o) {
+    return o->set_speed_accel_valid || o->set_speed_decel_valid ||
+           o->set_position_accel_valid || o->set_position_decel_valid ||
+           o->set_speed_kp_valid || o->set_speed_ki_valid ||
+           o->set_position_kp_valid || o->set_position_ki_valid || o->set_position_kd_valid;
+}
+
 static int parse_cli(int argc, char** argv, test_opts_t* o) {
     int i;
 
@@ -425,6 +453,9 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--bench-all-mit", run_mit_in_experimental_all)
         FLAG("--mit-dry-run", mit_dry_run)
         FLAG("--allow-hold-with-runmode0", allow_hold_with_runmode0)
+        FLAG("--commissioning-write-enable", commissioning_write_enable)
+        FLAG("--write-pid-ram", write_pid_ram)
+        FLAG("--write-pid-rom", write_pid_rom)
 
         if (!strcmp(argv[i], "--speed-step-dps") && i + 1 < argc) o->speed_step_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
@@ -480,11 +511,42 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--inc-speed-dps") && i + 1 < argc) o->inc_speed_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--inc-wait-ms") && i + 1 < argc) o->inc_wait_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--min-motion-voltage") && i + 1 < argc) o->min_motion_voltage = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--set-speed-accel-dps2") && i + 1 < argc) { o->set_speed_accel_dps2 = atoi(argv[++i]); o->set_speed_accel_valid = true; }
+        else if (!strcmp(argv[i], "--set-speed-decel-dps2") && i + 1 < argc) { o->set_speed_decel_dps2 = atoi(argv[++i]); o->set_speed_decel_valid = true; }
+        else if (!strcmp(argv[i], "--set-position-accel-dps2") && i + 1 < argc) { o->set_position_accel_dps2 = atoi(argv[++i]); o->set_position_accel_valid = true; }
+        else if (!strcmp(argv[i], "--set-position-decel-dps2") && i + 1 < argc) { o->set_position_decel_dps2 = atoi(argv[++i]); o->set_position_decel_valid = true; }
+        else if (!strcmp(argv[i], "--set-speed-kp") && i + 1 < argc) { o->set_speed_kp = (float)atof(argv[++i]); o->set_speed_kp_valid = true; }
+        else if (!strcmp(argv[i], "--set-speed-ki") && i + 1 < argc) { o->set_speed_ki = (float)atof(argv[++i]); o->set_speed_ki_valid = true; }
+        else if (!strcmp(argv[i], "--set-position-kp") && i + 1 < argc) { o->set_position_kp = (float)atof(argv[++i]); o->set_position_kp_valid = true; }
+        else if (!strcmp(argv[i], "--set-position-ki") && i + 1 < argc) { o->set_position_ki = (float)atof(argv[++i]); o->set_position_ki_valid = true; }
+        else if (!strcmp(argv[i], "--set-position-kd") && i + 1 < argc) { o->set_position_kd = (float)atof(argv[++i]); o->set_position_kd_valid = true; }
         else return RET_BAD_CLI;
 #undef FLAG
     }
 
+    if (commissioning_set_requested(o) && !o->commissioning_write_enable) {
+        fprintf(stderr, "Refusing commissioning parameter writes: --commissioning-write-enable is required.\n");
+        return RET_BAD_CLI;
+    }
+    if (o->set_speed_accel_valid && (o->set_speed_accel_dps2 < 100 || o->set_speed_accel_dps2 > 60000)) return RET_BAD_CLI;
+    if (o->set_speed_decel_valid && (o->set_speed_decel_dps2 < 100 || o->set_speed_decel_dps2 > 60000)) return RET_BAD_CLI;
+    if (o->set_position_accel_valid && (o->set_position_accel_dps2 < 100 || o->set_position_accel_dps2 > 60000)) return RET_BAD_CLI;
+    if (o->set_position_decel_valid && (o->set_position_decel_dps2 < 100 || o->set_position_decel_dps2 > 60000)) return RET_BAD_CLI;
+    if (o->write_pid_ram && o->write_pid_rom) return RET_BAD_CLI;
+
     return RET_OK;
+}
+
+static int commissioning_write_float(myact_ctx_t* c, const char* label, myact_pid_index_t index, float target, bool write_rom) {
+    float old_v = 0.0f, new_v = 0.0f;
+    int rc = myact_pid_read(c, index, &old_v);
+    if (rc < 0) return rc;
+    rc = write_rom ? myact_pid_write_rom(c, index, target) : myact_pid_write_ram(c, index, target);
+    if (rc < 0) return rc;
+    rc = myact_pid_read(c, index, &new_v);
+    if (rc < 0) return rc;
+    printf("%s old=%.6f new=%.6f\n", label, (double)old_v, (double)new_v);
+    return MYACT_OK;
 }
 
 static int read_full_diagnostics(myact_ctx_t* c, myact_status1_t* s1, int32_t* a) {
@@ -1458,6 +1520,74 @@ static int run_mit_mode_test(myact_ctx_t* c, const test_opts_t* o, myact_status1
     return MYACT_OK;
 }
 
+static int run_commissioning_writes(myact_ctx_t* c, const test_opts_t* o) {
+    myact_status2_t s2;
+    int rc;
+
+    if (!commissioning_set_requested(o)) return MYACT_OK;
+
+    rc = prepare_sync(c);
+    if (rc < 0) return rc;
+    rc = myact_speed_send(c, 0);
+    if (rc < 0) return rc;
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    msleep(100);
+    rc = myact_read_status2(c, &s2);
+    if (rc < 0) return rc;
+    if (abs((int)s2.speed_dps) > 2) {
+        printf("Refusing commissioning write: motor is moving (speed_dps=%d)\n", s2.speed_dps);
+        return MYACT_ESTATE;
+    }
+
+    if (o->set_speed_accel_valid || o->set_speed_decel_valid || o->set_position_accel_valid || o->set_position_decel_valid) {
+        printf("WARNING: 0x43 writes acceleration to RAM and ROM.\n");
+    }
+
+    if (o->set_speed_accel_valid) {
+        int32_t old_v = 0, new_v = 0;
+        rc = myact_accel_read(c, MYACT_ACCEL_SPEED_ACC, &old_v); if (rc < 0) return rc;
+        rc = myact_accel_write_rom(c, MYACT_ACCEL_SPEED_ACC, (uint32_t)o->set_speed_accel_dps2); if (rc < 0) return rc;
+        rc = myact_accel_read(c, MYACT_ACCEL_SPEED_ACC, &new_v); if (rc < 0) return rc;
+        printf("speed_accel_dps2 old=%ld new=%ld\n", (long)old_v, (long)new_v);
+    }
+    if (o->set_speed_decel_valid) {
+        int32_t old_v = 0, new_v = 0;
+        rc = myact_accel_read(c, MYACT_ACCEL_SPEED_DEC, &old_v); if (rc < 0) return rc;
+        rc = myact_accel_write_rom(c, MYACT_ACCEL_SPEED_DEC, (uint32_t)o->set_speed_decel_dps2); if (rc < 0) return rc;
+        rc = myact_accel_read(c, MYACT_ACCEL_SPEED_DEC, &new_v); if (rc < 0) return rc;
+        printf("speed_decel_dps2 old=%ld new=%ld\n", (long)old_v, (long)new_v);
+    }
+    if (o->set_position_accel_valid) {
+        int32_t old_v = 0, new_v = 0;
+        rc = myact_accel_read(c, MYACT_ACCEL_POSITION_ACC, &old_v); if (rc < 0) return rc;
+        rc = myact_accel_write_rom(c, MYACT_ACCEL_POSITION_ACC, (uint32_t)o->set_position_accel_dps2); if (rc < 0) return rc;
+        rc = myact_accel_read(c, MYACT_ACCEL_POSITION_ACC, &new_v); if (rc < 0) return rc;
+        printf("position_accel_dps2 old=%ld new=%ld\n", (long)old_v, (long)new_v);
+    }
+    if (o->set_position_decel_valid) {
+        int32_t old_v = 0, new_v = 0;
+        rc = myact_accel_read(c, MYACT_ACCEL_POSITION_DEC, &old_v); if (rc < 0) return rc;
+        rc = myact_accel_write_rom(c, MYACT_ACCEL_POSITION_DEC, (uint32_t)o->set_position_decel_dps2); if (rc < 0) return rc;
+        rc = myact_accel_read(c, MYACT_ACCEL_POSITION_DEC, &new_v); if (rc < 0) return rc;
+        printf("position_decel_dps2 old=%ld new=%ld\n", (long)old_v, (long)new_v);
+    }
+
+    {
+        bool write_rom = o->write_pid_rom;
+        if (!o->write_pid_ram && !o->write_pid_rom) {
+            printf("PID write target defaulting to RAM (use --write-pid-rom for persistent PID writes).\n");
+        }
+        if (o->set_speed_kp_valid) { rc = commissioning_write_float(c, "speed_kp", MYACT_PID_SPEED_KP, o->set_speed_kp, write_rom); if (rc < 0) return rc; }
+        if (o->set_speed_ki_valid) { rc = commissioning_write_float(c, "speed_ki", MYACT_PID_SPEED_KI, o->set_speed_ki, write_rom); if (rc < 0) return rc; }
+        if (o->set_position_kp_valid) { rc = commissioning_write_float(c, "position_kp", MYACT_PID_POSITION_KP, o->set_position_kp, write_rom); if (rc < 0) return rc; }
+        if (o->set_position_ki_valid) { rc = commissioning_write_float(c, "position_ki", MYACT_PID_POSITION_KI, o->set_position_ki, write_rom); if (rc < 0) return rc; }
+        if (o->set_position_kd_valid) { rc = commissioning_write_float(c, "position_kd", MYACT_PID_POSITION_KD, o->set_position_kd, write_rom); if (rc < 0) return rc; }
+    }
+
+    return MYACT_OK;
+}
+
 int main(int argc, char** argv) {
     sockcan_bus_t bus;
     myact_io_t io;
@@ -1504,6 +1634,8 @@ int main(int argc, char** argv) {
     if (rc < 0) goto done;
 
     rc = read_full_diagnostics(&ctx, &s1, &a);
+    if (rc < 0) goto done;
+    rc = run_commissioning_writes(&ctx, &o);
     if (rc < 0) goto done;
 
     {
