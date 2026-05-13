@@ -8,6 +8,28 @@
 #define MYACT_CANID_SERVICE_ID      0x300u
 #define MYACT_MOTION_CMD_ID_BASE    0x400u
 #define MYACT_MOTION_REPLY_ID_BASE  0x500u
+enum {
+    MYACT_STRICT_TIMEOUT = MYACT_ETIMEDOUT,
+    MYACT_STRICT_BAD_CAN_ID = -101,
+    MYACT_STRICT_WRONG_OPCODE = -102,
+    MYACT_STRICT_MALFORMED_PAYLOAD = -103,
+    MYACT_STRICT_OUT_OF_RANGE_COMMAND = -104
+};
+
+typedef struct {
+    bool has_status1;
+    bool has_basic_fb;
+    bool has_active_reply;
+    bool has_motion_mode;
+} myact_caps_t;
+
+typedef struct {
+    uint64_t ts_ms;
+    uint8_t node_id;
+    uint8_t last_cmd;
+    myact_status1_t status1;
+    myact_basic_feedback_t basic_feedback;
+} myact_state_t;
 
 static void myact_rebuild_ids(myact_ctx_t* ctx) {
     ctx->cmd_id         = MYACT_CMD_ID_BASE + ctx->node_id;
@@ -67,6 +89,13 @@ static int myact_recv_frame(myact_ctx_t* ctx, uint32_t timeout_ms, myact_can_fra
     return ctx->io.recv(out, timeout_ms, ctx->io.user);
 }
 
+static int proto_expect(const myact_can_frame_t* fr, uint8_t opcode, uint8_t min_dlc) {
+    if (!fr) return MYACT_EINVAL;
+    if (fr->dlc < min_dlc) return MYACT_STRICT_MALFORMED_PAYLOAD;
+    if (fr->data[0] != opcode) return MYACT_STRICT_WRONG_OPCODE;
+    return MYACT_OK;
+}
+
 const char* myact_strerror(int rc) {
     switch (rc) {
         case MYACT_OK:        return "OK";
@@ -123,7 +152,9 @@ const myact_cache_t* myact_cache(const myact_ctx_t* ctx) {
 }
 
 static int parse_status1(const myact_can_frame_t* fr, uint64_t ts_ms, myact_status1_t* out) {
-    if (!fr || !out || fr->dlc < 8 || fr->data[0] != MYACT_CMD_STATUS1) return MYACT_EPROTO;
+    int rc = proto_expect(fr, MYACT_CMD_STATUS1, 8);
+    if (!out) return MYACT_EINVAL;
+    if (rc < 0) return rc;
     out->valid = true;
     out->ts_ms = ts_ms;
     out->motor_temp_c = (int8_t)fr->data[1];
@@ -134,7 +165,9 @@ static int parse_status1(const myact_can_frame_t* fr, uint64_t ts_ms, myact_stat
 }
 
 static int parse_status2(const myact_can_frame_t* fr, uint64_t ts_ms, myact_status2_t* out) {
-    if (!fr || !out || fr->dlc < 8 || fr->data[0] != MYACT_CMD_STATUS2) return MYACT_EPROTO;
+    int rc = proto_expect(fr, MYACT_CMD_STATUS2, 8);
+    if (!out) return MYACT_EINVAL;
+    if (rc < 0) return rc;
     out->valid = true;
     out->ts_ms = ts_ms;
     out->motor_temp_c = (int8_t)fr->data[1];
@@ -145,7 +178,9 @@ static int parse_status2(const myact_can_frame_t* fr, uint64_t ts_ms, myact_stat
 }
 
 static int parse_status3(const myact_can_frame_t* fr, uint64_t ts_ms, myact_status3_t* out) {
-    if (!fr || !out || fr->dlc < 8 || fr->data[0] != MYACT_CMD_STATUS3) return MYACT_EPROTO;
+    int rc = proto_expect(fr, MYACT_CMD_STATUS3, 8);
+    if (!out) return MYACT_EINVAL;
+    if (rc < 0) return rc;
     out->valid = true;
     out->ts_ms = ts_ms;
     out->motor_temp_c = (int8_t)fr->data[1];
@@ -174,7 +209,9 @@ static int parse_basic_feedback(const myact_can_frame_t* fr, uint64_t ts_ms, mya
 }
 
 static int parse_singleturn_feedback(const myact_can_frame_t* fr, uint64_t ts_ms, myact_singleturn_feedback_t* out) {
-    if (!fr || !out || fr->dlc < 8 || fr->data[0] != MYACT_CMD_POSITION_SINGLE) return MYACT_EPROTO;
+    int rc = proto_expect(fr, MYACT_CMD_POSITION_SINGLE, 8);
+    if (!out) return MYACT_EINVAL;
+    if (rc < 0) return rc;
     out->valid = true;
     out->ts_ms = ts_ms;
     out->motor_temp_c = (int8_t)fr->data[1];
@@ -185,7 +222,9 @@ static int parse_singleturn_feedback(const myact_can_frame_t* fr, uint64_t ts_ms
 }
 
 static int parse_singleturn_encoder(const myact_can_frame_t* fr, uint64_t ts_ms, myact_singleturn_encoder_t* out) {
-    if (!fr || !out || fr->dlc < 8 || fr->data[0] != MYACT_CMD_READ_ENCODER_SINGLE) return MYACT_EPROTO;
+    int rc = proto_expect(fr, MYACT_CMD_READ_ENCODER_SINGLE, 8);
+    if (!out) return MYACT_EINVAL;
+    if (rc < 0) return rc;
     out->valid = true;
     out->ts_ms = ts_ms;
     out->encoder_pos = rd_u16_le(&fr->data[2]);
@@ -437,7 +476,7 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
     for (;;) {
         uint32_t remain;
         now = myact_now_ms(ctx);
-        if (now - start >= timeout_ms) return MYACT_ETIMEDOUT;
+        if (now - start >= timeout_ms) return MYACT_STRICT_TIMEOUT;
         remain = (uint32_t)(timeout_ms - (now - start));
 
         rc = myact_recv_frame(ctx, remain, &fr);
@@ -455,8 +494,12 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
             return MYACT_ESTATE;
         }
 
-        if (fr.id != reply_id) continue;
-        if (expected_cmd_or_neg1 >= 0 && fr.data[0] != (uint8_t)expected_cmd_or_neg1) continue;
+        if (fr.id != reply_id) {
+            if (fr.id == ctx->reply_id || fr.id == ctx->motion_reply_id) return MYACT_STRICT_BAD_CAN_ID;
+            continue;
+        }
+        if (expected_cmd_or_neg1 >= 0 && fr.data[0] != (uint8_t)expected_cmd_or_neg1) return MYACT_STRICT_WRONG_OPCODE;
+        if (fr.dlc != 8) return MYACT_STRICT_MALFORMED_PAYLOAD;
 
         if (out) *out = fr;
         return MYACT_OK;
@@ -866,7 +909,14 @@ int myact_set_baud_code(myact_ctx_t* ctx, myact_baud_code_t code) {
 
 int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, uint16_t interval_10ms) {
     uint8_t tx[8] = {0};
+    static const uint8_t allowed[] = { 0x60, 0x61, 0x62, 0x92, 0x9A, 0x9C, 0x9D, 0x9E };
+    size_t i;
+    bool supported = false;
     if (!ctx) return MYACT_EINVAL;
+    for (i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
+        if (allowed[i] == reply_cmd) { supported = true; break; }
+    }
+    if (!supported) return MYACT_STRICT_OUT_OF_RANGE_COMMAND;
     tx[0] = MYACT_CMD_ACTIVE_REPLY;
     tx[1] = reply_cmd;
     tx[2] = enable ? 1u : 0u;
