@@ -366,6 +366,10 @@ int myact_motion_command(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp,
 int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a); /* native A1 */
 int myact_system_reset(myact_ctx_t* ctx);
 int myact_read_operating_mode(myact_ctx_t* ctx, myact_runmode_t* out_mode);
+int myact_wait_runmode(myact_ctx_t* ctx,
+                       myact_runmode_t expected,
+                       uint32_t timeout_ms,
+                       uint32_t poll_ms);
 int myact_read_encoder_multi(myact_ctx_t* ctx, int32_t* out_encoder);
 int myact_read_encoder_raw(myact_ctx_t* ctx, int32_t* out_encoder_raw);
 int myact_read_encoder_offset(myact_ctx_t* ctx, int32_t* out_encoder_offset);

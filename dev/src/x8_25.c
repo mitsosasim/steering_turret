@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define MYACT_CMD_ID_BASE           0x140u
 #define MYACT_REPLY_ID_BASE         0x240u
@@ -691,6 +692,42 @@ int myact_read_operating_mode(myact_ctx_t* ctx, myact_runmode_t* out_mode) {
     return MYACT_OK;
 }
 
+
+int myact_wait_runmode(myact_ctx_t* ctx,
+                       myact_runmode_t expected,
+                       uint32_t timeout_ms,
+                       uint32_t poll_ms) {
+    uint64_t now;
+    uint64_t deadline;
+    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
+    int rc;
+
+    if (!ctx) return MYACT_EINVAL;
+    if (poll_ms == 0u) poll_ms = 1u;
+
+    now = myact_now_ms(ctx);
+    deadline = now + (uint64_t)timeout_ms;
+
+    for (;;) {
+        rc = myact_read_operating_mode(ctx, &rm);
+        if (rc < 0) return rc;
+        if (rm == expected) return MYACT_OK;
+
+        now = myact_now_ms(ctx);
+        if (now >= deadline) break;
+
+        {
+            uint64_t remain = deadline - now;
+            uint32_t sleep_ms = (remain < (uint64_t)poll_ms) ? (uint32_t)remain : poll_ms;
+            usleep((useconds_t)sleep_ms * 1000u);
+        }
+    }
+
+    if (rm == MYACT_RUNMODE_UNKNOWN) {
+        printf("command acknowledged but motor did not enter requested closed-loop mode.\n");
+    }
+    return MYACT_ETIMEDOUT;
+}
 int myact_read_runtime(myact_ctx_t* ctx, uint32_t* out_runtime_ms) {
     uint8_t tx[8] = { MYACT_CMD_RUNTIME, 0,0,0,0,0,0,0 };
     myact_can_frame_t rx;
