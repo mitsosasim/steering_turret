@@ -4,92 +4,106 @@ gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
   dev/src/x8_25.c dev/tests/x8_25_test.c \
   -Idev/include -lm -o build/x8_25_test_can
 
-# Diagnostics
+# diag only
 ./build/x8_25_test_can can0 1
 
-# Brake latency
-./build/x8_25_test_can can0 1 --brake-latency-test --force-motion-low-voltage
-
-# Enable and hold
-./build/x8_25_test_can can0 1 --enable-hold --force-motion-low-voltage --no-shutdown-on-exit
-
-# Known-good A8 smoke
+# brake latency
 ./build/x8_25_test_can can0 1 \
-  --raw-motion-smoke \
-  --force-motion-low-voltage \
-  --smoke-delta-deg 10 \
-  --smoke-speed-dps 60 \
-  --smoke-wait-ms 1500
+  --brake-latency-test \
+  --brake-release-timeout-ms 2000 \
+  --brake-poll-ms 50
 
-# Known-good A8 burst
+# enable-hold
+./build/x8_25_test_can can0 1 \
+  --enable-hold \
+  --runmode-timeout-ms 1500 \
+  --runmode-poll-ms 50
+
+# A2 speed
+./build/x8_25_test_can can0 1 \
+  --speed-step-test \
+  --speed-step-dps 60 \
+  --speed-step-hold-ms 1500 \
+  --speed-step-cycles 2 \
+  --speed-sample-ms 100 \
+  --speed-pass-min-dps 5.0 \
+  --speed-pass-min-delta-deg 1.0
+
+# A4 native absolute
+./build/x8_25_test_can can0 1 \
+  --profile-abs-relative-test \
+  --no-a8-fallback \
+  --abs-delta-deg 10 \
+  --abs-speed-dps 60 \
+  --abs-timeout-ms 3000 \
+  --abs-poll-ms 100 \
+  --abs-tolerance-deg 1.0
+
+# A8 relative
 ./build/x8_25_test_can can0 1 \
   --rt-inc-burst \
-  --force-motion-low-voltage \
-  --no-shutdown-on-exit \
   --cycles 2 \
   --inc-delta-deg 10 \
   --inc-speed-dps 60 \
   --inc-wait-ms 1500
 
-# A2 speed
-./build/x8_25_test_can can0 1 \
-  --speed-step-test \
-  --force-motion-low-voltage \
-  --no-shutdown-on-exit \
-  --speed-step-dps 60 \
-  --speed-step-hold-ms 1500 \
-  --speed-step-cycles 2 \
-  --speed-sample-ms 100
-
-# A4 absolute/profile
-./build/x8_25_test_can can0 1 \
-  --profile-abs-relative-test \
-  --force-motion-low-voltage \
-  --no-shutdown-on-exit \
-  --abs-delta-deg 10 \
-  --abs-speed-dps 60 \
-  --abs-tolerance-deg 1.0 \
-  --abs-timeout-ms 3000 \
-  --abs-poll-ms 100
-
-# A1 torque
+# torque mode
 ./build/x8_25_test_can can0 1 \
   --torque-step-test \
-  --force-motion-low-voltage \
-  --no-motion-countdown \
-  --no-shutdown-on-exit \
   --torque-step-a 0.30 \
   --torque-step-hold-ms 500 \
   --torque-step-cycles 1 \
-  --torque-sample-ms 100
+  --torque-sample-ms 100 \
+  --torque-pass-min-iq-a 0.10 \
+  --torque-pass-min-delta-deg 0.5
 
-# Active telemetry
-./build/x8_25_test_can can0 1 \
-  --active-telemetry-rt-test \
-  --force-motion-low-voltage \
-  --no-shutdown-on-exit \
-  --active-interval-ms 50 \
-  --active-duration-ms 3000 \
-  --active-move-delta-deg 10 \
-  --active-move-speed-dps 60
-
-# MIT dry run
+# MIT dry
 ./build/x8_25_test_can can0 1 \
   --mit-mode-test \
   --mit-dry-run \
-  --force-motion-low-voltage
+  --mit-duration-ms 1000 \
+  --mit-sample-ms 50
 
-# Production qualification suite (default acceptance path)
+# MIT live
 ./build/x8_25_test_can can0 1 \
-  --production-qual \
-  --force-motion-low-voltage \
-  --no-shutdown-on-exit
+  --mit-mode-test \
+  --mit-p-rad 0.10 \
+  --mit-v-rad-s 0.00 \
+  --mit-kp 5.00 \
+  --mit-kd 0.50 \
+  --mit-t-nm 0.20 \
+  --mit-duration-ms 1000 \
+  --mit-sample-ms 50
 
-# Experimental matrix (A2/A4/torque/MIT kept separate)
+# active telemetry stream
 ./build/x8_25_test_can can0 1 \
-  --experimental-all \
-  --force-motion-low-voltage \
-  --no-shutdown-on-exit
+  --active-telemetry-rt-test \
+  --active-interval-ms 50 \
+  --active-duration-ms 3000 \
+  --active-move-delta-deg 10 \
+  --active-move-speed-dps 60 \
+  --active-min-frame-ratio 0.70
+
+# combined run (single-file coverage path)
+./build/x8_25_test_can can0 1 \
+  --brake-latency-test \
+  --enable-hold \
+  --speed-step-test \
+  --profile-abs-relative-test \
+  --rt-inc-burst \
+  --torque-step-test \
+  --mit-mode-test \
+  --mit-dry-run \
+  --active-telemetry-rt-test \
+  --speed-step-dps 60 \
+  --abs-delta-deg 10 \
+  --inc-delta-deg 10 \
+  --torque-step-a 0.30 \
+  --abs-timeout-ms 3000 \
+  --active-interval-ms 50 \
+  --runmode-timeout-ms 1500 \
+  --speed-pass-min-dps 5.0 \
+  --abs-tolerance-deg 1.0
 */
 
 #include "x8_25.h"
@@ -419,6 +433,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--active-move-delta-deg") && i + 1 < argc) o->active_move_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--active-move-speed-dps") && i + 1 < argc) o->active_move_speed_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--active-min-frame-ratio") && i + 1 < argc) o->active_min_frame_ratio = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--brake-release-timeout-ms") && i + 1 < argc) o->brake_release_timeout_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--brake-poll-ms") && i + 1 < argc) o->brake_poll_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--runmode-timeout-ms") && i + 1 < argc) o->runmode_timeout_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--runmode-poll-ms") && i + 1 < argc) o->runmode_poll_ms = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--smoke-delta-deg") && i + 1 < argc) o->smoke_delta_deg = atof(argv[++i]);
@@ -606,8 +622,13 @@ static int bench_result(const char* n, int rc) {
         printf("[SKIP] %s: reason already printed\n", n);
         return RET_OK;
     }
+    if (rc == MYACT_ENOTSUP) {
+        printf("[ENOTSUP] %s: %s (%d)\n", n, myact_strerror(rc), rc);
+        return RET_OK;
+    }
     if (rc == MYACT_ENOMOTION && (!strcmp(n, "speed-step-test") || !strcmp(n, "speed-stream-test") || !strcmp(n, "torque-step-test"))) {
-        printf("[UNSUPPORTED/FAIL-DIAG] A2/A1 mode diagnostic: %s\n", n);
+        printf("[ACK_NO_MOTION] %s: command ACK observed but actuator produced no measurable motion\n", n);
+        printf("[ENOMOTION] %s: %s (%d)\n", n, myact_strerror(rc), rc);
         return RET_OK;
     }
 
