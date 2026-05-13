@@ -123,47 +123,12 @@ typedef enum {
 } myact_command_t;
 
 typedef enum {
-    MYACT_PID_CURRENT_KP  = 0x01,
-    MYACT_PID_CURRENT_KI  = 0x02,
-    MYACT_PID_SPEED_KP    = 0x04,
-    MYACT_PID_SPEED_KI    = 0x05,
-    MYACT_PID_POSITION_KP = 0x07,
-    MYACT_PID_POSITION_KI = 0x08,
-    MYACT_PID_POSITION_KD = 0x09
-} myact_pid_index_t;
-
-typedef enum {
-    MYACT_ACCEL_POSITION_ACC = 0x00,
-    MYACT_ACCEL_POSITION_DEC = 0x01,
-    MYACT_ACCEL_SPEED_ACC    = 0x02,
-    MYACT_ACCEL_SPEED_DEC    = 0x03
-} myact_accel_index_t;
-
-typedef enum {
     MYACT_RUNMODE_IDLE_OR_OFF = 0,
     MYACT_RUNMODE_UNKNOWN  = 0,
     MYACT_RUNMODE_CURRENT  = 1,
     MYACT_RUNMODE_SPEED    = 2,
     MYACT_RUNMODE_POSITION = 3
 } myact_runmode_t;
-
-typedef enum {
-    MYACT_BAUD_CODE_0 = 0, /* RS485 115200, CAN 500k */
-    MYACT_BAUD_CODE_1 = 1, /* RS485 500k,   CAN 1M   */
-    MYACT_BAUD_CODE_2 = 2, /* RS485 1M      */
-    MYACT_BAUD_CODE_3 = 3, /* RS485 1.5M    */
-    MYACT_BAUD_CODE_4 = 4  /* RS485 2.5M    */
-} myact_baud_code_t;
-
-typedef enum {
-    MYACT_FUNC_CLEAR_MULTI_TURN            = 0x01,
-    MYACT_FUNC_CANID_FILTER_ENABLE         = 0x02,
-    MYACT_FUNC_ERROR_TX_ENABLE             = 0x03,
-    MYACT_FUNC_SAVE_MULTI_TURN_ON_POWEROFF = 0x04,
-    MYACT_FUNC_SET_CANID                   = 0x05,
-    MYACT_FUNC_SET_POSITIVE_LIMIT          = 0x06,
-    MYACT_FUNC_SET_NEGATIVE_LIMIT          = 0x07
-} myact_function_index_t;
 
 typedef enum {
     MYACT_EVENT_NONE            = 0,
