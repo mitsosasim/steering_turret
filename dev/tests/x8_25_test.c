@@ -31,8 +31,7 @@ gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
 
 # A4 native absolute
 ./build/x8_25_test_can can0 1 \
-  --profile-abs-relative-test \
-  --no-a8-fallback \
+  --native-a4-abs-test \
   --abs-delta-deg 10 \
   --abs-speed-dps 60 \
   --abs-timeout-ms 3000 \
@@ -89,7 +88,7 @@ gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
   --brake-latency-test \
   --enable-hold \
   --speed-step-test \
-  --profile-abs-relative-test \
+  --native-a4-abs-test \
   --rt-inc-burst \
   --torque-step-test \
   --mit-mode-test \
@@ -156,8 +155,7 @@ typedef struct {
     bool speed_stream_test;
     bool torque_step_test;
     bool torque_sweep_test;
-    bool profile_abs_relative_test;
-    bool no_a8_fallback;
+    bool native_a4_abs_test;
     bool mit_mode_test;
     bool active_telemetry_rt_test;
     bool production_qual;
@@ -443,8 +441,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--speed-stream-test", speed_stream_test)
         FLAG("--torque-step-test", torque_step_test)
         FLAG("--torque-sweep-test", torque_sweep_test)
-        FLAG("--profile-abs-relative-test", profile_abs_relative_test)
-        FLAG("--no-a8-fallback", no_a8_fallback)
+        FLAG("--native-a4-abs-test", native_a4_abs_test)
         FLAG("--mit-mode-test", mit_mode_test)
         FLAG("--active-telemetry-rt-test", active_telemetry_rt_test)
         FLAG("--production-qual", production_qual)
@@ -666,24 +663,6 @@ static int sample_status2_capture(myact_ctx_t* c, const char* tag, uint64_t t0, 
            (unsigned long long)(now_ms(NULL) - t0), tag,
            out->iq_0p01a / 100.0, out->speed_dps, out->angle_deg, out->motor_temp_c);
     return MYACT_OK;
-}
-
-static int wait_until_angle_near(myact_ctx_t* c, double tgt, double tol, unsigned to, unsigned p, const char* tag) {
-    uint64_t s = now_ms(NULL);
-    for (;;) {
-        double a;
-        double e;
-        int rc = read_angle_deg(c, &a);
-        if (rc < 0) return rc;
-
-        e = tgt - a;
-        printf("t_ms=%llu tag=%s target_deg=%.2f actual_deg=%.2f error_deg=%.2f\n",
-               (unsigned long long)(now_ms(NULL) - s), tag, tgt, a, e);
-
-        if (fabs(e) <= tol) return MYACT_OK;
-        if (now_ms(NULL) - s >= to) return MYACT_ETIMEDOUT;
-        msleep(p);
-    }
 }
 
 static int send_stop_and_sample(myact_ctx_t* c, const char* n) {
@@ -1063,24 +1042,34 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     return MYACT_ENOMOTION;
 }
 
-static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     double orig;
-    double target_plus;
-    double final_a4 = 0.0;
+    double target_abs;
+    double final_abs = 0.0;
+    double max_abs_iq_a = 0.0;
+    double max_abs_speed_dps = 0.0;
     int32_t target_raw;
+    int32_t pos_acc = 0, pos_dec = 0;
+    float pos_kp = 0.0f, pos_ki = 0.0f, pos_kd = 0.0f;
     uint16_t abs_speed_raw;
     uint8_t a4_frame[8] = {0};
     int rc;
     myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
+    myact_motion_commissioning_snapshot_t snap;
+    int snap_rc;
+    uint64_t t0;
 
-    rc = axis_enable_for_motion(c, o, s1, "profile-abs-relative-test");
+    rc = prepare_sync(c);
+    if (rc < 0) return rc;
+
+    rc = axis_enable_for_motion(c, o, s1, "native-a4-abs-test");
     if (rc < 0) return rc;
 
     rc = read_angle_deg(c, &orig);
     if (rc < 0) return rc;
 
-    target_plus = o->abs_delta_deg;
-    target_raw = myact_deg_to_raw_0p01(target_plus);
+    target_abs = orig + o->abs_delta_deg;
+    target_raw = myact_deg_to_raw_0p01(target_abs);
     abs_speed_raw = (uint16_t)o->abs_speed_dps;
     a4_frame[0] = 0xA4;
     a4_frame[1] = 0x00;
@@ -1091,92 +1080,74 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
     a4_frame[6] = (uint8_t)((target_raw >> 16) & 0xFF);
     a4_frame[7] = (uint8_t)((target_raw >> 24) & 0xFF);
 
-    printf("profile-abs-relative-test: original=%.2f target_abs=%.2f return=%.2f speed=%.1f\n",
-           orig, target_plus, orig, o->abs_speed_dps);
-    myact_motion_commissioning_snapshot_t snap;
-    int snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
+    snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
+    (void)myact_accel_read(c, MYACT_ACCEL_POSITION_ACC, &pos_acc);
+    (void)myact_accel_read(c, MYACT_ACCEL_POSITION_DEC, &pos_dec);
+    (void)myact_pid_read(c, MYACT_PID_POSITION_KP, &pos_kp);
+    (void)myact_pid_read(c, MYACT_PID_POSITION_KI, &pos_ki);
+    (void)myact_pid_read(c, MYACT_PID_POSITION_KD, &pos_kd);
 
-    printf("profile-abs-relative-test: target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-           target_plus, (long)target_raw, (unsigned)abs_speed_raw,
+    printf("native-a4-abs-test: target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+           target_abs, (long)target_raw, (unsigned)abs_speed_raw,
            a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
-
-    print_motion_commissioning_snapshot("profile-abs-relative-test", snap_rc, &snap);
+    print_motion_commissioning_snapshot("native-a4-abs-test", snap_rc, &snap);
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
     rc = myact_wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms);
     if (rc < 0) {
         (void)myact_read_operating_mode(c, &rm);
-        printf("[RUNMODE_FAIL] profile-abs-relative-test: runmode did not enter 0x03 after A4, last=%u entered_0x03=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_POSITION ? "yes" : "no");
+        printf("[RUNMODE_FAIL] native-a4-abs-test: runmode did not enter 0x03 after A4, last=%u entered_0x03=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_POSITION ? "yes" : "no");
         rc = MYACT_ESTATE;
         goto out;
     }
 
-    rc = wait_until_angle_near(c, target_plus, o->abs_tolerance_deg,
-                               o->abs_timeout_ms, o->abs_poll_ms, "abs+");
-    if (rc == MYACT_ETIMEDOUT) {
+    t0 = now_ms(NULL);
+    for (;;) {
+        myact_status2_t s2;
         double err;
-        myact_status1_t diag_s1;
-        myact_status2_t diag_s2;
+        rc = read_angle_deg(c, &final_abs);
+        if (rc < 0) goto out;
+        err = target_abs - final_abs;
+        printf("t_ms=%llu tag=abs target_deg=%.2f actual_deg=%.2f error_deg=%.2f\n",
+               (unsigned long long)(now_ms(NULL) - t0), target_abs, final_abs, err);
 
-        (void)read_angle_deg(c, &final_a4);
-        err = target_plus - final_a4;
-        printf("profile-abs-relative-test: A4 timeout\n");
-        printf("diag classification: protocol/frame ACKed, then runmode/parameter/configuration/voltage/brake/measured-motion investigation required\n");
-        printf("profile-abs-relative-test: A4 command acknowledged? yes\n");
-        printf("profile-abs-relative-test: A4 frame = %02X %02X %02X %02X %02X %02X %02X %02X\n",
-               a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3],
-               a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
-        printf("profile-abs-relative-test: A4 original=%.2f target=%.2f final=%.2f error=%.2f\n",
-               orig, target_plus, final_a4, err);
-        if (myact_read_status1(c, &diag_s1) == MYACT_OK) {
-            printf("profile-abs-relative-test: status1 brake=%u bus=%.1fV error=0x%04X\n",
-                   (unsigned)diag_s1.brake_release_command_state,
-                   diag_s1.voltage_0p1v / 10.0,
-                   diag_s1.error_flags);
-        }
-        if (myact_read_status2(c, &diag_s2) == MYACT_OK) {
-            printf("profile-abs-relative-test: status2 iq=%.2f speed=%d angle=%d\n",
-                   diag_s2.iq_0p01a / 100.0,
-                   (int)diag_s2.speed_dps,
-                   (int)diag_s2.angle_deg);
+        if (myact_read_status2(c, &s2) == MYACT_OK) {
+            double iq = fabs(s2.iq_0p01a / 100.0);
+            double spd = fabs((double)s2.speed_dps);
+            if (iq > max_abs_iq_a) max_abs_iq_a = iq;
+            if (spd > max_abs_speed_dps) max_abs_speed_dps = spd;
+            printf("t_ms=%llu tag=abs-9C iq_A=%.2f speed_dps=%d angle_deg=%d\n",
+                   (unsigned long long)(now_ms(NULL) - t0), s2.iq_0p01a / 100.0, s2.speed_dps, s2.angle_deg);
         }
 
-        {
-            int32_t pos_acc = 0, pos_dec = 0;
-            float pos_kp = 0.0f, pos_ki = 0.0f, pos_kd = 0.0f;
-            myact_read_operating_mode(c, &rm);
-            printf("A4_ACK_NO_MOTION\n");
-            printf("diag runmode=%u\n", (unsigned)rm);
-            if (myact_read_status1(c, &diag_s1) == MYACT_OK) {
-                printf("diag status1 error_flags=0x%04X\n", diag_s1.error_flags);
-            }
-            if (myact_read_status2(c, &diag_s2) == MYACT_OK) {
-                printf("diag status2 iq_A=%.2f speed_dps=%d\n", diag_s2.iq_0p01a / 100.0, (int)diag_s2.speed_dps);
-            }
-            if (myact_accel_read(c, MYACT_ACCEL_POSITION_ACC, &pos_acc) == MYACT_OK &&
-                myact_accel_read(c, MYACT_ACCEL_POSITION_DEC, &pos_dec) == MYACT_OK) {
-                printf("diag position_accel_dps2=%ld position_decel_dps2=%ld\n", (long)pos_acc, (long)pos_dec);
-            }
-            if (myact_pid_read(c, MYACT_PID_POSITION_KP, &pos_kp) == MYACT_OK &&
-                myact_pid_read(c, MYACT_PID_POSITION_KI, &pos_ki) == MYACT_OK &&
-                myact_pid_read(c, MYACT_PID_POSITION_KD, &pos_kd) == MYACT_OK) {
-                printf("diag position_pid kp=%.6f ki=%.6f kd=%.6f\n", (double)pos_kp, (double)pos_ki, (double)pos_kd);
-            }
+        if (fabs(err) <= o->abs_tolerance_deg) break;
+        if (now_ms(NULL) - t0 >= o->abs_timeout_ms) {
+            myact_status1_t diag_s1;
+            memset(&diag_s1, 0, sizeof(diag_s1));
+            (void)myact_read_status1(c, &diag_s1);
+            (void)myact_read_operating_mode(c, &rm);
+            printf("native-a4-abs-test: A4 timeout\n");
+            printf("native-a4-abs-test: original_abs_deg=%.2f target_abs_deg=%.2f final_abs_deg=%.2f error_deg=%.2f\n",
+                   orig, target_abs, final_abs, target_abs - final_abs);
+            printf("native-a4-abs-test: A4 frame bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                   a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
+            printf("native-a4-abs-test: runmode=%u status1 error_flags=0x%04X brake=%u bus=%.1fV\n",
+                   (unsigned)rm, diag_s1.error_flags, (unsigned)diag_s1.brake_release_command_state, diag_s1.voltage_0p1v / 10.0);
+            printf("native-a4-abs-test: max_abs_iq_A=%.2f max_abs_speed_dps=%.1f\n", max_abs_iq_a, max_abs_speed_dps);
+            printf("native-a4-abs-test: position PID kp=%.6f ki=%.6f kd=%.6f\n", (double)pos_kp, (double)pos_ki, (double)pos_kd);
+            printf("native-a4-abs-test: position accel/decel dps2=%ld/%ld\n", (long)pos_acc, (long)pos_dec);
+            printf("diag likely_issue: check runmode, PID tuning/zero, accel/decel limits, bus voltage, current limit, position limits, or motor error flags\n");
+            rc = MYACT_ENOMOTION;
+            goto out;
         }
-        rc = MYACT_ENOMOTION;
-        goto out;
+        msleep(o->abs_poll_ms);
     }
-    if (rc < 0) goto out;
 
-    printf("[PASS] profile-abs-relative-test: native A4 absolute move succeeded\n");
-
-    rc = myact_position_abs_send(c, abs_speed_raw, myact_deg_to_raw_0p01(orig));
-    if (rc < 0) goto out;
-
-    rc = wait_until_angle_near(c, orig, o->abs_tolerance_deg,
-                               o->abs_timeout_ms, o->abs_poll_ms, "abs-ret");
+    printf("[PASS] native-a4-abs-test: native A4 absolute move succeeded\n");
+    rc = MYACT_OK;
 out:
-    (void)send_stop_and_sample(c, "profile-abs-relative-test");
+    (void)myact_stop_send(c);
+    (void)send_stop_and_sample(c, "native-a4-abs-test");
     return rc;
 }
 
@@ -1713,7 +1684,7 @@ int main(int argc, char** argv) {
     {
         bool any_test_requested = o.raw_motion_smoke || o.raw_motion_smoke_sendonly || o.enable_hold ||
                                   o.brake_latency_test || o.brake_persistence_test || o.rt_inc_burst ||
-                                  o.speed_step_test || o.speed_stream_test || o.torque_step_test || o.torque_sweep_test || o.profile_abs_relative_test ||
+                                  o.speed_step_test || o.speed_stream_test || o.torque_step_test || o.torque_sweep_test || o.native_a4_abs_test ||
                                   o.mit_mode_test || o.active_telemetry_rt_test || o.production_qual || o.experimental_all;
         bool any_dispatched = false;
 
@@ -1761,7 +1732,7 @@ int main(int argc, char** argv) {
                 required_pass = false;
             }
 
-            b = bench_result("profile-position-correctness", run_profile_abs_relative_test(&ctx, &o, &s1));
+            b = bench_result("profile-position-correctness", run_native_a4_abs_test(&ctx, &o, &s1));
             if (b != RET_OK) {
                 ret = RET_COMMS_FAIL;
                 required_pass = false;
@@ -1810,7 +1781,7 @@ int main(int argc, char** argv) {
             printf("[PASS] diagnostics\n");
             b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1));
             if (b != RET_OK) ret = RET_COMMS_FAIL;
-            b = bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1));
+            b = bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1));
             if (b != RET_OK) ret = RET_COMMS_FAIL;
             b = bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1));
             if (b != RET_OK) ret = RET_COMMS_FAIL;
@@ -1829,7 +1800,7 @@ int main(int argc, char** argv) {
             if (o.rt_inc_burst) { any_dispatched = true; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.speed_step_test) { any_dispatched = true; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.speed_stream_test) { any_dispatched = true; if (bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.profile_abs_relative_test) { any_dispatched = true; if (bench_result("profile-abs-relative-test", run_profile_abs_relative_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.native_a4_abs_test) { any_dispatched = true; if (bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.active_telemetry_rt_test) { any_dispatched = true; if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.torque_step_test || o.torque_sweep_test) { any_dispatched = true; if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.mit_mode_test) { any_dispatched = true; if (bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
