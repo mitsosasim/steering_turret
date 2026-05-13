@@ -590,6 +590,8 @@ static int read_full_diagnostics(myact_ctx_t* c, myact_status1_t* s1, int32_t* a
 
 static int check_motion_voltage_or_skip(const test_opts_t* o, const myact_status1_t* s1, const char* n) {
     double v = s1->voltage_0p1v / 10.0;
+    bool low_voltage_condition = v < 40.0;
+    bool is_small_forced_test = !strcmp(n, "speed-step-test") || !strcmp(n, "native-a4-abs-test");
 
     if (v < o->min_motion_voltage && !o->force_motion_low_voltage) {
         printf("%s: SKIP bus voltage %.1f V below configured minimum %.1f V\n", n, v, o->min_motion_voltage);
@@ -598,6 +600,19 @@ static int check_motion_voltage_or_skip(const test_opts_t* o, const myact_status
     if (v < o->min_motion_voltage) {
         printf("WARNING: low-voltage motion forced at %.1f V; use rated supply for real torque/speed characterization.\n", v);
         printf("rated voltage is 48 V-class; current bench voltage is low.\n");
+    }
+    if (low_voltage_condition) {
+        if (o->force_motion_low_voltage) {
+            printf("LOW_VOLTAGE_CONDITION: protocol can be tested, but torque/speed performance is not valid.\n");
+            printf("LOW_VOLTAGE_CONDITION: repeat native A2/A4 validation at rated 48 V before final capability decision.\n");
+            if (!is_small_forced_test) {
+                printf("%s: SKIP under low voltage forced mode; only small A2/A4 validation tests are allowed below 40.0 V\n", n);
+                return MYACT_ESTATE;
+            }
+        } else {
+            printf("%s: SKIP bus voltage %.1f V is below 40.0 V low-voltage protocol-only threshold (use --force-motion-low-voltage for limited tests)\n", n, v);
+            return MYACT_ESTATE;
+        }
     }
     return MYACT_OK;
 }
@@ -714,8 +729,13 @@ static int bench_result(const char* n, int rc) {
         printf("[ENOTSUP] %s: %s (%d)\n", n, myact_strerror(rc), rc);
         return RET_OK;
     }
-    if (rc == MYACT_ENOMOTION && (!strcmp(n, "speed-step-test") || !strcmp(n, "speed-stream-test") || !strcmp(n, "torque-step-test"))) {
+    if (rc == MYACT_ENOMOTION && (!strcmp(n, "speed-step-test") || !strcmp(n, "speed-stream-test") || !strcmp(n, "torque-step-test") || !strcmp(n, "native-a4-abs-test"))) {
         printf("[ACK_NO_MOTION] %s: command ACK observed but actuator produced no measurable motion\n", n);
+        if (!strcmp(n, "speed-step-test") || !strcmp(n, "native-a4-abs-test")) {
+            printf("classification hint: protocol/frame failure vs runmode failure vs no-motion-under-low-voltage vs parameter/configuration suspect\n");
+            printf("note: do not permanently mark A2/A4 unsupported based only on 22.7 V tests.\n");
+            printf("recommendation: repeat native A2/A4 validation at rated 48 V before final capability decision.\n");
+        }
         printf("[ENOMOTION] %s: %s (%d)\n", n, myact_strerror(rc), rc);
         return RET_OK;
     }
@@ -754,6 +774,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     myact_motion_commissioning_snapshot_t snap;
     int snap_rc;
     bool runmode_entered = false;
+    bool low_voltage_condition = false;
     bool pos_sign_ok = false;
     bool neg_sign_ok = false;
     bool must_stop = false;
@@ -789,6 +810,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 
     rc = check_motion_voltage_or_skip(o, s1, "speed-step-test");
     if (rc < 0) return rc;
+    low_voltage_condition = (s1->voltage_0p1v / 10.0) < 40.0;
 
     rc = read_angle_deg(c, &angle_before);
     if (rc < 0) return rc;
@@ -805,7 +827,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         rc = myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
         if (rc < 0) {
             (void)myact_read_operating_mode(c, &rm);
-            printf("[A2_MODE_NOT_ENTERED] speed-step-test: A2 ACKed but runmode did not enter 0x02 after +command, last=%u\n", (unsigned)rm);
+            printf("[RUNMODE_FAILURE] speed-step-test: A2 ACKed but runmode did not enter 0x02 after +command, last=%u\n", (unsigned)rm);
             ret = MYACT_ESTATE;
             goto cleanup;
         }
@@ -838,7 +860,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         rc = myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
         if (rc < 0) {
             (void)myact_read_operating_mode(c, &rm);
-            printf("[A2_MODE_NOT_ENTERED] speed-step-test: A2 ACKed but runmode did not enter 0x02 after -command, last=%u\n", (unsigned)rm);
+            printf("[RUNMODE_FAILURE] speed-step-test: A2 ACKed but runmode did not enter 0x02 after -command, last=%u\n", (unsigned)rm);
             ret = MYACT_ESTATE;
             goto cleanup;
         }
@@ -873,7 +895,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     printf("  runmode_entered_0x02=%d error_flags=0x%04X\n", runmode_entered ? 1 : 0, s1->error_flags);
 
     if (!runmode_entered) {
-        printf("[A2_MODE_NOT_ENTERED] speed-step-test: runmode 0x02 was never observed\n");
+        printf("[RUNMODE_FAILURE] speed-step-test: runmode 0x02 was never observed\n");
         ret = MYACT_ESTATE;
         goto cleanup;
     }
@@ -887,8 +909,12 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     }
 
     if (max_abs_speed_dps < o->speed_pass_min_dps) {
-        if (runmode_entered) {
-            printf("[A2_CLOSED_LOOP_NO_TORQUE_OR_CONFIG_LIMIT] speed-step-test: runmode=0x02 but measured speed stayed below threshold\n");
+        if (runmode_entered && low_voltage_condition) {
+            printf("[NO_MOTION_UNDER_LOW_VOLTAGE] speed-step-test: protocol/runmode observed, but low-voltage bench produced insufficient motion\n");
+            printf("classification: no-motion-under-low-voltage\n");
+        } else if (runmode_entered) {
+            printf("[PARAMETER_OR_CONFIGURATION_SUSPECT] speed-step-test: runmode=0x02 but measured speed stayed below threshold\n");
+            printf("classification: parameter/configuration suspect\n");
         }
         if (max_abs_iq_a < o->torque_pass_min_iq_a) {
             printf("Hint: current remained very low (max_abs_iq_A=%.2f). Check max torque/current limit and speed PID/acceleration.\n", max_abs_iq_a);
@@ -1122,7 +1148,8 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     rc = myact_wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms);
     if (rc < 0) {
         (void)myact_read_operating_mode(c, &rm);
-        printf("[RUNMODE_FAIL] native-a4-abs-test: runmode did not enter 0x03 after A4, last=%u entered_0x03=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_POSITION ? "yes" : "no");
+        printf("[RUNMODE_FAILURE] native-a4-abs-test: runmode did not enter 0x03 after A4, last=%u entered_0x03=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_POSITION ? "yes" : "no");
+        printf("classification: runmode failure\n");
         rc = MYACT_ESTATE;
         goto out;
     }
@@ -1159,6 +1186,11 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
                    a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
             printf("native-a4-abs-test: runmode=%u status1 error_flags=0x%04X brake=%u bus=%.1fV\n",
                    (unsigned)rm, diag_s1.error_flags, (unsigned)diag_s1.brake_release_command_state, diag_s1.voltage_0p1v / 10.0);
+            if ((diag_s1.voltage_0p1v / 10.0) < 40.0) {
+                printf("classification: no-motion-under-low-voltage\n");
+            } else {
+                printf("classification: parameter/configuration suspect\n");
+            }
             printf("native-a4-abs-test: max_abs_iq_A=%.2f max_abs_speed_dps=%.1f\n", max_abs_iq_a, max_abs_speed_dps);
             printf("native-a4-abs-test: position PID kp=%.6f ki=%.6f kd=%.6f\n", (double)pos_kp, (double)pos_ki, (double)pos_kd);
             printf("native-a4-abs-test: position accel/decel dps2=%ld/%ld\n", (long)pos_acc, (long)pos_dec);
