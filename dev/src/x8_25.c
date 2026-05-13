@@ -543,6 +543,7 @@ int myact_pid_read(myact_ctx_t* ctx, myact_pid_index_t index, float* out_value) 
     return MYACT_OK;
 }
 
+#ifdef STC_ENABLE_COMMISSIONING
 static int pid_write_common(myact_ctx_t* ctx, uint8_t cmd, myact_pid_index_t index, float value) {
     uint8_t tx[8] = { 0 };
     uint32_t raw;
@@ -581,6 +582,8 @@ int myact_accel_write_rom(myact_ctx_t* ctx, myact_accel_index_t index, uint32_t 
 }
 
 /* reads */
+
+#endif /* STC_ENABLE_COMMISSIONING */
 
 int myact_read_encoder_multi(myact_ctx_t* ctx, int32_t* out_encoder) {
     uint8_t tx[8] = { MYACT_CMD_READ_ENCODER_MULTI, 0,0,0,0,0,0,0 };

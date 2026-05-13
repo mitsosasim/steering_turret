@@ -341,6 +341,11 @@ Run:
 ./build/x8_25_test_can can0 1
 ```
 
+
+Commissioning-only persistent configuration APIs (zeroing, PID/accel persistent writes, CAN-ID and vendor/communication protection writes) are intentionally **not** declared in `dev/include/x8_25.h`.
+
+For bench/service tooling, include `dev/include/x8_25_commissioning.h` and compile with `-DSTC_ENABLE_COMMISSIONING` to export those entry points from `dev/src/x8_25.c`.
+
 Monitor live CAN traffic with `candump` (separate terminal):
 
 ```bash
