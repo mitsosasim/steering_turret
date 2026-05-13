@@ -229,6 +229,40 @@ static uint64_t now_ms(void* user) {
 
 static void msleep(unsigned ms) { usleep(ms * 1000u); }
 
+static bool pid_near_zero(float a, float b, float c) {
+    return fabs((double)a) < 1e-6 && fabs((double)b) < 1e-6 && fabs((double)c) < 1e-6;
+}
+
+static void print_motion_commissioning_snapshot(const char* tag,
+                                                int rc,
+                                                const myact_motion_commissioning_snapshot_t* snap) {
+    if (rc < 0 || !snap) {
+        printf("%s: PARAM_READ_FAILED rc=%d (%s)\n", tag, rc, myact_strerror(rc));
+        return;
+    }
+
+    printf("%s: commissioning snapshot\n", tag);
+    printf("  speed_pid kp=%.6f ki=%.6f\n", (double)snap->speed_kp, (double)snap->speed_ki);
+    printf("  position_pid kp=%.6f ki=%.6f kd=%.6f\n", (double)snap->position_kp, (double)snap->position_ki, (double)snap->position_kd);
+    printf("  accel pos_acc=%ld pos_dec=%ld speed_acc=%ld speed_dec=%ld dps2\n",
+           (long)snap->pos_acc_dps2, (long)snap->pos_dec_dps2, (long)snap->speed_acc_dps2, (long)snap->speed_dec_dps2);
+    printf("  status1 brake=%u bus=%.1fV error=0x%04X runmode=%u\n",
+           (unsigned)snap->status1.brake_release_command_state,
+           snap->status1.voltage_0p1v / 10.0,
+           snap->status1.error_flags,
+           (unsigned)snap->runmode);
+    if (fabs((double)snap->speed_kp) < 1e-6 && fabs((double)snap->speed_ki) < 1e-6) {
+        printf("WARN: speed loop PID appears zero; native A2 may ACK but produce no torque.\n");
+    }
+    if (pid_near_zero(snap->position_kp, snap->position_ki, snap->position_kd)) {
+        printf("WARN: position loop PID appears zero; native A4 may ACK but produce no torque.\n");
+    }
+    if (snap->pos_acc_dps2 == 0 || snap->pos_dec_dps2 == 0 || snap->speed_acc_dps2 == 0 || snap->speed_dec_dps2 == 0) {
+        printf("INFO: zero acceleration means direct/current-limited behavior, not necessarily a command-frame error.\n");
+    }
+}
+
+
 static int sockcan_send_cb(const myact_can_frame_t* fr, void* user) {
     sockcan_bus_t* b = (sockcan_bus_t*)user;
     struct can_frame c = {0};
@@ -668,9 +702,13 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     myact_status2_t s2;
     myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
 
+    myact_motion_commissioning_snapshot_t snap;
+    int snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
+
     printf("speed-step-test: A2 speed mode, %+0.1f dps / %0.1f dps, hold=%u ms, cycles=%u\n",
            o->speed_step_dps, -o->speed_step_dps, o->speed_step_hold_ms, o->speed_step_cycles);
 
+    print_motion_commissioning_snapshot("speed-step-test", snap_rc, &snap);
     rc = axis_enable_for_motion(c, o, s1, "speed-step-test");
     if (rc < 0) return rc;
 
@@ -744,6 +782,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 
     if (acked) {
         printf("[FAIL] speed-step-test: command acknowledged but no observed speed/motion\n");
+        printf("diag classification: measured-motion related or parameter/configuration; see commissioning snapshot above\n");
     }
     return MYACT_ENOMOTION;
 }
@@ -902,10 +941,14 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
 
     printf("profile-abs-relative-test: original=%.2f target_abs=%.2f return=%.2f speed=%.1f\n",
            orig, target_plus, orig, o->abs_speed_dps);
+    myact_motion_commissioning_snapshot_t snap;
+    int snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
+
     printf("profile-abs-relative-test: target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
            target_plus, (long)target_raw, (unsigned)abs_speed_raw,
            a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
 
+    print_motion_commissioning_snapshot("profile-abs-relative-test", snap_rc, &snap);
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
     rc = wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
@@ -925,6 +968,7 @@ static int run_profile_abs_relative_test(myact_ctx_t* c, const test_opts_t* o, m
         (void)read_angle_deg(c, &final_a4);
         err = target_plus - final_a4;
         printf("profile-abs-relative-test: A4 timeout\n");
+        printf("diag classification: protocol/frame ACKed, then runmode/parameter/configuration/voltage/brake/measured-motion investigation required\n");
         printf("profile-abs-relative-test: A4 command acknowledged? yes\n");
         printf("profile-abs-relative-test: A4 frame = %02X %02X %02X %02X %02X %02X %02X %02X\n",
                a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3],
