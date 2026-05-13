@@ -196,8 +196,13 @@ class DiagnosticsWindow : public QMainWindow {
     connectTimer_->setInterval(1000);
     connect(connectTimer_, &QTimer::timeout, this, &DiagnosticsWindow::ensureTcpConnected);
 
+    diagPollTimer_ = new QTimer(this);
+    diagPollTimer_->setInterval(1000);
+    connect(diagPollTimer_, &QTimer::timeout, this, &DiagnosticsWindow::refreshBackendDiagnostics);
+
     bindTelemetrySockets();
     connectTimer_->start();
+    diagPollTimer_->start();
 
     simTimer_ = new QTimer(this);
     simTimer_->setInterval(20);
@@ -942,6 +947,34 @@ class DiagnosticsWindow : public QMainWindow {
     }
   }
 
+
+  void refreshBackendDiagnostics() {
+    QTcpSocket sock;
+    sock.connectToHost(QHostAddress::LocalHost, 7003);
+    if (!sock.waitForConnected(120)) return;
+    if (!sock.waitForReadyRead(120)) return;
+    const QString body = QString::fromUtf8(sock.readAll());
+
+    auto extractInt = [&body](const QString &key, int fallback) {
+      const QRegularExpression rx(QString("\"%1\":(\\d+)").arg(QRegularExpression::escape(key)));
+      const QRegularExpressionMatch m = rx.match(body);
+      return m.hasMatch() ? m.captured(1).toInt() : fallback;
+    };
+
+    const int mode = extractInt("mode", -1);
+    const int transport = extractInt("transport_status", -1);
+    const int capA2 = extractInt("native_a2_speed", -1);
+    const int capAbs = extractInt("native_absolute_position", -1);
+
+    const QString modeText = (mode == 0) ? "profile-position/speed translation" : (mode == 1 ? "native-speed capable path" : "unknown");
+    const QString transportText = (transport == 1) ? "CAN transport online" : (transport == 0 ? "transport offline" : "transport unknown");
+    backendModeLabel_->setText(QString("Backend mode: %1 (code %2)").arg(modeText).arg(mode));
+    pathLabel_->setText(QString("Transport: %1 | Capabilities: native A2 speed=%2, native absolute position=%3")
+                          .arg(transportText)
+                          .arg(capA2 == 1 ? "yes" : (capA2 == 0 ? "no" : "unknown"))
+                          .arg(capAbs == 1 ? "yes" : (capAbs == 0 ? "no" : "unknown")));
+  }
+
   void runCapabilityStartupCheck() {
     if (startupCapabilityCheckDone_) return;
     startupCapabilityCheckDone_ = true;
@@ -1377,6 +1410,7 @@ class DiagnosticsWindow : public QMainWindow {
   QUdpSocket *udpLow_{};
   QTimer *simTimer_{};
   QTimer *connectTimer_{};
+  QTimer *diagPollTimer_{};
 
   QComboBox *serverIpBox_{};
   QSpinBox *portSpin_{};
