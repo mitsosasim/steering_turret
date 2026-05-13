@@ -713,6 +713,39 @@ int myact_read_version_date(myact_ctx_t* ctx, uint32_t* out_yyyymmdd) {
     return MYACT_OK;
 }
 
+int myact_read_motion_commissioning_snapshot(myact_ctx_t* ctx,
+                                             myact_motion_commissioning_snapshot_t* out) {
+    int rc;
+    if (!ctx || !out) return MYACT_EINVAL;
+    memset(out, 0, sizeof(*out));
+
+    rc = myact_pid_read(ctx, MYACT_PID_SPEED_KP, &out->speed_kp);
+    if (rc < 0) return rc;
+    rc = myact_pid_read(ctx, MYACT_PID_SPEED_KI, &out->speed_ki);
+    if (rc < 0) return rc;
+    rc = myact_pid_read(ctx, MYACT_PID_POSITION_KP, &out->position_kp);
+    if (rc < 0) return rc;
+    rc = myact_pid_read(ctx, MYACT_PID_POSITION_KI, &out->position_ki);
+    if (rc < 0) return rc;
+    rc = myact_pid_read(ctx, MYACT_PID_POSITION_KD, &out->position_kd);
+    if (rc < 0) return rc;
+
+    rc = myact_accel_read(ctx, MYACT_ACCEL_POSITION_ACC, &out->pos_acc_dps2);
+    if (rc < 0) return rc;
+    rc = myact_accel_read(ctx, MYACT_ACCEL_POSITION_DEC, &out->pos_dec_dps2);
+    if (rc < 0) return rc;
+    rc = myact_accel_read(ctx, MYACT_ACCEL_SPEED_ACC, &out->speed_acc_dps2);
+    if (rc < 0) return rc;
+    rc = myact_accel_read(ctx, MYACT_ACCEL_SPEED_DEC, &out->speed_dec_dps2);
+    if (rc < 0) return rc;
+
+    rc = myact_read_status1(ctx, &out->status1);
+    if (rc < 0) return rc;
+    rc = myact_read_operating_mode(ctx, &out->runmode);
+    if (rc < 0) return rc;
+    return MYACT_OK;
+}
+
 int myact_read_model(myact_ctx_t* ctx, char out_ascii7[8]) {
     uint8_t tx[8] = { MYACT_CMD_MODEL, 0,0,0,0,0,0,0 };
     myact_can_frame_t rx;

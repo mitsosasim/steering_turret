@@ -240,6 +240,20 @@ typedef struct {
 } myact_motion_feedback_t;
 
 typedef struct {
+    float speed_kp;
+    float speed_ki;
+    float position_kp;
+    float position_ki;
+    float position_kd;
+    int32_t pos_acc_dps2;
+    int32_t pos_dec_dps2;
+    int32_t speed_acc_dps2;
+    int32_t speed_dec_dps2;
+    myact_status1_t status1;
+    myact_runmode_t runmode;
+} myact_motion_commissioning_snapshot_t;
+
+typedef struct {
     myact_status1_t             status1;
     myact_status2_t             status2;
     myact_status3_t             status3;
@@ -332,6 +346,8 @@ int myact_read_angle_single(myact_ctx_t* ctx, uint16_t* out_angle_0p01deg);
 int myact_read_runtime(myact_ctx_t* ctx, uint32_t* out_runtime_ms);
 int myact_read_version_date(myact_ctx_t* ctx, uint32_t* out_yyyymmdd);
 int myact_read_model(myact_ctx_t* ctx, char out_ascii7[8]);
+int myact_read_motion_commissioning_snapshot(myact_ctx_t* ctx,
+                                             myact_motion_commissioning_snapshot_t* out);
 
 /* telemetry + runtime moves */
 int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, uint16_t interval_10ms);
