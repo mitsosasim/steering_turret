@@ -336,7 +336,8 @@ int myact_read_model(myact_ctx_t* ctx, char out_ascii7[8]);
 /* telemetry + runtime moves */
 int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, uint16_t interval_10ms);
 int myact_disable_all_active_replies(myact_ctx_t* ctx);
-int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps); /* native A2 */
+int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps); /* native A2 raw: 0.01 dps/LSB */
+int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps); /* native A2 wrapper: dps -> raw */
 int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t* out); /* native A2 */
 int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg); /* native A4 */
 int myact_position_abs(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg, myact_basic_feedback_t* out); /* native A4 */

@@ -780,7 +780,25 @@ int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps) {
     uint8_t tx[8] = { MYACT_CMD_SPEED, 0,0,0,0,0,0,0 };
     if (!ctx) return MYACT_EINVAL;
     wr_u32_le(&tx[4], (uint32_t)speed_0p01dps);
+    if (ctx->log_fn) {
+        char msg[180];
+        (void)snprintf(msg, sizeof(msg),
+                       "A2 tx speed_dps=%.2f raw_0p01dps=%ld frame=%02X %02X %02X %02X %02X %02X %02X %02X",
+                       ((double)speed_0p01dps) / 100.0,
+                       (long)speed_0p01dps,
+                       tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7]);
+        ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
+    }
     return myact_send_frame(ctx, ctx->cmd_id, tx);
+}
+
+int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps) {
+    double raw_f;
+    if (!ctx) return MYACT_EINVAL;
+    if (!isfinite(speed_dps)) return MYACT_ERANGE;
+    raw_f = round(speed_dps * 100.0);
+    if (raw_f < (double)INT32_MIN || raw_f > (double)INT32_MAX) return MYACT_ERANGE;
+    return myact_speed_send(ctx, (int32_t)raw_f);
 }
 
 int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg) {
@@ -842,6 +860,15 @@ int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t*
     if (!ctx) return MYACT_EINVAL;
     if (!out) out = &tmp;
     wr_u32_le(&tx[4], (uint32_t)speed_0p01dps);
+    if (ctx->log_fn) {
+        char msg[180];
+        (void)snprintf(msg, sizeof(msg),
+                       "A2 txrx speed_dps=%.2f raw_0p01dps=%ld frame=%02X %02X %02X %02X %02X %02X %02X %02X",
+                       ((double)speed_0p01dps) / 100.0,
+                       (long)speed_0p01dps,
+                       tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7]);
+        ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
+    }
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_SPEED, &rx);
     if (rc < 0) return rc;
     return parse_basic_feedback(&rx, myact_now_ms(ctx), out);

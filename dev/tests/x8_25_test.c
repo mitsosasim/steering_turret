@@ -590,7 +590,10 @@ static int wait_until_angle_near(myact_ctx_t* c, double tgt, double tol, unsigne
 }
 
 static int send_stop_and_sample(myact_ctx_t* c, const char* n) {
-    int rc = myact_stop_send(c);
+    int rc = myact_speed_send(c, 0);
+    if (rc < 0) return rc;
+    msleep(50);
+    rc = myact_stop_send(c);
     if (rc < 0) return rc;
 
     msleep(100);
@@ -645,6 +648,11 @@ static int run_a8_delta_observed(myact_ctx_t* c,
                                  double* out_before,
                                  double* out_after,
                                  double* out_delta);
+static int wait_runmode(myact_ctx_t* ctx,
+                        myact_runmode_t expected,
+                        unsigned timeout_ms,
+                        unsigned poll_ms,
+                        myact_runmode_t* out_last);
 
 static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     uint64_t t0;
@@ -653,8 +661,11 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     double delta_deg;
     double max_abs_speed_dps = 0.0;
     bool acked = false;
+    bool sign_match_pos = false;
+    bool sign_match_neg = false;
     int rc;
     myact_status2_t s2;
+    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
 
     printf("speed-step-test: A2 speed mode, %+0.1f dps / %0.1f dps, hold=%u ms, cycles=%u\n",
            o->speed_step_dps, -o->speed_step_dps, o->speed_step_hold_ms, o->speed_step_cycles);
@@ -667,14 +678,20 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 
     for (unsigned i = 0; i < o->speed_step_cycles; i++) {
         printf("speed-step-test cycle %u: sending A2 +speed\n", i + 1);
-        rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps));
+        rc = myact_speed_dps_send(c, o->speed_step_dps);
         if (rc < 0) return rc;
         acked = true;
+        rc = wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
+        if (rc < 0) {
+            printf("[RUNMODE_FAIL] speed-step-test: runmode did not enter 0x02 after +A2, last=%u\n", (unsigned)rm);
+            return MYACT_ESTATE;
+        }
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
             rc = sample_status2_capture(c, "speed+", t0, &s2);
             if (rc < 0) return rc;
+            if (s2.speed_dps > 0) sign_match_pos = true;
             if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
                 max_abs_speed_dps = fabs((double)s2.speed_dps);
             }
@@ -682,14 +699,20 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         }
 
         printf("speed-step-test cycle %u: sending A2 -speed\n", i + 1);
-        rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps));
+        rc = myact_speed_dps_send(c, -o->speed_step_dps);
         if (rc < 0) return rc;
         acked = true;
+        rc = wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms, &rm);
+        if (rc < 0) {
+            printf("[RUNMODE_FAIL] speed-step-test: runmode did not stay at 0x02 after -A2, last=%u\n", (unsigned)rm);
+            return MYACT_ESTATE;
+        }
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
             rc = sample_status2_capture(c, "speed-", t0, &s2);
             if (rc < 0) return rc;
+            if (s2.speed_dps < 0) sign_match_neg = true;
             if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
                 max_abs_speed_dps = fabs((double)s2.speed_dps);
             }
@@ -707,11 +730,14 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     printf("speed-step-test summary:\n");
     printf("  requested_dps=%.1f\n", o->speed_step_dps);
     printf("  max_abs_speed_dps=%.1f\n", max_abs_speed_dps);
+    printf("  sign_match_pos=%d sign_match_neg=%d\n", sign_match_pos ? 1 : 0, sign_match_neg ? 1 : 0);
     printf("  angle_before=%.2f\n", angle_before);
     printf("  angle_after=%.2f\n", angle_after);
     printf("  delta_deg=%.2f\n", delta_deg);
 
-    if (max_abs_speed_dps >= o->speed_pass_min_dps || fabs(delta_deg) >= o->speed_pass_min_delta_deg) {
+    if (sign_match_pos && sign_match_neg &&
+        max_abs_speed_dps >= o->speed_pass_min_dps &&
+        fabs(delta_deg) >= o->speed_pass_min_delta_deg) {
         return MYACT_OK;
     }
 
