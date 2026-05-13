@@ -246,6 +246,10 @@ typedef struct shared_data {
   uint8_t can_discovered_nodes[16];
   uint8_t can_connected_devices;
   uint8_t can_discovered_devices;
+  uint8_t backend_mode;
+  uint8_t transport_status;
+  uint8_t supports_native_a2_speed;
+  uint8_t supports_native_absolute_position;
   uint16_t can_bitrate_kbps;
   uint16_t can_restart_ms;
   uint8_t can_scan_max_node;
@@ -980,6 +984,10 @@ static void* can_worker_thread(void* arg) {
       a->sh->d.can_ok = snap.can_ok;
       a->sh->d.can_connected_devices = snap.can_connected_devices;
       a->sh->d.can_discovered_devices = snap.can_discovered_devices;
+      a->sh->d.backend_mode = snap.backend_mode;
+      a->sh->d.transport_status = snap.transport_status;
+      a->sh->d.supports_native_a2_speed = snap.capabilities.supports_native_a2_speed;
+      a->sh->d.supports_native_absolute_position = snap.capabilities.supports_native_absolute_position;
       memcpy(a->sh->d.can_discovered_nodes, snap.can_discovered_nodes, sizeof(a->sh->d.can_discovered_nodes));
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
         a->sh->d.axis_available[axis] = snap.axis_available[axis];
@@ -1460,13 +1468,17 @@ static void* diag_server_thread(void* arg) {
     tx_timing_stats_t l = darg->sh->d.tlml_timing;
     cmd_timing_stats_t c = darg->sh->d.cmd_timing;
     uint64_t qpeak = darg->sh->d.action_queue_depth_peak;
+    uint8_t backend_mode = darg->sh->d.backend_mode;
+    uint8_t transport_status = darg->sh->d.transport_status;
+    uint8_t supports_a2_speed = darg->sh->d.supports_native_a2_speed;
+    uint8_t supports_absolute = darg->sh->d.supports_native_absolute_position;
     pthread_mutex_unlock(&darg->sh->mtx);
 
     int n = snprintf(out, sizeof(out),
                      "{\"tlmh\":{\"samples\":%llu,\"deadline_miss\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
                      "\"tlml\":{\"samples\":%llu,\"deadline_miss\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
                      "\"command_path\":{\"samples\":%llu,\"tcp_recv_ns\":%llu,\"action_queued_ns\":%llu,\"exec_start_ns\":%llu,\"tcp_to_queue_avg_ns\":%llu,\"queue_to_exec_avg_ns\":%llu,\"end_to_end_avg_ns\":%llu},"
-                     "\"queue_depth_peak\":%llu}\n",
+                     "\"queue_depth_peak\":%llu,\"backend\":{\"mode\":%u,\"transport_status\":%u,\"capabilities\":{\"native_a2_speed\":%u,\"native_absolute_position\":%u}}}\n",
                      (unsigned long long)h.sample_count,
                      (unsigned long long)h.deadline_miss_count,
                      (unsigned long long)h.expected_wake_ns,
@@ -1490,7 +1502,11 @@ static void* diag_server_thread(void* arg) {
                      (unsigned long long)c.tcp_to_queue_avg_ns,
                      (unsigned long long)c.queue_to_exec_avg_ns,
                      (unsigned long long)c.end_to_end_avg_ns,
-                     (unsigned long long)qpeak);
+                     (unsigned long long)qpeak,
+                     (unsigned)backend_mode,
+                     (unsigned)transport_status,
+                     (unsigned)supports_a2_speed,
+                     (unsigned)supports_absolute);
     if (n > 0) (void)send_all(cfd, (const uint8_t*)out, (size_t)n);
     close(cfd);
   }
