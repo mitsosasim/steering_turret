@@ -273,6 +273,10 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
     b->snap.can_connected_devices++;
   }
   b->snap.can_ok = (b->snap.can_connected_devices > 0);
+  b->snap.capabilities.supports_native_a2_speed = 1;
+  b->snap.capabilities.supports_native_absolute_position = 1;
+  b->snap.backend_mode = 1;
+  b->snap.transport_status = 1;
 
   b->running = 1;
   if (pthread_create(&b->worker, NULL, backend_loop, b) != 0) {

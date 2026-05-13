@@ -12,6 +12,11 @@ extern "C" {
 typedef struct motion_backend motion_backend_t;
 
 typedef struct {
+  uint8_t supports_native_a2_speed;
+  uint8_t supports_native_absolute_position;
+} motion_backend_capabilities_t;
+
+typedef struct {
   const char* can_if;
   char backend[32];
   uint8_t primary_node_id;
@@ -37,6 +42,9 @@ typedef struct {
 } motion_backend_cfg_t;
 
 typedef struct {
+  uint8_t backend_mode;      /* diagnostic only */
+  uint8_t transport_status;  /* diagnostic only */
+  motion_backend_capabilities_t capabilities;
   int can_ok;
   uint8_t axis_available[STC_AXIS_COUNT];
   uint8_t can_discovered_nodes[16];

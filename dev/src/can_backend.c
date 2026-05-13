@@ -65,6 +65,10 @@ static int compute_can_ok(const struct motion_backend* b) {
 static void refresh_can_status(struct motion_backend* b) {
   if (!b) return;
   b->snap.can_ok = compute_can_ok(b);
+  b->snap.capabilities.supports_native_a2_speed = 0;
+  b->snap.capabilities.supports_native_absolute_position = 0;
+  b->snap.backend_mode = 2;
+  b->snap.transport_status = 1;
 }
 
 static int node_in_discovery_list(const motion_snapshot_t* snap, uint8_t node_id) {

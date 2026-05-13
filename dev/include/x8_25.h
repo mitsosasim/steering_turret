@@ -343,6 +343,7 @@ int myact_stop_send(myact_ctx_t* ctx);
 int myact_shutdown(myact_ctx_t* ctx);
 int myact_stop(myact_ctx_t* ctx);
 int myact_brake_release(myact_ctx_t* ctx);
+int myact_fault_clear(myact_ctx_t* ctx);
 
 /* read identity / status / basic feedback / angle */
 int myact_read_status1(myact_ctx_t* ctx, myact_status1_t* out);
@@ -359,8 +360,12 @@ int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, 
 int myact_disable_all_active_replies(myact_ctx_t* ctx);
 int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps); /* native A2 */
 int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t* out); /* native A2 */
+int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg); /* native A4 */
+int myact_position_abs(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg, myact_basic_feedback_t* out); /* native A4 */
 int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg); /* A8 */
 int myact_position_inc(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg, myact_basic_feedback_t* out); /* A8 */
+int myact_motion_send(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm); /* MIT */
+int myact_motion_command(myact_ctx_t* ctx, float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, myact_motion_feedback_t* out); /* MIT */
 
 /* unit helpers */
 int16_t  myact_current_a_to_raw(double amps);

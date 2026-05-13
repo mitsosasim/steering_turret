@@ -113,6 +113,10 @@ int sim_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
     b->snap.status_word[axis] = 0x1237u;
   }
   b->snap.can_ok = 1;
+  b->snap.capabilities.supports_native_a2_speed = 1;
+  b->snap.capabilities.supports_native_absolute_position = 1;
+  b->snap.backend_mode = 3;
+  b->snap.transport_status = 1;
   b->snap.can_connected_devices = STC_AXIS_COUNT;
   b->running.store(true);
   b->integrator = std::thread(integrator_loop, b);
