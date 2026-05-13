@@ -485,6 +485,7 @@ int myact_send_raw_motion(myact_ctx_t* ctx, const uint8_t data[8]) {
 
 /* PID / accel */
 
+/* Commissioning/private API: intentionally not declared in the public header. */
 int myact_pid_read(myact_ctx_t* ctx, myact_pid_index_t index, float* out_value) {
     uint8_t tx[8] = { MYACT_CMD_READ_PID, (uint8_t)index, 0, 0, 0, 0, 0, 0 };
     myact_can_frame_t rx;
