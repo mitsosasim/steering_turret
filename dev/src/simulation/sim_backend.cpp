@@ -98,7 +98,7 @@ static void integrator_loop(motion_backend* b) {
 
 extern "C" {
 
-int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
+int sim_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
   if (!cfg || !out_backend) return -1;
   motion_backend* b = new motion_backend();
   b->cfg = *cfg;
@@ -120,7 +120,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   return 0;
 }
 
-void motion_backend_stop(motion_backend_t* backend) {
+void sim_motion_backend_stop(motion_backend_t* backend) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b) return;
   b->running.store(false);
@@ -128,7 +128,7 @@ void motion_backend_stop(motion_backend_t* backend) {
   delete b;
 }
 
-int motion_backend_discover(motion_backend_t* backend) {
+int sim_motion_backend_discover(motion_backend_t* backend) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b) return -1;
   std::lock_guard<std::mutex> lock(b->mtx);
@@ -137,7 +137,7 @@ int motion_backend_discover(motion_backend_t* backend) {
   return STC_AXIS_COUNT;
 }
 
-int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
+int sim_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !targets_deg) return -1;
   std::lock_guard<std::mutex> lock(b->mtx);
@@ -152,7 +152,7 @@ int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, 
   return 0;
 }
 
-int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]) {
+int sim_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !speeds_deg_s) return -1;
   const uint64_t t_ms = now_ms();
@@ -170,7 +170,7 @@ int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, co
   return 0;
 }
 
-int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
+int sim_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b) return -1;
   std::lock_guard<std::mutex> lock(b->mtx);
@@ -188,7 +188,7 @@ int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
 }
 
 
-int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
+int sim_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b) return -1;
   std::lock_guard<std::mutex> lock(b->mtx);
@@ -199,7 +199,7 @@ int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   return 0;
 }
 
-int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
+int sim_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b) return -1;
   std::lock_guard<std::mutex> lock(b->mtx);
@@ -208,7 +208,7 @@ int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_
   return 0;
 }
 
-int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
+int sim_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !snapshot) return -1;
   std::lock_guard<std::mutex> lock(b->mtx);

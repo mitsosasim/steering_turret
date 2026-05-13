@@ -180,7 +180,7 @@ static void* backend_loop(void* arg) {
   return NULL;
 }
 
-int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
+int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
   if (!cfg || !out_backend) return -1;
 
   struct motion_backend* b = (struct motion_backend*)calloc(1, sizeof(*b));
@@ -214,7 +214,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   return 0;
 }
 
-void motion_backend_stop(motion_backend_t* backend) {
+void myact_motion_backend_stop(motion_backend_t* backend) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return;
 
@@ -228,7 +228,7 @@ void motion_backend_stop(motion_backend_t* backend) {
   free(b);
 }
 
-int motion_backend_discover(motion_backend_t* backend) {
+int myact_motion_backend_discover(motion_backend_t* backend) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
 
@@ -241,7 +241,7 @@ int motion_backend_discover(motion_backend_t* backend) {
   return discovered;
 }
 
-int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
+int myact_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !targets_deg) return -1;
 
@@ -255,7 +255,7 @@ int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, 
   return 0;
 }
 
-int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]) {
+int myact_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !speeds_deg_s) return -1;
 
@@ -271,7 +271,7 @@ int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, co
   return 0;
 }
 
-int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
+int myact_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
 
@@ -284,18 +284,18 @@ int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   return 0;
 }
 
-int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
+int myact_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   (void)axes_mask;
   return backend ? 0 : -1;
 }
 
-int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
+int myact_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
   (void)laser_id;
   (void)on_off;
   return backend ? 0 : -1;
 }
 
-int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
+int myact_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !snapshot) return -1;
 

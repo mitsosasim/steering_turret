@@ -901,6 +901,18 @@ typedef struct {
   int can_bitrate;
   int can_restart_ms;
   int can_scan_max_node;
+  const char* backend_name;
+  int primary_node_id;
+  int primary_tx_id;
+  int primary_rx_id;
+  int primary_motion_tx_id;
+  int primary_motion_rx_id;
+  double travel_min_deg;
+  double travel_max_deg;
+  double profile_max_speed_deg_s;
+  double profile_max_accel_deg_s2;
+  int telemetry_interval_ms;
+  int experimental_native_speed_mode;
   shared_t* sh;
   actionq_t* q;
 } can_worker_arg_t;
@@ -919,6 +931,18 @@ static void* can_worker_thread(void* arg) {
   motion_backend_cfg_t backend_cfg;
   memset(&backend_cfg, 0, sizeof(backend_cfg));
   backend_cfg.can_if = a->can_if;
+  snprintf(backend_cfg.backend, sizeof(backend_cfg.backend), "%s", a->backend_name);
+  backend_cfg.primary_node_id = (uint8_t)a->primary_node_id;
+  backend_cfg.primary_tx_id = (uint32_t)a->primary_tx_id;
+  backend_cfg.primary_rx_id = (uint32_t)a->primary_rx_id;
+  backend_cfg.primary_motion_tx_id = (uint32_t)a->primary_motion_tx_id;
+  backend_cfg.primary_motion_rx_id = (uint32_t)a->primary_motion_rx_id;
+  backend_cfg.travel_min_deg = a->travel_min_deg;
+  backend_cfg.travel_max_deg = a->travel_max_deg;
+  backend_cfg.profile_max_speed_deg_s = a->profile_max_speed_deg_s;
+  backend_cfg.profile_max_accel_deg_s2 = a->profile_max_accel_deg_s2;
+  backend_cfg.telemetry_interval_ms = a->telemetry_interval_ms;
+  backend_cfg.experimental_native_speed_mode = a->experimental_native_speed_mode;
   backend_cfg.can_bitrate = a->can_bitrate;
   backend_cfg.can_restart_ms = a->can_restart_ms;
   backend_cfg.can_scan_max_node = a->can_scan_max_node;
@@ -2110,6 +2134,7 @@ int main(int argc, char** argv) {
     net.sched.tlmh_tx_priority = parsed_cfg.tlmh_tx_priority;
     net.sched.tlml_tx_priority = parsed_cfg.tlml_tx_priority;
     net.can_scan_max_node = parsed_cfg.can_scan_max_node;
+    net.can_if = parsed_cfg.can_if;
     net.can_timeout_ms = (parsed_cfg.can_timeout_ms > 0) ? (uint32_t)parsed_cfg.can_timeout_ms : 0;
     sh.d.can_timeout_ms = net.can_timeout_ms;
     sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
@@ -2167,7 +2192,7 @@ int main(int argc, char** argv) {
   actionq_init(&q);
 
   // CAN worker thread
-  can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .sh = &sh, .q = &q };
+  can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .backend_name = parsed_cfg.backend, .primary_node_id = parsed_cfg.primary_node_id, .primary_tx_id = parsed_cfg.primary_tx_id, .primary_rx_id = parsed_cfg.primary_rx_id, .primary_motion_tx_id = parsed_cfg.primary_motion_tx_id, .primary_motion_rx_id = parsed_cfg.primary_motion_rx_id, .travel_min_deg = parsed_cfg.travel_min_deg, .travel_max_deg = parsed_cfg.travel_max_deg, .profile_max_speed_deg_s = parsed_cfg.profile_max_speed_deg_s, .profile_max_accel_deg_s2 = parsed_cfg.profile_max_accel_deg_s2, .telemetry_interval_ms = parsed_cfg.telemetry_interval_ms, .experimental_native_speed_mode = parsed_cfg.experimental_native_speed_mode, .sh = &sh, .q = &q };
   if (create_thread_with_sched(&th_can,
                                "can_worker_thread",
                                can_worker_thread,

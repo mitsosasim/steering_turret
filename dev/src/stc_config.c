@@ -89,6 +89,16 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   memset(cfg, 0, sizeof(*cfg));
 
   cfg->tcp_port = 7000;
+  snprintf(cfg->backend, sizeof(cfg->backend), "%s", "simulator");
+  snprintf(cfg->can_if, sizeof(cfg->can_if), "%s", "can0");
+  cfg->primary_node_id = 1;
+  cfg->primary_tx_id = 0x141; cfg->primary_rx_id = 0x241;
+  cfg->primary_motion_tx_id = 0x401; cfg->primary_motion_rx_id = 0x501;
+  cfg->travel_min_deg = -140.0; cfg->travel_max_deg = 140.0;
+  cfg->profile_max_speed_deg_s = 45.0; cfg->profile_max_accel_deg_s2 = 180.0;
+  cfg->watchdog_timeout_ms = 250;
+  cfg->telemetry_interval_ms = 10;
+  cfg->experimental_native_speed_mode = 0;
   snprintf(cfg->tlm_dest_ip, sizeof(cfg->tlm_dest_ip), "%s", "127.0.0.1");
   cfg->tlmh_port = 6010;
   cfg->tlml_port = 6020;
@@ -229,6 +239,27 @@ bool load_config(const char* path, stc_config_t* cfg) {
       parse_key[key_len] = '\0';
     }
     parse_error_reason = "invalid value";
+
+    if (strcmp(section, "Backend") == 0) {
+      bool recognized = true;
+      if (strcmp(key, "backend") == 0) { if (strlen(value) >= sizeof(cfg->backend)) goto parse_error; strcpy(cfg->backend, value); }
+      else if (strcmp(key, "can_if") == 0) { if (strlen(value) >= sizeof(cfg->can_if)) goto parse_error; strcpy(cfg->can_if, value); }
+      else if (strcmp(key, "node_id") == 0) { if (parse_int(value, &cfg->primary_node_id) != 0) goto parse_error; }
+      else if (strcmp(key, "tx_id") == 0) { if (parse_int(value, &cfg->primary_tx_id) != 0) goto parse_error; }
+      else if (strcmp(key, "rx_id") == 0) { if (parse_int(value, &cfg->primary_rx_id) != 0) goto parse_error; }
+      else if (strcmp(key, "motion_tx_id") == 0) { if (parse_int(value, &cfg->primary_motion_tx_id) != 0) goto parse_error; }
+      else if (strcmp(key, "motion_rx_id") == 0) { if (parse_int(value, &cfg->primary_motion_rx_id) != 0) goto parse_error; }
+      else if (strcmp(key, "travel_min_deg") == 0) { if (parse_double(value, &cfg->travel_min_deg) != 0) goto parse_error; }
+      else if (strcmp(key, "travel_max_deg") == 0) { if (parse_double(value, &cfg->travel_max_deg) != 0) goto parse_error; }
+      else if (strcmp(key, "profile_max_speed_deg_s") == 0) { if (parse_double(value, &cfg->profile_max_speed_deg_s) != 0) goto parse_error; }
+      else if (strcmp(key, "profile_max_accel_deg_s2") == 0) { if (parse_double(value, &cfg->profile_max_accel_deg_s2) != 0) goto parse_error; }
+      else if (strcmp(key, "watchdog_timeout_ms") == 0) { if (parse_int(value, &cfg->watchdog_timeout_ms) != 0) goto parse_error; }
+      else if (strcmp(key, "telemetry_interval_ms") == 0) { if (parse_int(value, &cfg->telemetry_interval_ms) != 0) goto parse_error; }
+      else if (strcmp(key, "experimental_native_speed_mode") == 0) { if (parse_int(value, &cfg->experimental_native_speed_mode) != 0) goto parse_error; }
+      else recognized = false;
+      if (!recognized) { parse_error_reason = "unknown key"; goto parse_error; }
+      continue;
+    }
 
     if (strcmp(section, "Network") == 0) {
       bool recognized = true;

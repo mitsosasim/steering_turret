@@ -13,6 +13,18 @@ typedef struct motion_backend motion_backend_t;
 
 typedef struct {
   const char* can_if;
+  char backend[32];
+  uint8_t primary_node_id;
+  uint32_t primary_tx_id;
+  uint32_t primary_rx_id;
+  uint32_t primary_motion_tx_id;
+  uint32_t primary_motion_rx_id;
+  double travel_min_deg;
+  double travel_max_deg;
+  double profile_max_speed_deg_s;
+  double profile_max_accel_deg_s2;
+  int telemetry_interval_ms;
+  int experimental_native_speed_mode;
   int can_bitrate;
   int can_restart_ms;
   int can_scan_max_node;
