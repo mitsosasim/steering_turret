@@ -111,6 +111,10 @@ const char* myact_strerror(int rc) {
         case MYACT_ENOTSUP:   return "ENOTSUP";
         case MYACT_EBUS:      return "EBUS";
         case MYACT_ENOMOTION: return "ENOMOTION";
+        case MYACT_STRICT_BAD_CAN_ID:           return "STRICT_BAD_CAN_ID";
+        case MYACT_STRICT_WRONG_OPCODE:         return "STRICT_WRONG_OPCODE";
+        case MYACT_STRICT_MALFORMED_PAYLOAD:    return "STRICT_MALFORMED_PAYLOAD";
+        case MYACT_STRICT_OUT_OF_RANGE_COMMAND: return "STRICT_OUT_OF_RANGE_COMMAND";
         default:              return "UNKNOWN";
     }
 }
