@@ -12,6 +12,16 @@ int sim_motion_backend_quick_stop(motion_backend_t*, uint32_t);
 int sim_motion_backend_clear_faults(motion_backend_t*, uint32_t);
 int sim_motion_backend_set_laser(motion_backend_t*, uint8_t, uint8_t);
 int sim_motion_backend_get_snapshot(motion_backend_t*, motion_snapshot_t*);
+#else
+static int sim_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out){ (void)cfg; (void)out; return -1; }
+static void sim_motion_backend_stop(motion_backend_t* b){ (void)b; }
+static int sim_motion_backend_discover(motion_backend_t* b){ (void)b; return -1; }
+static int sim_motion_backend_apply_pp_move(motion_backend_t* b, uint32_t m, const double t[STC_AXIS_COUNT]){ (void)b; (void)m; (void)t; return -1; }
+static int sim_motion_backend_apply_speed(motion_backend_t* b, uint32_t m, const double s[STC_AXIS_COUNT]){ (void)b; (void)m; (void)s; return -1; }
+static int sim_motion_backend_quick_stop(motion_backend_t* b, uint32_t m){ (void)b; (void)m; return -1; }
+static int sim_motion_backend_clear_faults(motion_backend_t* b, uint32_t m){ (void)b; (void)m; return -1; }
+static int sim_motion_backend_set_laser(motion_backend_t* b, uint8_t i, uint8_t o){ (void)b; (void)i; (void)o; return -1; }
+static int sim_motion_backend_get_snapshot(motion_backend_t* b, motion_snapshot_t* s){ (void)b; (void)s; return -1; }
 #endif
 
 int myact_motion_backend_start(const motion_backend_cfg_t*, motion_backend_t**);
