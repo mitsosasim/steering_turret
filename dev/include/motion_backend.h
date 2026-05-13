@@ -56,6 +56,10 @@ typedef struct {
   int32_t vel_raw[STC_AXIS_COUNT];
   uint16_t status_word[STC_AXIS_COUNT];
   int8_t mode_display[STC_AXIS_COUNT];
+  uint8_t fault_active[STC_AXIS_COUNT];
+  uint32_t command_age_ms[STC_AXIS_COUNT];
+  uint8_t cmd_ack_no_motion[STC_AXIS_COUNT];
+  uint32_t diag_ext[STC_AXIS_COUNT]; /* backend-specific optional diagnostic detail */
 
   uint8_t hb_state;
   int have_hb;
