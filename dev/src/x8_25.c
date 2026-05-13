@@ -3,6 +3,7 @@
 #include "x8_25_commissioning.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #define MYACT_CMD_ID_BASE           0x140u
@@ -11,7 +12,6 @@
 #define MYACT_MOTION_CMD_ID_BASE    0x400u
 #define MYACT_MOTION_REPLY_ID_BASE  0x500u
 enum {
-    MYACT_STRICT_TIMEOUT = MYACT_ETIMEDOUT,
     MYACT_STRICT_BAD_CAN_ID = -101,
     MYACT_STRICT_WRONG_OPCODE = -102,
     MYACT_STRICT_MALFORMED_PAYLOAD = -103,
@@ -478,7 +478,7 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
     for (;;) {
         uint32_t remain;
         now = myact_now_ms(ctx);
-        if (now - start >= timeout_ms) return MYACT_STRICT_TIMEOUT;
+        if (now - start >= timeout_ms) return MYACT_ETIMEDOUT;
         remain = (uint32_t)(timeout_ms - (now - start));
 
         rc = myact_recv_frame(ctx, remain, &fr);
@@ -497,11 +497,23 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
         }
 
         if (fr.id != reply_id) {
-            if (fr.id == ctx->reply_id || fr.id == ctx->motion_reply_id) return MYACT_STRICT_BAD_CAN_ID;
+            if (fr.id == ctx->reply_id || fr.id == ctx->motion_reply_id) {
+                (void)myact_parse_frame(ctx, &fr);
+            }
             continue;
         }
-        if (expected_cmd_or_neg1 >= 0 && fr.data[0] != (uint8_t)expected_cmd_or_neg1) return MYACT_STRICT_WRONG_OPCODE;
-        if (fr.dlc != 8) return MYACT_STRICT_MALFORMED_PAYLOAD;
+        if (fr.dlc != 8) return MYACT_EPROTO;
+        if (expected_cmd_or_neg1 >= 0 && fr.data[0] != (uint8_t)expected_cmd_or_neg1) {
+            (void)myact_parse_frame(ctx, &fr);
+            if (ctx->log_fn) {
+                char msg[120];
+                (void)snprintf(msg, sizeof(msg),
+                               "wait_for_reply opcode mismatch exp=0x%02X got=0x%02X id=0x%03X",
+                               (unsigned)expected_cmd_or_neg1, (unsigned)fr.data[0], (unsigned)fr.id);
+                ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
+            }
+            continue;
+        }
 
         if (out) *out = fr;
         return MYACT_OK;
@@ -923,7 +935,7 @@ int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, 
     for (i = 0; i < sizeof(allowed) / sizeof(allowed[0]); ++i) {
         if (allowed[i] == reply_cmd) { supported = true; break; }
     }
-    if (!supported) return MYACT_STRICT_OUT_OF_RANGE_COMMAND;
+    if (!supported) return MYACT_ERANGE;
     tx[0] = MYACT_CMD_ACTIVE_REPLY;
     tx[1] = reply_cmd;
     tx[2] = enable ? 1u : 0u;
