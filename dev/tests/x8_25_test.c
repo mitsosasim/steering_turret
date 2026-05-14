@@ -851,18 +851,40 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     bool pos_sign_ok = false;
     bool neg_sign_ok = false;
     bool must_stop = false;
+    bool ack_observed = false;
+    myact_status1_t status_before;
+    double angle_after_positive = 0.0;
+    double angle_after_negative = 0.0;
+    int32_t raw_0p01dps = myact_speed_dps_to_raw(o->speed_step_dps);
+    uint8_t frame_bytes[8] = {0xA2, 0x00, 0x00, 0x00,
+                              (uint8_t)(raw_0p01dps & 0xFF),
+                              (uint8_t)((raw_0p01dps >> 8) & 0xFF),
+                              (uint8_t)((raw_0p01dps >> 16) & 0xFF),
+                              (uint8_t)((raw_0p01dps >> 24) & 0xFF)};
 
     printf("speed-step-test: native A2 speed mode, %+0.1f dps / %0.1f dps, hold=%u ms, cycles=%u\n",
            o->speed_step_dps, -o->speed_step_dps, o->speed_step_hold_ms, o->speed_step_cycles);
 
-    rc = prepare_sync(c);
+    rc = myact_active_reply_disable_all(c);
     if (rc < 0) return rc;
+    rc = myact_drain_rx(c, 300);
+    if (rc < 0) return rc;
+    rc = myact_stop_send(c);
+    if (rc >= 0) ack_observed = true;
+    if (rc < 0) return rc;
+    rc = myact_shutdown_send(c);
+    if (rc >= 0) ack_observed = true;
+    if (rc < 0) return rc;
+
+    rc = read_angle_deg(c, &angle_before);
+    if (rc < 0) return rc;
+
+    rc = myact_read_status1(c, &status_before);
+    if (rc < 0) return rc;
+    *s1 = status_before;
 
     snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
     print_motion_commissioning_snapshot("speed-step-test", snap_rc, &snap);
-
-    rc = myact_read_status1(c, s1);
-    if (rc < 0) return rc;
 
     if (!s1->brake_release_command_state) {
         printf("speed-step-test: brake locked, sending 0x77 release command\n");
@@ -885,20 +907,17 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     if (rc < 0) return rc;
     low_voltage_condition = (s1->voltage_0p1v / 10.0) < 40.0;
 
-    rc = read_angle_deg(c, &angle_before);
-    if (rc < 0) return rc;
-
     for (unsigned i = 0; i < o->speed_step_cycles; i++) {
         rc = read_angle_deg(c, &pos_angle_start);
         if (rc < 0) { ret = rc; goto cleanup; }
 
         printf("speed-step-test cycle %u: sending A2 +speed\n", i + 1);
         rc = myact_speed_dps_send(c, o->speed_step_dps);
+        if (rc >= 0) ack_observed = true;
         if (rc < 0) { ret = rc; goto cleanup; }
         must_stop = true;
 
         (void)myact_read_operating_mode(c, &runmode_before);
-        (void)myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
         (void)myact_read_operating_mode(c, &runmode_after_command);
         if (runmode_after_command != MYACT_RUNMODE_SPEED) {
             printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
@@ -912,6 +931,8 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
             if (s2.speed_dps > 0) pos_sign_ok = true;
             if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
             if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
+            rc = read_angle_deg(c, &angle_after_positive);
+            if (rc < 0) { ret = rc; goto cleanup; }
             msleep(o->speed_sample_ms);
         }
 
@@ -927,9 +948,9 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 
         printf("speed-step-test cycle %u: sending A2 -speed\n", i + 1);
         rc = myact_speed_dps_send(c, -o->speed_step_dps);
+        if (rc >= 0) ack_observed = true;
         if (rc < 0) { ret = rc; goto cleanup; }
 
-        (void)myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
         (void)myact_read_operating_mode(c, &runmode_after_command);
         if (runmode_after_command != MYACT_RUNMODE_SPEED) {
             printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
@@ -943,6 +964,8 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
             if (s2.speed_dps < 0) neg_sign_ok = true;
             if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
             if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
+            rc = read_angle_deg(c, &angle_after_negative);
+            if (rc < 0) { ret = rc; goto cleanup; }
             msleep(o->speed_sample_ms);
         }
 
@@ -959,12 +982,19 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 
     delta_deg = angle_after - angle_before;
     printf("speed-step-test summary:\n");
+    printf("  requested_dps=%.1f raw_0p01dps=%d frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+           o->speed_step_dps, (int)raw_0p01dps,
+           frame_bytes[0], frame_bytes[1], frame_bytes[2], frame_bytes[3],
+           frame_bytes[4], frame_bytes[5], frame_bytes[6], frame_bytes[7]);
     printf("  max_abs_speed_dps=%.1f (pass>=%.1f)\n", max_abs_speed_dps, o->speed_pass_min_dps);
     printf("  max_abs_iq_A=%.2f\n", max_abs_iq_a);
-    printf("  angle_before=%.2f angle_after=%.2f delta_deg=%.2f\n", angle_before, angle_after, delta_deg);
+    printf("  angle_before=%.2f angle_after_positive=%.2f angle_after_negative=%.2f\n",
+           angle_before, angle_after_positive, angle_after_negative);
+    printf("  angle_after=%.2f delta_deg=%.2f\n", angle_after, delta_deg);
     printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
     printf("  runmode_before=%u runmode_after_command=%u runmode_after_stop=%u error_flags=0x%04X\n",
            (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop, s1->error_flags);
+    printf("  ack_observed=%d\n", ack_observed ? 1 : 0);
 
     rc = myact_read_status1(c, s1);
     if (rc < 0) { ret = rc; goto cleanup; }
@@ -989,9 +1019,16 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         goto cleanup;
     }
 
-    if (!(pos_sign_ok && neg_sign_ok && pos_delta_deg > 0.0 && neg_delta_deg < 0.0)) {
+    if (!(pos_sign_ok && neg_sign_ok && pos_delta_deg > o->speed_pass_min_delta_deg && neg_delta_deg < -o->speed_pass_min_delta_deg)) {
         printf("[FAIL] speed-step-test: direction/sign checks failed (pos_sign=%d neg_sign=%d pos_delta=%.2f neg_delta=%.2f)\n",
                pos_sign_ok ? 1 : 0, neg_sign_ok ? 1 : 0, pos_delta_deg, neg_delta_deg);
+        ret = MYACT_ENOMOTION;
+        goto cleanup;
+    }
+
+    if (fabs(delta_deg) < o->speed_pass_min_delta_deg) {
+        printf("[FAIL] speed-step-test: total movement %.2f deg below minimum %.2f deg\n",
+               fabs(delta_deg), o->speed_pass_min_delta_deg);
         ret = MYACT_ENOMOTION;
         goto cleanup;
     }
