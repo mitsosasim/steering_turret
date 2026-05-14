@@ -1046,30 +1046,102 @@ cleanup:
 
 
 static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    int rc; uint64_t t0; double before=0.0, after=0.0; double max_abs_speed_dps=0.0; myact_status2_t s2;
+    int rc;
+    uint64_t t0;
+    double before = 0.0, after = 0.0, delta_deg = 0.0;
+    double pos_start = 0.0, pos_end = 0.0, pos_delta_deg = 0.0;
+    double neg_start = 0.0, neg_end = 0.0, neg_delta_deg = 0.0;
+    double max_abs_speed_dps = 0.0;
+    bool pos_sign_ok = false, neg_sign_ok = false;
+    myact_status2_t s2;
+
     printf("speed-stream-test: A2 streamed every %u ms, hold=%u ms\n", o->speed_stream_period_ms, o->speed_step_hold_ms);
-    rc = axis_enable_for_motion(c, o, s1, "speed-stream-test"); if (rc < 0) return rc;
-    rc = read_angle_deg(c, &before); if (rc < 0) return rc;
+    rc = axis_enable_for_motion(c, o, s1, "speed-stream-test");
+    if (rc < 0) return rc;
+
+    rc = read_angle_deg(c, &before);
+    if (rc < 0) return rc;
+    rc = read_angle_deg(c, &pos_start);
+    if (rc < 0) return rc;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-        rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps)); if (rc < 0) return rc;
-        rc = sample_status2_capture(c, "speed-stream+", t0, &s2); if (rc < 0) return rc;
+        rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps));
+        if (rc < 0) return rc;
+        rc = sample_status2_capture(c, "speed-stream+", t0, &s2);
+        if (rc < 0) return rc;
+        if (s2.speed_dps > 0) pos_sign_ok = true;
         if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
         msleep(o->speed_stream_period_ms);
     }
+    rc = myact_speed_send(c, 0);
+    if (rc < 0) return rc;
+    msleep(50);
+    rc = read_angle_deg(c, &pos_end);
+    if (rc < 0) return rc;
+    pos_delta_deg = pos_end - pos_start;
+
+    rc = read_angle_deg(c, &neg_start);
+    if (rc < 0) return rc;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-        rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps)); if (rc < 0) return rc;
-        rc = sample_status2_capture(c, "speed-stream-", t0, &s2); if (rc < 0) return rc;
+        rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps));
+        if (rc < 0) return rc;
+        rc = sample_status2_capture(c, "speed-stream-", t0, &s2);
+        if (rc < 0) return rc;
+        if (s2.speed_dps < 0) neg_sign_ok = true;
         if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
         msleep(o->speed_stream_period_ms);
     }
-    rc = send_stop_and_sample(c, "speed-stream-test"); if (rc < 0) return rc;
-    rc = read_angle_deg(c, &after); if (rc < 0) return rc;
-    printf("speed-stream-test summary:\n  max_abs_speed_dps=%.1f\n  delta_deg=%.2f\n", max_abs_speed_dps, after-before);
-    if (max_abs_speed_dps >= o->speed_pass_min_dps || fabs(after-before) >= o->speed_pass_min_delta_deg) return MYACT_OK;
-    printf("[FAIL] speed-stream-test: A2 acknowledged but this motor/firmware is not executing speed closed-loop commands in current runtime mode\n");
-    return MYACT_ENOMOTION;
+    rc = myact_speed_send(c, 0);
+    if (rc < 0) return rc;
+    msleep(50);
+    rc = read_angle_deg(c, &neg_end);
+    if (rc < 0) return rc;
+    neg_delta_deg = neg_end - neg_start;
+
+    rc = send_stop_and_sample(c, "speed-stream-test");
+    if (rc < 0) return rc;
+    rc = read_angle_deg(c, &after);
+    if (rc < 0) return rc;
+    delta_deg = after - before;
+
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
+
+    printf("speed-stream-test summary:\n");
+    printf("  max_abs_speed_dps=%.1f (pass>=%.1f)\n", max_abs_speed_dps, o->speed_pass_min_dps);
+    printf("  delta_deg=%.2f (pass_abs>=%.2f)\n", delta_deg, o->speed_pass_min_delta_deg);
+    printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
+    printf("  pos_sign_ok=%d neg_sign_ok=%d error_flags=0x%04X\n",
+           pos_sign_ok ? 1 : 0, neg_sign_ok ? 1 : 0, s1->error_flags);
+
+    if (s1->error_flags != 0) {
+        printf("[FAIL] speed-stream-test: error_flags=0x%04X\n", s1->error_flags);
+        return MYACT_ESTATE;
+    }
+
+    if (max_abs_speed_dps >= o->speed_pass_min_dps && fabs(delta_deg) < o->speed_pass_min_delta_deg) {
+        printf("SPEED_FEEDBACK_WITHOUT_POSITION_DELTA\n");
+    }
+    if (max_abs_speed_dps < o->speed_pass_min_dps) {
+        printf("[FAIL] speed-stream-test: max_abs_speed_dps below threshold\n");
+        return MYACT_ENOMOTION;
+    }
+    if (!(pos_sign_ok && neg_sign_ok)) {
+        printf("[FAIL] speed-stream-test: speed sign does not match requested direction(s)\n");
+        return MYACT_ENOMOTION;
+    }
+    if (!(pos_delta_deg > o->speed_pass_min_delta_deg && neg_delta_deg < -o->speed_pass_min_delta_deg)) {
+        printf("[FAIL] speed-stream-test: position sign/delta mismatch (pos=%.2f neg=%.2f, min=%.2f)\n",
+               pos_delta_deg, neg_delta_deg, o->speed_pass_min_delta_deg);
+        return MYACT_ENOMOTION;
+    }
+    if (fabs(delta_deg) < o->speed_pass_min_delta_deg) {
+        printf("[FAIL] speed-stream-test: total movement %.2f deg below minimum %.2f deg\n",
+               fabs(delta_deg), o->speed_pass_min_delta_deg);
+        return MYACT_ENOMOTION;
+    }
+    return MYACT_OK;
 }
 
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
