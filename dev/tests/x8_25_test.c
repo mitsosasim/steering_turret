@@ -384,10 +384,10 @@ static int prepare_sync(myact_ctx_t* ctx) {
 static void test_axis_disable(myact_ctx_t* ctx, bool shutdown) {
     (void)myact_active_reply_disable_all(ctx);
     (void)myact_drain_rx(ctx, 500);
-    (void)myact_stop_send(ctx);
     if (shutdown) {
-        msleep(100);
-        (void)myact_shutdown_send(ctx);
+        (void)myact_stop_and_shutdown(ctx, 100);
+    } else {
+        (void)myact_stop_send(ctx);
     }
 }
 
@@ -764,11 +764,10 @@ static int sample_status2_capture(myact_ctx_t* c, const char* tag, uint64_t t0, 
 static int send_stop_and_sample(myact_ctx_t* c, const char* n) {
     int rc = myact_speed_send(c, 0);
     if (rc < 0) return rc;
-    msleep(50);
-    rc = myact_stop_send(c);
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
 
-    msleep(100);
+    msleep(50);
     {
         myact_status2_t s2;
         int32_t a;
@@ -869,10 +868,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     if (rc < 0) return rc;
     rc = myact_drain_rx(c, 300);
     if (rc < 0) return rc;
-    rc = myact_stop_send(c);
-    if (rc >= 0) ack_observed = true;
-    if (rc < 0) return rc;
-    rc = myact_shutdown_send(c);
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc >= 0) ack_observed = true;
     if (rc < 0) return rc;
 
@@ -1177,9 +1173,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     rc = myact_drain_rx(c, 300);
     if (rc < 0) return rc;
 
-    rc = myact_stop_send(c);
-    if (rc < 0) return rc;
-    rc = myact_shutdown_send(c);
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
     shutdown_sent = true;
 
@@ -1259,7 +1253,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
 cleanup:
     rc = send_stop_and_sample(c, "torque-step-test");
     if (rc < 0 && ret == MYACT_OK) ret = rc;
-    rc = myact_shutdown_send(c);
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc >= 0) shutdown_sent = true;
     if (rc < 0 && ret == MYACT_OK) ret = rc;
 
@@ -1320,9 +1314,7 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     if (rc < 0) return rc;
     rc = myact_drain_rx(c, 300);
     if (rc < 0) return rc;
-    rc = myact_stop_send(c);
-    if (rc < 0) return rc;
-    rc = myact_shutdown_send(c);
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
 
     rc = read_angle_deg(c, &current_abs);
@@ -1369,8 +1361,7 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     }
 
 out:
-    (void)myact_stop_send(c);
-    (void)myact_shutdown_send(c);
+    (void)myact_stop_and_shutdown(c, 100);
     (void)myact_read_operating_mode(c, &runmode_after_stop);
     (void)myact_read_status1(c, s1);
 
@@ -1642,9 +1633,7 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
         if (rc < 0) return rc;
     }
 
-    rc = myact_stop_send(c);
-    if (rc < 0) return rc;
-    return myact_shutdown_send(c);
+    return myact_stop_and_shutdown(c, 100);
 }
 
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
@@ -1853,11 +1842,8 @@ static int run_commissioning_writes(myact_ctx_t* c, const test_opts_t* o) {
 
     rc = prepare_sync(c);
     if (rc < 0) return rc;
-    rc = myact_speed_send(c, 0);
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
-    rc = myact_stop_send(c);
-    if (rc < 0) return rc;
-    msleep(100);
     rc = myact_read_status2(c, &s2);
     if (rc < 0) return rc;
     if (abs((int)s2.speed_dps) > 2) {
@@ -1938,8 +1924,7 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
 
     rc = myact_active_reply_disable_all(c); if (rc < 0) return rc;
     rc = myact_drain_rx(c, 300); if (rc < 0) return rc;
-    rc = myact_stop_send(c); if (rc < 0) return rc;
-    rc = myact_shutdown_send(c); if (rc < 0) return rc;
+    rc = myact_stop_and_shutdown(c, 100); if (rc < 0) return rc;
 
     rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
     rc = myact_read_status2(c, &s2_before); if (rc < 0) return rc;
@@ -1987,8 +1972,7 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
             break; }
     }
 
-    rc = myact_stop_send(c); if (rc < 0) return rc;
-    rc = myact_shutdown_send(c); if (rc < 0) return rc;
+    rc = myact_stop_and_shutdown(c, 100); if (rc < 0) return rc;
     rc = myact_read_status1(c, &s1_after); if (rc < 0) return rc;
     rc = myact_read_status2(c, &s2_after); if (rc < 0) return rc;
     rc = myact_read_angle_multi(c, &a_after_raw); if (rc < 0) return rc;

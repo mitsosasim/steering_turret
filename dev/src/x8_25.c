@@ -832,6 +832,15 @@ int myact_stop_send(myact_ctx_t* ctx) {
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
+int myact_stop_and_shutdown(myact_ctx_t* ctx, uint32_t settle_ms) {
+    int rc;
+    if (!ctx) return MYACT_EINVAL;
+    rc = myact_stop_send(ctx);
+    if (rc < 0) return rc;
+    if (settle_ms > 0u) usleep((useconds_t)(settle_ms * 1000u));
+    return myact_shutdown_send(ctx);
+}
+
 int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a) {
     uint8_t tx[8] = { MYACT_CMD_TORQUE, 0,0,0,0,0,0,0 };
     if (!ctx) return MYACT_EINVAL;
