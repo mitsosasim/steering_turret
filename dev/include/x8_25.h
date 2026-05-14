@@ -332,6 +332,7 @@ int myact_timed_txrx(myact_ctx_t* ctx, uint8_t cmd, const uint8_t tx_data[8], my
 /* stop / shutdown / brake */
 int myact_shutdown_send(myact_ctx_t* ctx);
 int myact_stop_send(myact_ctx_t* ctx);
+int myact_stop_and_shutdown(myact_ctx_t* ctx, uint32_t settle_ms);
 int myact_shutdown(myact_ctx_t* ctx);
 int myact_stop(myact_ctx_t* ctx);
 int myact_brake_release(myact_ctx_t* ctx);
