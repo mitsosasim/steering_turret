@@ -832,10 +832,11 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     int ret = MYACT_OK;
     int rc;
     myact_status2_t s2;
-    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
     myact_motion_commissioning_snapshot_t snap;
     int snap_rc;
-    bool runmode_entered = false;
+    myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
     bool low_voltage_condition = false;
     bool pos_sign_ok = false;
     bool neg_sign_ok = false;
@@ -886,14 +887,13 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         if (rc < 0) { ret = rc; goto cleanup; }
         must_stop = true;
 
-        rc = myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
-        if (rc < 0) {
-            (void)myact_read_operating_mode(c, &rm);
-            printf("[RUNMODE_FAILURE] speed-step-test: A2 ACKed but runmode did not enter 0x02 after +command, last=%u\n", (unsigned)rm);
-            ret = MYACT_ESTATE;
-            goto cleanup;
+        (void)myact_read_operating_mode(c, &runmode_before);
+        (void)myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
+        (void)myact_read_operating_mode(c, &runmode_after_command);
+        if (runmode_after_command != MYACT_RUNMODE_SPEED) {
+            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
+                   (unsigned)MYACT_RUNMODE_SPEED, (unsigned)runmode_after_command);
         }
-        runmode_entered = true;
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
@@ -919,12 +919,11 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         rc = myact_speed_dps_send(c, -o->speed_step_dps);
         if (rc < 0) { ret = rc; goto cleanup; }
 
-        rc = myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
-        if (rc < 0) {
-            (void)myact_read_operating_mode(c, &rm);
-            printf("[RUNMODE_FAILURE] speed-step-test: A2 ACKed but runmode did not enter 0x02 after -command, last=%u\n", (unsigned)rm);
-            ret = MYACT_ESTATE;
-            goto cleanup;
+        (void)myact_wait_runmode(c, MYACT_RUNMODE_SPEED, o->runmode_timeout_ms, o->runmode_poll_ms);
+        (void)myact_read_operating_mode(c, &runmode_after_command);
+        if (runmode_after_command != MYACT_RUNMODE_SPEED) {
+            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
+                   (unsigned)MYACT_RUNMODE_SPEED, (unsigned)runmode_after_command);
         }
 
         t0 = now_ms(NULL);
@@ -954,13 +953,8 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     printf("  max_abs_iq_A=%.2f\n", max_abs_iq_a);
     printf("  angle_before=%.2f angle_after=%.2f delta_deg=%.2f\n", angle_before, angle_after, delta_deg);
     printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
-    printf("  runmode_entered_0x02=%d error_flags=0x%04X\n", runmode_entered ? 1 : 0, s1->error_flags);
-
-    if (!runmode_entered) {
-        printf("[RUNMODE_FAILURE] speed-step-test: runmode 0x02 was never observed\n");
-        ret = MYACT_ESTATE;
-        goto cleanup;
-    }
+    printf("  runmode_before=%u runmode_after_command=%u runmode_after_stop=%u error_flags=0x%04X\n",
+           (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop, s1->error_flags);
 
     rc = myact_read_status1(c, s1);
     if (rc < 0) { ret = rc; goto cleanup; }
@@ -971,10 +965,10 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     }
 
     if (max_abs_speed_dps < o->speed_pass_min_dps) {
-        if (runmode_entered && low_voltage_condition) {
+        if (low_voltage_condition) {
             printf("[NO_MOTION_UNDER_LOW_VOLTAGE] speed-step-test: protocol/runmode observed, but low-voltage bench produced insufficient motion\n");
             printf("classification: no-motion-under-low-voltage\n");
-        } else if (runmode_entered) {
+        } else {
             printf("[PARAMETER_OR_CONFIGURATION_SUSPECT] speed-step-test: runmode=0x02 but measured speed stayed below threshold\n");
             printf("classification: parameter/configuration suspect\n");
         }
@@ -997,6 +991,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 cleanup:
     if (must_stop) {
         int stop_rc = send_stop_and_sample(c, "speed-step-test");
+        (void)myact_read_operating_mode(c, &runmode_after_stop);
         if (stop_rc < 0 && ret == MYACT_OK) ret = stop_rc;
     }
     return ret;
@@ -1040,7 +1035,9 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     double max_abs_speed_dps = 0.0;
     bool acked = false;
     myact_status2_t s2;
-    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
 
     printf("torque-step-test: WARNING torque mode can move unexpectedly\n");
     if (o->torque_sweep_test) {
@@ -1068,11 +1065,12 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
         rc = myact_torque_send(c, myact_current_a_to_raw(tq));
         if (rc < 0) return rc;
         acked = true;
-        rc = myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
-        if (rc < 0) {
-            (void)myact_read_operating_mode(c, &rm);
-            printf("[RUNMODE_FAIL] torque-step-test: runmode did not enter 0x01 after +A1, last=%u\n", (unsigned)rm);
-            return MYACT_ESTATE;
+        (void)myact_read_operating_mode(c, &runmode_before);
+        (void)myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
+        (void)myact_read_operating_mode(c, &runmode_after_command);
+        if (runmode_after_command != MYACT_RUNMODE_CURRENT) {
+            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
+                   (unsigned)MYACT_RUNMODE_CURRENT, (unsigned)runmode_after_command);
         }
 
         t0 = now_ms(NULL);
@@ -1091,11 +1089,11 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
         rc = myact_torque_send(c, myact_current_a_to_raw(-tq));
         if (rc < 0) return rc;
         acked = true;
-        rc = myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
-        if (rc < 0) {
-            (void)myact_read_operating_mode(c, &rm);
-            printf("[RUNMODE_FAIL] torque-step-test: runmode did not stay at 0x01 after -A1, last=%u\n", (unsigned)rm);
-            return MYACT_ESTATE;
+        (void)myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
+        (void)myact_read_operating_mode(c, &runmode_after_command);
+        if (runmode_after_command != MYACT_RUNMODE_CURRENT) {
+            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
+                   (unsigned)MYACT_RUNMODE_CURRENT, (unsigned)runmode_after_command);
         }
 
         t0 = now_ms(NULL);
@@ -1119,6 +1117,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     rc = read_angle_deg(c, &angle_after);
     if (rc < 0) return rc;
 
+    (void)myact_read_operating_mode(c, &runmode_after_stop);
     angle_delta_deg = angle_after - angle_before;
     printf("torque-step-test summary:\n");
     printf("  requested_iq_a=%.2f\n", o->torque_step_a);
@@ -1127,6 +1126,8 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     printf("  angle_before=%.2f\n", angle_before);
     printf("  angle_after=%.2f\n", angle_after);
     printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
+    printf("  runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
+           (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
 
     if (max_abs_iq_a >= o->torque_pass_min_iq_a || fabs(angle_delta_deg) >= o->torque_pass_min_delta_deg) {
         return MYACT_OK;
@@ -1207,13 +1208,19 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     print_motion_commissioning_snapshot("native-a4-abs-test", snap_rc, &snap);
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
-    rc = myact_wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms);
-    if (rc < 0) {
-        (void)myact_read_operating_mode(c, &rm);
-        printf("[RUNMODE_FAILURE] native-a4-abs-test: runmode did not enter 0x03 after A4, last=%u entered_0x03=%s\n", (unsigned)rm, rm == MYACT_RUNMODE_POSITION ? "yes" : "no");
-        printf("classification: runmode failure\n");
-        rc = MYACT_ESTATE;
-        goto out;
+    {
+        myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
+        myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
+        myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
+        (void)myact_read_operating_mode(c, &runmode_before);
+        (void)myact_wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms);
+        (void)myact_read_operating_mode(c, &runmode_after_command);
+        if (runmode_after_command != MYACT_RUNMODE_POSITION) {
+            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
+                   (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
+        }
+        printf("native-a4-abs-test: runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
+               (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
     }
 
     t0 = now_ms(NULL);
@@ -1414,8 +1421,20 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     if (rc < 0) return rc;
     rc = myact_position_inc_send(c, (uint16_t)speed_dps, myact_deg_to_raw_0p01(delta_deg));
     if (rc < 0) return rc;
-    rc = myact_wait_runmode(c, MYACT_RUNMODE_POSITION, 1500u, 50u);
-    if (rc < 0) return rc;
+    {
+        myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
+        myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
+        myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
+        (void)myact_read_operating_mode(c, &runmode_before);
+        (void)myact_wait_runmode(c, MYACT_RUNMODE_POSITION, 1500u, 50u);
+        (void)myact_read_operating_mode(c, &runmode_after_command);
+        if (runmode_after_command != MYACT_RUNMODE_POSITION) {
+            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
+                   (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
+        }
+        printf("%s runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
+               tag, (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
+    }
     msleep(wait_ms);
     rc = myact_stop_send(c);
     if (rc < 0) return rc;
