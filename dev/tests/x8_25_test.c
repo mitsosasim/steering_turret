@@ -1074,6 +1074,7 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
 
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
+    int ret = MYACT_OK;
     uint64_t t0;
     double angle_before = 0.0;
     double angle_after = 0.0;
@@ -1085,8 +1086,12 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
+    bool shutdown_sent = false;
 
     printf("torque-step-test: WARNING torque mode can move unexpectedly\n");
+    if (!o->torque_sweep_test && fabs(o->torque_step_a) > 0.50) {
+        printf("torque-step-test: WARNING high torque-current can cause fast free rotation.\n");
+    }
     if (o->torque_sweep_test) {
         printf("torque-sweep-test enabled: levels=");
         for (unsigned j = 0; j < o->torque_sweep_count; j++) printf(j + 1 < o->torque_sweep_count ? "%.2f," : "%.2f", o->torque_sweep_values_a[j]);
@@ -1095,35 +1100,52 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
         printf("torque-step-test: A1 %+0.2fA / %0.2fA, hold=%ums\n", o->torque_step_a, -o->torque_step_a, o->torque_step_hold_ms);
     }
 
-    rc = axis_enable_for_motion(c, o, s1, "torque-step-test");
+    rc = myact_active_reply_disable_all(c);
     if (rc < 0) return rc;
+    rc = myact_drain_rx(c, 300);
+    if (rc < 0) return rc;
+
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    rc = myact_shutdown_send(c);
+    if (rc < 0) return rc;
+    shutdown_sent = true;
 
     rc = read_angle_deg(c, &angle_before);
     if (rc < 0) return rc;
 
+    rc = axis_enable_for_motion(c, o, s1, "torque-step-test");
+    if (rc < 0) return rc;
+
     if (o->torque_sweep_test && !o->no_motion_countdown) {
         printf("[SKIP] torque-sweep-test: requires --no-motion-countdown for safety\n");
-        return MYACT_ESTATE;
+        ret = MYACT_ESTATE;
+        goto cleanup;
     }
 
     for (unsigned i = 0; i < o->torque_step_cycles; i++) {
         for (unsigned j = 0; j < (o->torque_sweep_test ? o->torque_sweep_count : 1); j++) {
         double tq = o->torque_sweep_test ? o->torque_sweep_values_a[j] : o->torque_step_a;
+        if (fabs(tq) > 0.50) {
+            printf("torque-step-test: WARNING high torque-current can cause fast free rotation.\n");
+        }
         rc = myact_torque_send(c, myact_current_a_to_raw(tq));
-        if (rc < 0) return rc;
+        if (rc < 0) {
+            ret = rc;
+            goto cleanup;
+        }
         acked = true;
         (void)myact_read_operating_mode(c, &runmode_before);
-        (void)myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
         (void)myact_read_operating_mode(c, &runmode_after_command);
-        if (runmode_after_command != MYACT_RUNMODE_CURRENT) {
-            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
-                   (unsigned)MYACT_RUNMODE_CURRENT, (unsigned)runmode_after_command);
-        }
+        printf("torque-step-test: runmode diagnostic after +A1=%u\n", (unsigned)runmode_after_command);
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
             rc = sample_status2_capture(c, "torque+", t0, &s2);
-            if (rc < 0) return rc;
+            if (rc < 0) {
+                ret = rc;
+                goto cleanup;
+            }
             if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) {
                 max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
             }
@@ -1133,36 +1155,44 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
             msleep(o->torque_sample_ms);
         }
 
-        rc = myact_torque_send(c, myact_current_a_to_raw(-tq));
-        if (rc < 0) return rc;
-        acked = true;
-        (void)myact_wait_runmode(c, MYACT_RUNMODE_CURRENT, o->runmode_timeout_ms, o->runmode_poll_ms);
-        (void)myact_read_operating_mode(c, &runmode_after_command);
-        if (runmode_after_command != MYACT_RUNMODE_CURRENT) {
-            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
-                   (unsigned)MYACT_RUNMODE_CURRENT, (unsigned)runmode_after_command);
-        }
+        if (o->torque_sweep_test) {
+            rc = myact_torque_send(c, myact_current_a_to_raw(-tq));
+            if (rc < 0) {
+                ret = rc;
+                goto cleanup;
+            }
+            acked = true;
+            (void)myact_read_operating_mode(c, &runmode_after_command);
+            printf("torque-step-test: runmode diagnostic after -A1=%u\n", (unsigned)runmode_after_command);
 
-        t0 = now_ms(NULL);
-        while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
-            rc = sample_status2_capture(c, "torque-", t0, &s2);
-            if (rc < 0) return rc;
-            if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) {
-                max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
+            t0 = now_ms(NULL);
+            while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
+                rc = sample_status2_capture(c, "torque-", t0, &s2);
+                if (rc < 0) {
+                    ret = rc;
+                    goto cleanup;
+                }
+                if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) {
+                    max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
+                }
+                if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
+                    max_abs_speed_dps = fabs((double)s2.speed_dps);
+                }
+                msleep(o->torque_sample_ms);
             }
-            if (fabs((double)s2.speed_dps) > max_abs_speed_dps) {
-                max_abs_speed_dps = fabs((double)s2.speed_dps);
-            }
-            msleep(o->torque_sample_ms);
         }
         }
     }
 
+cleanup:
     rc = send_stop_and_sample(c, "torque-step-test");
-    if (rc < 0) return rc;
+    if (rc < 0 && ret == MYACT_OK) ret = rc;
+    rc = myact_shutdown_send(c);
+    if (rc >= 0) shutdown_sent = true;
+    if (rc < 0 && ret == MYACT_OK) ret = rc;
 
     rc = read_angle_deg(c, &angle_after);
-    if (rc < 0) return rc;
+    if (rc < 0 && ret == MYACT_OK) ret = rc;
 
     (void)myact_read_operating_mode(c, &runmode_after_stop);
     angle_delta_deg = angle_after - angle_before;
@@ -1173,8 +1203,17 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     printf("  angle_before=%.2f\n", angle_before);
     printf("  angle_after=%.2f\n", angle_after);
     printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
+    printf("  status1 error_flags=0x%04X\n", s1->error_flags);
+    printf("  shutdown_sent=%s\n", shutdown_sent ? "yes" : "no");
     printf("  runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
            (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
+
+    if (ret < 0) return ret;
+
+    if (s1->error_flags != 0) {
+        printf("[FAIL] torque-step-test: error_flags=0x%04X\n", s1->error_flags);
+        return MYACT_ESTATE;
+    }
 
     if (max_abs_iq_a >= o->torque_pass_min_iq_a || fabs(angle_delta_deg) >= o->torque_pass_min_delta_deg) {
         return MYACT_OK;
