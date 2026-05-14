@@ -145,6 +145,11 @@ typedef struct {
     bool reset_first;
     bool raw_motion_smoke;
     bool raw_motion_smoke_sendonly;
+    bool raw_a1_smoke;
+    bool raw_a2_smoke;
+    bool raw_a4_smoke;
+    bool raw_a8_smoke;
+    bool raw_smoke_all;
     bool no_shutdown_on_exit;
     bool enable_hold;
     bool brake_latency_test;
@@ -498,6 +503,11 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--reset-first", reset_first)
         FLAG("--raw-motion-smoke", raw_motion_smoke)
         FLAG("--raw-motion-smoke-sendonly", raw_motion_smoke_sendonly)
+        FLAG("--raw-a1-smoke", raw_a1_smoke)
+        FLAG("--raw-a2-smoke", raw_a2_smoke)
+        FLAG("--raw-a4-smoke", raw_a4_smoke)
+        FLAG("--raw-a8-smoke", raw_a8_smoke)
+        FLAG("--raw-smoke-all", raw_smoke_all)
         FLAG("--no-shutdown-on-exit", no_shutdown_on_exit)
         FLAG("--enable-hold", enable_hold)
         FLAG("--brake-latency-test", brake_latency_test)
@@ -1783,6 +1793,97 @@ static int run_commissioning_writes(myact_ctx_t* c, const test_opts_t* o) {
 }
 
 
+
+
+typedef enum { RAW_SMOKE_A1, RAW_SMOKE_A2, RAW_SMOKE_A4, RAW_SMOKE_A8 } raw_smoke_kind_t;
+
+static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kind_t kind) {
+    int rc; myact_status1_t s1_before, s1_after; myact_status2_t s2_before, s2_after;
+    int32_t a_before_raw = 0, a_after_raw = 0; double a_before=0.0, a_after=0.0, delta=0.0;
+    uint8_t frame[8] = {0}; const char* name = ""; bool pass = false;
+    double target_abs_deg = 0.0, cmd_delta_deg = 0.0;
+
+    rc = myact_active_reply_disable_all(c); if (rc < 0) return rc;
+    rc = myact_drain_rx(c, 300); if (rc < 0) return rc;
+    rc = myact_stop_send(c); if (rc < 0) return rc;
+    rc = myact_shutdown_send(c); if (rc < 0) return rc;
+
+    rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
+    rc = myact_read_status2(c, &s2_before); if (rc < 0) return rc;
+    rc = myact_read_angle_multi(c, &a_before_raw); if (rc < 0) return rc;
+    a_before = myact_raw_0p01_to_deg(a_before_raw);
+
+    if (!s1_before.brake_release_command_state) {
+        uint64_t t0 = now_ms(NULL);
+        rc = myact_brake_release(c); if (rc < 0) return rc;
+        while (now_ms(NULL) - t0 < 2500) {
+            rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
+            if (s1_before.brake_release_command_state) break;
+            msleep(o->brake_poll_ms ? o->brake_poll_ms : 50);
+        }
+        if (!s1_before.brake_release_command_state) return MYACT_ETIMEDOUT;
+    }
+
+    switch (kind) {
+        case RAW_SMOKE_A1: {
+            int16_t iq = myact_current_a_to_raw(0.20);
+            name = "raw-a1-smoke"; frame[0]=0xA1; frame[4]=iq & 0xFF; frame[5]=(iq>>8)&0xFF;
+            rc = myact_torque_send(c, iq); if (rc < 0) return rc;
+            msleep(200);
+            cmd_delta_deg = 0.0;
+            break; }
+        case RAW_SMOKE_A2: {
+            int32_t sp = myact_speed_dps_to_raw(100.0);
+            name = "raw-a2-smoke"; frame[0]=0xA2; frame[4]=sp&0xFF; frame[5]=(sp>>8)&0xFF; frame[6]=(sp>>16)&0xFF; frame[7]=(sp>>24)&0xFF;
+            rc = myact_speed_send(c, sp); if (rc < 0) return rc;
+            msleep(700);
+            break; }
+        case RAW_SMOKE_A4: {
+            int32_t target_raw = myact_deg_to_raw_0p01(a_before + 5.0);
+            uint16_t sp = 50;
+            target_abs_deg = a_before + 5.0;
+            name = "raw-a4-smoke"; frame[0]=0xA4; frame[2]=sp&0xFF; frame[3]=(sp>>8)&0xFF; frame[4]=target_raw&0xFF; frame[5]=(target_raw>>8)&0xFF; frame[6]=(target_raw>>16)&0xFF; frame[7]=(target_raw>>24)&0xFF;
+            rc = myact_position_abs_send(c, sp, target_raw); if (rc < 0) return rc;
+            msleep(700);
+            break; }
+        case RAW_SMOKE_A8: {
+            int32_t d = myact_deg_to_raw_0p01(5.0); uint16_t sp = 50; cmd_delta_deg = 5.0;
+            name = "raw-a8-smoke"; frame[0]=0xA8; frame[2]=sp&0xFF; frame[3]=(sp>>8)&0xFF; frame[4]=d&0xFF; frame[5]=(d>>8)&0xFF; frame[6]=(d>>16)&0xFF; frame[7]=(d>>24)&0xFF;
+            rc = myact_position_inc_send(c, sp, d); if (rc < 0) return rc;
+            msleep(700);
+            break; }
+    }
+
+    rc = myact_stop_send(c); if (rc < 0) return rc;
+    rc = myact_shutdown_send(c); if (rc < 0) return rc;
+    rc = myact_read_status1(c, &s1_after); if (rc < 0) return rc;
+    rc = myact_read_status2(c, &s2_after); if (rc < 0) return rc;
+    rc = myact_read_angle_multi(c, &a_after_raw); if (rc < 0) return rc;
+    a_after = myact_raw_0p01_to_deg(a_after_raw);
+    delta = a_after - a_before;
+
+    if (kind == RAW_SMOKE_A1) pass = fabs(delta) >= o->torque_pass_min_delta_deg || fabs(s2_after.iq_0p01a/100.0) >= o->torque_pass_min_iq_a;
+    else if (kind == RAW_SMOKE_A2) pass = fabs(delta) >= o->speed_pass_min_delta_deg;
+    else if (kind == RAW_SMOKE_A4) pass = fabs(a_after - target_abs_deg) <= o->abs_tolerance_deg;
+    else pass = fabs(delta - cmd_delta_deg) <= fmax(1.0, 0.20 * fabs(cmd_delta_deg));
+
+    printf("%s frame=%02X %02X %02X %02X %02X %02X %02X %02X angle_before=%.2f angle_after=%.2f delta_deg=%.2f brake_before=%u brake_after=%u voltage=%.1f error_flags=0x%04X %s\n",
+        name, frame[0],frame[1],frame[2],frame[3],frame[4],frame[5],frame[6],frame[7],
+        a_before, a_after, delta, (unsigned)s1_before.brake_release_command_state, (unsigned)s1_after.brake_release_command_state,
+        s1_after.voltage_0p1v/10.0, s1_after.error_flags, pass ? "PASS" : "FAIL");
+
+    return pass ? RET_OK : RET_COMMS_FAIL;
+}
+
+static int run_raw_smoke_suite(myact_ctx_t* c, const test_opts_t* o) {
+    int rc = RET_OK;
+    if (o->raw_a1_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A1)!=RET_OK) rc = RET_COMMS_FAIL;
+    if (o->raw_a2_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A2)!=RET_OK) rc = RET_COMMS_FAIL;
+    if (o->raw_a4_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A4)!=RET_OK) rc = RET_COMMS_FAIL;
+    if (o->raw_a8_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A8)!=RET_OK) rc = RET_COMMS_FAIL;
+    return rc;
+}
+
 static int selftest_send_cb(const myact_can_frame_t* fr, void* user) {
     myact_can_frame_t* cap = (myact_can_frame_t*)user;
     if (!fr || !cap) return MYACT_EINVAL;
@@ -1930,7 +2031,7 @@ int main(int argc, char** argv) {
     if (rc < 0) goto done;
 
     {
-        bool any_test_requested = o.raw_motion_smoke || o.raw_motion_smoke_sendonly || o.enable_hold ||
+        bool any_test_requested = o.raw_motion_smoke || o.raw_motion_smoke_sendonly || o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all || o.enable_hold ||
                                   o.brake_latency_test || o.brake_persistence_test || o.rt_inc_burst ||
                                   o.speed_step_test || o.speed_stream_test || o.torque_step_test || o.torque_sweep_test || o.native_a4_abs_test ||
                                   o.mit_mode_test || o.active_telemetry_rt_test || o.production_qual || o.experimental_all;
@@ -2044,6 +2145,7 @@ int main(int argc, char** argv) {
             if (o.enable_hold) { any_dispatched = true; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.raw_motion_smoke) { any_dispatched = true; if (bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.raw_motion_smoke_sendonly) { any_dispatched = true; if (bench_result("raw-motion-smoke-sendonly", run_raw_motion_smoke(&ctx, &o, &s1, true)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all) { any_dispatched = true; if (bench_result("raw-smoke-suite", run_raw_smoke_suite(&ctx, &o)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.brake_persistence_test) { any_dispatched = true; if (bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.rt_inc_burst) { any_dispatched = true; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
             if (o.speed_step_test) { any_dispatched = true; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
