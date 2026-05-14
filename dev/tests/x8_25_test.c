@@ -396,24 +396,48 @@ static void print_usage(const char* p) { fprintf(stderr, "usage: %s <can_if> <no
 static const char* opcode_name(uint8_t op) {
     switch (op) {
         case 0x19: return "shutdown";
+        case 0x70: return "read-runmode";
         case 0x76: return "stop";
         case 0x77: return "brake-release";
-        case 0x80: return "read-multi-angle";
+        case 0x78: return "brake-lock";
+        case 0x80: return "shutdown";
+        case 0x81: return "stop";
         case 0x88: return "read-status1";
+        case 0x92: return "read-multi-angle";
         case 0x9A: return "read-status2";
         case 0x9C: return "read-status3";
+        case 0xA1: return "torque-cmd";
         case 0xA2: return "speed-cmd";
         case 0xA4: return "abs-pos-cmd";
         case 0xA8: return "inc-pos-cmd";
+        case 0xB6: return "active-reply-config";
         default: return "unknown";
     }
+}
+
+static void print_cmd_summary(const char* test_name,
+                              const uint8_t frame[8],
+                              const char* target_desc,
+                              double before_deg,
+                              double after_deg,
+                              double measured_delta_deg,
+                              double error_deg,
+                              bool pass,
+                              const char* reason) {
+    printf("%s cmd=%02X %02X %02X %02X %02X %02X %02X %02X target=%s before=%.2f after=%.2f delta=%.2f err=%.2f %s reason=%s\n",
+           test_name,
+           frame[0], frame[1], frame[2], frame[3], frame[4], frame[5], frame[6], frame[7],
+           target_desc ? target_desc : "n/a",
+           before_deg, after_deg, measured_delta_deg, error_deg,
+           pass ? "PASS" : "FAIL",
+           reason ? reason : "n/a");
 }
 
 static uint8_t expected_reply_opcode_for_tx(uint8_t op) {
     switch (op) {
         case 0x19: case 0x76: case 0x77:
-        case 0x80: case 0x88: case 0x9A: case 0x9C:
-        case 0xA2: case 0xA4: case 0xA8:
+        case 0x80: case 0x81: case 0x88: case 0x92: case 0x9A: case 0x9C:
+        case 0xA1: case 0xA2: case 0xA4: case 0xA8: case 0xB6:
             return op;
         default:
             return 0;
@@ -850,7 +874,6 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     bool pos_sign_ok = false;
     bool neg_sign_ok = false;
     bool must_stop = false;
-    bool ack_observed = false;
     myact_status1_t status_before;
     double angle_after_positive = 0.0;
     double angle_after_negative = 0.0;
@@ -869,7 +892,6 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     rc = myact_drain_rx(c, 300);
     if (rc < 0) return rc;
     rc = myact_stop_and_shutdown(c, 100);
-    if (rc >= 0) ack_observed = true;
     if (rc < 0) return rc;
 
     rc = read_angle_deg(c, &angle_before);
@@ -909,7 +931,6 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 
         printf("speed-step-test cycle %u: sending A2 +speed\n", i + 1);
         rc = myact_speed_dps_send(c, o->speed_step_dps);
-        if (rc >= 0) ack_observed = true;
         if (rc < 0) { ret = rc; goto cleanup; }
         must_stop = true;
 
@@ -944,7 +965,6 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 
         printf("speed-step-test cycle %u: sending A2 -speed\n", i + 1);
         rc = myact_speed_dps_send(c, -o->speed_step_dps);
-        if (rc >= 0) ack_observed = true;
         if (rc < 0) { ret = rc; goto cleanup; }
 
         (void)myact_read_operating_mode(c, &runmode_after_command);
@@ -977,20 +997,11 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     if (rc < 0) { ret = rc; goto cleanup; }
 
     delta_deg = angle_after - angle_before;
-    printf("speed-step-test summary:\n");
-    printf("  requested_dps=%.1f raw_0p01dps=%d frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-           o->speed_step_dps, (int)raw_0p01dps,
-           frame_bytes[0], frame_bytes[1], frame_bytes[2], frame_bytes[3],
-           frame_bytes[4], frame_bytes[5], frame_bytes[6], frame_bytes[7]);
-    printf("  max_abs_speed_dps=%.1f (pass>=%.1f)\n", max_abs_speed_dps, o->speed_pass_min_dps);
-    printf("  max_abs_iq_A=%.2f\n", max_abs_iq_a);
-    printf("  angle_before=%.2f angle_after_positive=%.2f angle_after_negative=%.2f\n",
-           angle_before, angle_after_positive, angle_after_negative);
-    printf("  angle_after=%.2f delta_deg=%.2f\n", angle_after, delta_deg);
-    printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
-    printf("  runmode_before=%u runmode_after_command=%u runmode_after_stop=%u error_flags=0x%04X\n",
-           (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop, s1->error_flags);
-    printf("  ack_observed=%d\n", ack_observed ? 1 : 0);
+    print_cmd_summary("speed-step-test", frame_bytes, "+/-speed-dps",
+                      angle_before, angle_after, delta_deg,
+                      fmax(0.0, o->speed_pass_min_delta_deg - fabs(delta_deg)),
+                      fabs(delta_deg) >= o->speed_pass_min_delta_deg,
+                      "see fail lines for diagnostics");
 
     rc = myact_read_status1(c, s1);
     if (rc < 0) { ret = rc; goto cleanup; }
@@ -1302,7 +1313,6 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     uint8_t a4_frame[8] = {0};
     int rc;
     uint64_t t0 = now_ms(NULL);
-    bool ack_observed = false;
     myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
@@ -1339,7 +1349,6 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
 
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
-    ack_observed = true;
     (void)myact_read_operating_mode(c, &runmode_after_command);
     if (runmode_after_command != MYACT_RUNMODE_POSITION) {
         printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
@@ -1366,19 +1375,10 @@ out:
     (void)myact_read_status1(c, s1);
 
     final_err = target_abs - final_abs;
-    printf("native-a4-abs-test: current_abs_deg=%.2f\n", current_abs);
-    printf("native-a4-abs-test: target_abs_deg=%.2f\n", target_abs);
-    printf("native-a4-abs-test: target_raw_0p01deg=%ld\n", (long)target_raw);
-    printf("native-a4-abs-test: maxSpeed=%u\n", (unsigned)abs_speed_raw);
-    printf("native-a4-abs-test: A4 frame bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-           a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
-    printf("native-a4-abs-test: final_abs_deg=%.2f\n", final_abs);
-    printf("native-a4-abs-test: final_error_deg=%.2f\n", final_err);
-    printf("native-a4-abs-test: elapsed_ms=%llu\n", (unsigned long long)(now_ms(NULL) - t0));
-    printf("native-a4-abs-test: error_flags=0x%04X\n", s1->error_flags);
-    printf("native-a4-abs-test: ack_observed=%d\n", ack_observed ? 1 : 0);
-    printf("native-a4-abs-test: runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
-           (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
+    print_cmd_summary("native-a4-abs-test", a4_frame, "absolute-target",
+                      current_abs, final_abs, final_abs - current_abs, final_err,
+                      fabs(final_err) <= o->abs_tolerance_deg && s1->error_flags == 0,
+                      "final_err vs tolerance");
 
     if (fabs(final_err) <= o->abs_tolerance_deg && s1->error_flags == 0) {
         printf("[PASS] native-a4-abs-test: native A4 absolute move succeeded\n");
@@ -1529,7 +1529,6 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     uint16_t max_speed_raw = (uint16_t)speed_dps;
     int32_t req_delta_raw = myact_deg_to_raw_0p01(delta_deg);
     uint8_t a8_frame[8] = {0xA8, 0x00, 0, 0, 0, 0, 0, 0};
-    bool ack_observed = false;
     bool target_reached = false;
     uint64_t t0;
     int rc;
@@ -1547,7 +1546,6 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     if (rc < 0) return rc;
 
     rc = myact_position_inc_send(c, max_speed_raw, req_delta_raw);
-    if (rc >= 0) ack_observed = true;
     if (rc < 0 && rc != MYACT_ETIMEDOUT) return rc;
 
     t0 = now_ms(NULL);
@@ -1567,12 +1565,10 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     rc = myact_read_status1(c, &s1);
     if (rc < 0) return rc;
 
-    printf("%s commanded_delta_deg=%+.2f maxSpeed=%u\n", tag, delta_deg, (unsigned)max_speed_raw);
-    printf("%s A8 frame bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-           tag, a8_frame[0], a8_frame[1], a8_frame[2], a8_frame[3],
-           a8_frame[4], a8_frame[5], a8_frame[6], a8_frame[7]);
-    printf("%s angle_before=%.2f angle_after=%.2f measured_delta_deg=%.2f error_deg=%.2f ack_observed=%d error_flags=0x%04X\n",
-           tag, before_deg, after_deg, observed_delta, error_deg, ack_observed ? 1 : 0, s1.error_flags);
+    print_cmd_summary(tag, a8_frame, "incremental-delta",
+                      before_deg, after_deg, observed_delta, error_deg,
+                      target_reached && s1.error_flags == 0,
+                      target_reached ? "reached target" : "timeout before target");
 
     if (out_before) *out_before = before_deg;
     if (out_after) *out_after = after_deg;
@@ -1984,10 +1980,12 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
     else if (kind == RAW_SMOKE_A4) pass = fabs(a_after - target_abs_deg) <= o->abs_tolerance_deg;
     else pass = fabs(delta - cmd_delta_deg) <= fmax(1.0, 0.20 * fabs(cmd_delta_deg));
 
-    printf("%s frame=%02X %02X %02X %02X %02X %02X %02X %02X angle_before=%.2f angle_after=%.2f delta_deg=%.2f brake_before=%u brake_after=%u voltage=%.1f error_flags=0x%04X %s\n",
-        name, frame[0],frame[1],frame[2],frame[3],frame[4],frame[5],frame[6],frame[7],
-        a_before, a_after, delta, (unsigned)s1_before.brake_release_command_state, (unsigned)s1_after.brake_release_command_state,
-        s1_after.voltage_0p1v/10.0, s1_after.error_flags, pass ? "PASS" : "FAIL");
+    print_cmd_summary(name, frame,
+                      (kind == RAW_SMOKE_A4) ? "abs+5deg" : ((kind == RAW_SMOKE_A8) ? "inc+5deg" : "runtime response"),
+                      a_before, a_after, delta,
+                      (kind == RAW_SMOKE_A4) ? (a_after - target_abs_deg) : ((kind == RAW_SMOKE_A8) ? (delta - cmd_delta_deg) : 0.0),
+                      pass,
+                      pass ? "within-threshold" : "outside-threshold");
 
     return pass ? RET_OK : RET_COMMS_FAIL;
 }
