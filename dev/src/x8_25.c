@@ -111,6 +111,7 @@ const char* myact_strerror(int rc) {
         case MYACT_ENOTSUP:   return "ENOTSUP";
         case MYACT_EBUS:      return "EBUS";
         case MYACT_ENOMOTION: return "ENOMOTION";
+        case MYACT_EBRAKE:    return "EBRAKE";
         case MYACT_STRICT_BAD_CAN_ID:           return "STRICT_BAD_CAN_ID";
         case MYACT_STRICT_WRONG_OPCODE:         return "STRICT_WRONG_OPCODE";
         case MYACT_STRICT_MALFORMED_PAYLOAD:    return "STRICT_MALFORMED_PAYLOAD";
@@ -843,14 +844,20 @@ int myact_stop_and_shutdown(myact_ctx_t* ctx, uint32_t settle_ms) {
 
 int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a) {
     uint8_t tx[8] = { MYACT_CMD_TORQUE, 0,0,0,0,0,0,0 };
+    int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     wr_u16_le(&tx[4], (uint16_t)iq_0p01a);
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
 int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps) {
     uint8_t tx[8] = { MYACT_CMD_SPEED, 0,0,0,0,0,0,0 };
+    int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     wr_u32_le(&tx[4], (uint32_t)speed_0p01dps);
     if (ctx->log_fn) {
         char msg[180];
@@ -875,7 +882,10 @@ int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps) {
 
 int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg) {
     uint8_t tx[8] = { MYACT_CMD_POSITION_ABS, 0,0,0,0,0,0,0 };
+    int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)angle_0p01deg);
     if (ctx->log_fn) {
@@ -912,7 +922,10 @@ int myact_position_single_send(myact_ctx_t* ctx, uint8_t spin_direction, uint16_
 
 int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg) {
     uint8_t tx[8] = { MYACT_CMD_POSITION_INC, 0,0,0,0,0,0,0 };
+    int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)delta_angle_0p01deg);
     return myact_send_frame(ctx, ctx->cmd_id, tx);
@@ -936,6 +949,8 @@ int myact_torque(myact_ctx_t* ctx, int16_t iq_0p01a, myact_basic_feedback_t* out
     myact_basic_feedback_t tmp;
     int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     if (!out) out = &tmp;
     wr_u16_le(&tx[4], (uint16_t)iq_0p01a);
     rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_TORQUE, &rx);
@@ -949,6 +964,8 @@ int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t*
     myact_basic_feedback_t tmp;
     int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     if (!out) out = &tmp;
     wr_u32_le(&tx[4], (uint32_t)speed_0p01dps);
     if (ctx->log_fn) {
@@ -971,6 +988,8 @@ int myact_position_abs(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0
     myact_basic_feedback_t tmp;
     int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     if (!out) out = &tmp;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)angle_0p01deg);
@@ -1009,6 +1028,8 @@ int myact_position_inc(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_a
     myact_basic_feedback_t tmp;
     int rc;
     if (!ctx) return MYACT_EINVAL;
+    rc = myact_prepare_for_motion(ctx, 0u, 0u);
+    if (rc < 0) return rc;
     if (!out) out = &tmp;
     wr_u16_le(&tx[2], max_speed_dps);
     wr_u32_le(&tx[4], (uint32_t)delta_angle_0p01deg);
@@ -1028,6 +1049,46 @@ int myact_system_reset(myact_ctx_t* ctx) {
 int myact_brake_release(myact_ctx_t* ctx) {
     uint8_t tx[8] = { MYACT_CMD_BRAKE_RELEASE, 0,0,0,0,0,0,0 };
     return myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_BRAKE_RELEASE, NULL);
+}
+
+int myact_prepare_for_motion(myact_ctx_t* ctx,
+                             uint32_t brake_timeout_ms,
+                             uint32_t poll_ms) {
+    myact_status1_t s1;
+    uint64_t start_ms;
+    uint32_t timeout = (brake_timeout_ms == 0u) ? 2500u : brake_timeout_ms;
+    uint32_t poll = (poll_ms == 0u) ? 50u : poll_ms;
+    int rc;
+    if (!ctx) return MYACT_EINVAL;
+
+    rc = myact_read_status1(ctx, &s1);
+    if (rc < 0) return rc;
+    printf("brake_before=%s\n", s1.brake_release_command_state ? "released" : "locked");
+    if (s1.brake_release_command_state) {
+        printf("brake_after=released\n");
+        printf("brake_release_latency_ms=0\n");
+        return MYACT_OK;
+    }
+
+    rc = myact_brake_release(ctx);
+    if (rc < 0) return rc;
+    start_ms = myact_now_ms(ctx);
+    for (;;) {
+        rc = myact_read_status1(ctx, &s1);
+        if (rc < 0) return rc;
+        if (s1.brake_release_command_state) {
+            printf("brake_after=released\n");
+            printf("brake_release_latency_ms=%llu\n",
+                   (unsigned long long)(myact_now_ms(ctx) - start_ms));
+            return MYACT_OK;
+        }
+        if ((myact_now_ms(ctx) - start_ms) >= timeout) break;
+        usleep((useconds_t)(poll * 1000u));
+    }
+
+    printf("brake_after=locked\n");
+    printf("brake_release_latency_ms=%u\n", timeout);
+    return (s1.brake_release_command_state ? MYACT_OK : MYACT_EBRAKE);
 }
 
 int myact_fault_clear(myact_ctx_t* ctx) {
