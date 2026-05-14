@@ -1315,12 +1315,11 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     (void)myact_read_operating_mode(c, &runmode_before);
 
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
-    if (rc < 0) goto out;
-    (void)myact_read_operating_mode(c, &runmode_after_command);
-    if (runmode_after_command != MYACT_RUNMODE_POSITION) {
-        printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
-               (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
+    if (rc < 0) {
+        printf("[FAIL_TX] native-a4-abs-test: send failed rc=%d (%s)\n", rc, myact_strerror(rc));
+        goto out;
     }
+    (void)myact_read_operating_mode(c, &runmode_after_command);
 
     t0 = now_ms(NULL);
     for (;;) {
@@ -1347,13 +1346,59 @@ out:
                       fabs(final_err) <= o->abs_tolerance_deg && s1->error_flags == 0,
                       "final_err vs tolerance");
 
-    if (fabs(final_err) <= o->abs_tolerance_deg && s1->error_flags == 0) {
-        printf("[PASS] native-a4-abs-test: native A4 absolute move succeeded\n");
-        return MYACT_OK;
-    }
+    {
+        const double angle_delta = final_abs - current_abs;
+        const bool target_reached = fabs(final_err) <= o->abs_tolerance_deg;
+        const bool motion_confirmed = fabs(angle_delta) >= (o->abs_tolerance_deg * 0.5);
+        const bool acked = rc >= 0;
+        const bool runmode_mismatch = (runmode_after_command != MYACT_RUNMODE_UNKNOWN) &&
+                                      (runmode_after_command != MYACT_RUNMODE_POSITION);
+        const bool direction_wrong = motion_confirmed && (o->abs_delta_deg * angle_delta < 0.0);
 
-    if (rc == MYACT_OK) rc = MYACT_ENOMOTION;
-    return rc;
+        if (s1->error_flags != 0) {
+            printf("[FAIL_ERROR_FLAGS] native-a4-abs-test: error_flags=0x%04X\n", s1->error_flags);
+            return MYACT_EIO;
+        }
+
+        if (target_reached) {
+            printf("[PASS_TARGET_REACHED] native-a4-abs-test: target reached (err=%.2f deg)\n", final_err);
+            if (!acked) {
+                printf("[WARN_ACK_MISSING_BUT_MOTION_CONFIRMED] native-a4-abs-test: target reached despite missing ACK\n");
+            }
+            if (runmode_mismatch) {
+                printf("[WARN_RUNMODE_MISMATCH] native-a4-abs-test: expected=%u observed=%u\n",
+                       (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
+            }
+            return MYACT_OK;
+        }
+
+        if (direction_wrong) {
+            printf("[FAIL_DIRECTION_WRONG] native-a4-abs-test: commanded_delta=%.2f observed_delta=%.2f\n",
+                   o->abs_delta_deg, angle_delta);
+            return MYACT_ENOMOTION;
+        }
+
+        if (motion_confirmed) {
+            printf("[PASS_MEASURED_MOTION] native-a4-abs-test: measured motion %.2f deg but target tolerance not met (err=%.2f deg)\n",
+                   angle_delta, final_err);
+            if (!acked) {
+                printf("[WARN_ACK_MISSING_BUT_MOTION_CONFIRMED] native-a4-abs-test: motion confirmed despite missing ACK\n");
+            }
+            if (runmode_mismatch) {
+                printf("[WARN_RUNMODE_MISMATCH] native-a4-abs-test: expected=%u observed=%u\n",
+                       (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
+            }
+            return MYACT_OK;
+        }
+
+        if (acked) {
+            printf("[FAIL_ACK_NO_MOTION] native-a4-abs-test: ACK observed but no measurable motion\n");
+            return MYACT_ENOMOTION;
+        }
+
+        printf("[FAIL_NO_ACK_NO_MOTION] native-a4-abs-test: no ACK and no measurable motion\n");
+        return MYACT_ETIMEDOUT;
+    }
 }
 
 static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
