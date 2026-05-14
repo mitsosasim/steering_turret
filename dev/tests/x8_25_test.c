@@ -1458,45 +1458,65 @@ static int run_a8_delta_observed(myact_ctx_t* c,
                                  double* out_before,
                                  double* out_after,
                                  double* out_delta) {
+    myact_status1_t s1;
     double before_deg = 0.0;
     double after_deg = 0.0;
-    double observed_delta;
+    double observed_delta = 0.0;
+    double error_deg = 0.0;
+    uint16_t max_speed_raw = (uint16_t)speed_dps;
+    int32_t req_delta_raw = myact_deg_to_raw_0p01(delta_deg);
+    uint8_t a8_frame[8] = {0xA8, 0x00, 0, 0, 0, 0, 0, 0};
+    bool ack_observed = false;
+    bool target_reached = false;
+    uint64_t t0;
     int rc;
+
+    a8_frame[2] = (uint8_t)(max_speed_raw & 0xFF);
+    a8_frame[3] = (uint8_t)((max_speed_raw >> 8) & 0xFF);
+    a8_frame[4] = (uint8_t)(req_delta_raw & 0xFF);
+    a8_frame[5] = (uint8_t)((req_delta_raw >> 8) & 0xFF);
+    a8_frame[6] = (uint8_t)((req_delta_raw >> 16) & 0xFF);
+    a8_frame[7] = (uint8_t)((req_delta_raw >> 24) & 0xFF);
 
     rc = prepare_sync(c);
     if (rc < 0) return rc;
     rc = read_angle_deg(c, &before_deg);
     if (rc < 0) return rc;
-    rc = myact_position_inc_send(c, (uint16_t)speed_dps, myact_deg_to_raw_0p01(delta_deg));
-    if (rc < 0) return rc;
-    {
-        myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
-        myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
-        myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
-        (void)myact_read_operating_mode(c, &runmode_before);
-        (void)myact_wait_runmode(c, MYACT_RUNMODE_POSITION, 1500u, 50u);
-        (void)myact_read_operating_mode(c, &runmode_after_command);
-        if (runmode_after_command != MYACT_RUNMODE_POSITION) {
-            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
-                   (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
+
+    rc = myact_position_inc_send(c, max_speed_raw, req_delta_raw);
+    if (rc >= 0) ack_observed = true;
+    if (rc < 0 && rc != MYACT_ETIMEDOUT) return rc;
+
+    t0 = now_ms(NULL);
+    for (;;) {
+        rc = read_angle_deg(c, &after_deg);
+        if (rc < 0) return rc;
+        observed_delta = after_deg - before_deg;
+        error_deg = observed_delta - delta_deg;
+        if (fabs(error_deg) <= pass_tolerance_deg) {
+            target_reached = true;
+            break;
         }
-        printf("%s runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
-               tag, (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
+        if (now_ms(NULL) - t0 >= wait_ms) break;
+        msleep(50);
     }
-    msleep(wait_ms);
-    rc = myact_stop_send(c);
-    if (rc < 0) return rc;
-    msleep(100);
-    rc = read_angle_deg(c, &after_deg);
+
+    rc = myact_read_status1(c, &s1);
     if (rc < 0) return rc;
 
-    observed_delta = after_deg - before_deg;
-    printf("%s before=%.2f after=%.2f delta=%.2f\n", tag, before_deg, after_deg, observed_delta);
+    printf("%s commanded_delta_deg=%+.2f maxSpeed=%u\n", tag, delta_deg, (unsigned)max_speed_raw);
+    printf("%s A8 frame bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+           tag, a8_frame[0], a8_frame[1], a8_frame[2], a8_frame[3],
+           a8_frame[4], a8_frame[5], a8_frame[6], a8_frame[7]);
+    printf("%s angle_before=%.2f angle_after=%.2f measured_delta_deg=%.2f error_deg=%.2f ack_observed=%d error_flags=0x%04X\n",
+           tag, before_deg, after_deg, observed_delta, error_deg, ack_observed ? 1 : 0, s1.error_flags);
+
     if (out_before) *out_before = before_deg;
     if (out_after) *out_after = after_deg;
     if (out_delta) *out_delta = observed_delta;
 
-    if (fabs(observed_delta - delta_deg) > pass_tolerance_deg) return MYACT_ESTATE;
+    if (!target_reached) return MYACT_ETIMEDOUT;
+    if (s1.error_flags != 0) return MYACT_ESTATE;
     return MYACT_OK;
 }
 
@@ -1539,6 +1559,7 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
     if (rc < 0) return rc;
 
     for (unsigned i = 0; i < o->cycles; i++) {
+        printf("rt-inc-burst cycle=%u\n", i + 1);
         rc = run_a8_delta_observed(c, "rt-inc-burst +", o->inc_delta_deg, o->inc_speed_dps,
                                    o->inc_wait_ms, fmax(1.0, 0.20 * fabs(o->inc_delta_deg)),
                                    NULL, NULL, NULL);
@@ -1549,7 +1570,9 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
         if (rc < 0) return rc;
     }
 
-    return myact_stop_send(c);
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    return myact_shutdown_send(c);
 }
 
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
