@@ -690,7 +690,7 @@ static int check_motion_voltage_or_skip(const test_opts_t* o, const myact_status
 }
 
 static int test_axis_enable(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1) {
-    uint64_t t0;
+    uint64_t t0 = now_ms(NULL);
     int rc = prepare_sync(ctx);
     if (rc < 0) return rc;
 
@@ -827,7 +827,7 @@ static int run_a8_delta_observed(myact_ctx_t* c,
                                  double* out_delta);
 
 static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    uint64_t t0;
+    uint64_t t0 = now_ms(NULL);
     double angle_before = 0.0;
     double angle_after = 0.0;
     double pos_angle_start = 0.0;
@@ -1075,7 +1075,7 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
     int ret = MYACT_OK;
-    uint64_t t0;
+    uint64_t t0 = now_ms(NULL);
     double angle_before = 0.0;
     double angle_after = 0.0;
     double angle_delta_deg;
@@ -1227,32 +1227,36 @@ cleanup:
 }
 
 static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    double orig;
-    double target_abs;
+    double current_abs = 0.0;
+    double target_abs = 0.0;
     double final_abs = 0.0;
-    double max_abs_iq_a = 0.0;
-    double max_abs_speed_dps = 0.0;
+    double final_err = 0.0;
     int32_t target_raw;
-    int32_t pos_acc = 0, pos_dec = 0;
-    float pos_kp = 0.0f, pos_ki = 0.0f, pos_kd = 0.0f;
     uint16_t abs_speed_raw;
     uint8_t a4_frame[8] = {0};
     int rc;
-    myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
-    myact_motion_commissioning_snapshot_t snap;
-    int snap_rc;
-    uint64_t t0;
+    uint64_t t0 = now_ms(NULL);
+    bool ack_observed = false;
+    myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
 
     rc = prepare_sync(c);
     if (rc < 0) return rc;
 
-    rc = axis_enable_for_motion(c, o, s1, "native-a4-abs-test");
+    rc = myact_active_reply_disable_all(c);
+    if (rc < 0) return rc;
+    rc = myact_drain_rx(c, 300);
+    if (rc < 0) return rc;
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    rc = myact_shutdown_send(c);
     if (rc < 0) return rc;
 
-    rc = read_angle_deg(c, &orig);
+    rc = read_angle_deg(c, &current_abs);
     if (rc < 0) return rc;
 
-    target_abs = orig + o->abs_delta_deg;
+    target_abs = current_abs + o->abs_delta_deg;
     target_raw = myact_deg_to_raw_0p01(target_abs);
     abs_speed_raw = (uint16_t)o->abs_speed_dps;
     a4_frame[0] = 0xA4;
@@ -1264,108 +1268,66 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     a4_frame[6] = (uint8_t)((target_raw >> 16) & 0xFF);
     a4_frame[7] = (uint8_t)((target_raw >> 24) & 0xFF);
 
-    snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
-    (void)myact_accel_read(c, MYACT_ACCEL_POSITION_ACC, &pos_acc);
-    (void)myact_accel_read(c, MYACT_ACCEL_POSITION_DEC, &pos_dec);
-    (void)myact_pid_read(c, MYACT_PID_POSITION_KP, &pos_kp);
-    (void)myact_pid_read(c, MYACT_PID_POSITION_KI, &pos_ki);
-    (void)myact_pid_read(c, MYACT_PID_POSITION_KD, &pos_kd);
+    rc = axis_enable_for_motion(c, o, s1, "native-a4-abs-test");
+    if (rc < 0) return rc;
 
-    printf("native-a4-abs-test: target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-           target_abs, (long)target_raw, (unsigned)abs_speed_raw,
-           a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
-    if (o->set_positive_limit_deg_valid || o->set_negative_limit_deg_valid) {
-        bool above_pos = o->set_positive_limit_deg_valid && target_abs > o->set_positive_limit_deg;
-        bool below_neg = o->set_negative_limit_deg_valid && target_abs < o->set_negative_limit_deg;
-        printf("native-a4-abs-test: software limits are write-only in firmware; using application-configured values only.\n");
-        printf("native-a4-abs-test: configured limits positive=%s negative=%s\n",
-               o->set_positive_limit_deg_valid ? "known" : "unknown",
-               o->set_negative_limit_deg_valid ? "known" : "unknown");
-        if (o->set_positive_limit_deg_valid) {
-            printf("native-a4-abs-test: positive_limit_deg=%.2f\n", o->set_positive_limit_deg);
-        }
-        if (o->set_negative_limit_deg_valid) {
-            printf("native-a4-abs-test: negative_limit_deg=%.2f\n", o->set_negative_limit_deg);
-        }
-        printf("native-a4-abs-test: target_vs_limits=%s\n", (above_pos || below_neg) ? "OUTSIDE" : "INSIDE");
-    } else {
-        printf("native-a4-abs-test: software limits unknown to app; skipping target-vs-limit check (firmware provides no readback).\n");
-    }
-    print_motion_commissioning_snapshot("native-a4-abs-test", snap_rc, &snap);
+    (void)myact_read_operating_mode(c, &runmode_before);
+
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) goto out;
-    {
-        myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
-        myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
-        myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
-        (void)myact_read_operating_mode(c, &runmode_before);
-        (void)myact_wait_runmode(c, MYACT_RUNMODE_POSITION, o->runmode_timeout_ms, o->runmode_poll_ms);
-        (void)myact_read_operating_mode(c, &runmode_after_command);
-        if (runmode_after_command != MYACT_RUNMODE_POSITION) {
-            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
-                   (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
-        }
-        printf("native-a4-abs-test: runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
-               (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
+    ack_observed = true;
+    (void)myact_read_operating_mode(c, &runmode_after_command);
+    if (runmode_after_command != MYACT_RUNMODE_POSITION) {
+        printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
+               (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
     }
 
     t0 = now_ms(NULL);
     for (;;) {
-        myact_status2_t s2;
-        double err;
         rc = read_angle_deg(c, &final_abs);
         if (rc < 0) goto out;
-        err = target_abs - final_abs;
-        printf("t_ms=%llu tag=abs target_deg=%.2f actual_deg=%.2f error_deg=%.2f\n",
-               (unsigned long long)(now_ms(NULL) - t0), target_abs, final_abs, err);
 
-        if (myact_read_status2(c, &s2) == MYACT_OK) {
-            double iq = fabs(s2.iq_0p01a / 100.0);
-            double spd = fabs((double)s2.speed_dps);
-            if (iq > max_abs_iq_a) max_abs_iq_a = iq;
-            if (spd > max_abs_speed_dps) max_abs_speed_dps = spd;
-            printf("t_ms=%llu tag=abs-9C iq_A=%.2f speed_dps=%d angle_deg=%d\n",
-                   (unsigned long long)(now_ms(NULL) - t0), s2.iq_0p01a / 100.0, s2.speed_dps, s2.angle_deg);
-        }
-
-        if (fabs(err) <= o->abs_tolerance_deg) break;
+        final_err = target_abs - final_abs;
+        if (fabs(final_err) <= o->abs_tolerance_deg) break;
         if (now_ms(NULL) - t0 >= o->abs_timeout_ms) {
-            myact_status1_t diag_s1;
-            memset(&diag_s1, 0, sizeof(diag_s1));
-            (void)myact_read_status1(c, &diag_s1);
-            (void)myact_read_operating_mode(c, &rm);
-            printf("native-a4-abs-test: A4 timeout\n");
-            printf("native-a4-abs-test: original_abs_deg=%.2f target_abs_deg=%.2f final_abs_deg=%.2f error_deg=%.2f\n",
-                   orig, target_abs, final_abs, target_abs - final_abs);
-            printf("native-a4-abs-test: A4 frame bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                   a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
-            printf("native-a4-abs-test: runmode=%u status1 error_flags=0x%04X brake=%u bus=%.1fV\n",
-                   (unsigned)rm, diag_s1.error_flags, (unsigned)diag_s1.brake_release_command_state, diag_s1.voltage_0p1v / 10.0);
-            if ((diag_s1.voltage_0p1v / 10.0) < 40.0) {
-                printf("classification: no-motion-under-low-voltage\n");
-            } else {
-                printf("classification: parameter/configuration suspect\n");
-            }
-            printf("native-a4-abs-test: max_abs_iq_A=%.2f max_abs_speed_dps=%.1f\n", max_abs_iq_a, max_abs_speed_dps);
-            printf("native-a4-abs-test: position PID kp=%.6f ki=%.6f kd=%.6f\n", (double)pos_kp, (double)pos_ki, (double)pos_kd);
-            printf("native-a4-abs-test: position accel/decel dps2=%ld/%ld\n", (long)pos_acc, (long)pos_dec);
-            printf("diag likely_issue: check runmode, PID tuning/zero, accel/decel limits, bus voltage, current limit, position limits, or motor error flags\n");
             rc = MYACT_ENOMOTION;
-            goto out;
+            break;
         }
         msleep(o->abs_poll_ms);
     }
 
-    printf("[PASS] native-a4-abs-test: native A4 absolute move succeeded\n");
-    rc = MYACT_OK;
 out:
     (void)myact_stop_send(c);
-    (void)send_stop_and_sample(c, "native-a4-abs-test");
+    (void)myact_shutdown_send(c);
+    (void)myact_read_operating_mode(c, &runmode_after_stop);
+    (void)myact_read_status1(c, s1);
+
+    final_err = target_abs - final_abs;
+    printf("native-a4-abs-test: current_abs_deg=%.2f\n", current_abs);
+    printf("native-a4-abs-test: target_abs_deg=%.2f\n", target_abs);
+    printf("native-a4-abs-test: target_raw_0p01deg=%ld\n", (long)target_raw);
+    printf("native-a4-abs-test: maxSpeed=%u\n", (unsigned)abs_speed_raw);
+    printf("native-a4-abs-test: A4 frame bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+           a4_frame[0], a4_frame[1], a4_frame[2], a4_frame[3], a4_frame[4], a4_frame[5], a4_frame[6], a4_frame[7]);
+    printf("native-a4-abs-test: final_abs_deg=%.2f\n", final_abs);
+    printf("native-a4-abs-test: final_error_deg=%.2f\n", final_err);
+    printf("native-a4-abs-test: elapsed_ms=%llu\n", (unsigned long long)(now_ms(NULL) - t0));
+    printf("native-a4-abs-test: error_flags=0x%04X\n", s1->error_flags);
+    printf("native-a4-abs-test: ack_observed=%d\n", ack_observed ? 1 : 0);
+    printf("native-a4-abs-test: runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
+           (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
+
+    if (fabs(final_err) <= o->abs_tolerance_deg && s1->error_flags == 0) {
+        printf("[PASS] native-a4-abs-test: native A4 absolute move succeeded\n");
+        return MYACT_OK;
+    }
+
+    if (rc == MYACT_OK) rc = MYACT_ENOMOTION;
     return rc;
 }
 
 static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    uint64_t t0;
+    uint64_t t0 = now_ms(NULL);
     int rc;
 
     rc = prepare_sync(c);
@@ -1422,7 +1384,7 @@ static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_st
 
 static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
-    uint64_t t0;
+    uint64_t t0 = now_ms(NULL);
     int rc;
 
     rc = prepare_sync(c);
