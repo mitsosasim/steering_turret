@@ -59,7 +59,8 @@ typedef enum {
     MYACT_ESTATE      = -6,
     MYACT_ENOTSUP     = -7,
     MYACT_EBUS        = -8,
-    MYACT_ENOMOTION   = -9
+    MYACT_ENOMOTION   = -9,
+    MYACT_EBRAKE      = -10
 } myact_rc_t;
 
 const char* myact_strerror(int rc);
@@ -337,6 +338,9 @@ int myact_shutdown(myact_ctx_t* ctx);
 int myact_stop(myact_ctx_t* ctx);
 int myact_brake_release(myact_ctx_t* ctx);
 int myact_fault_clear(myact_ctx_t* ctx);
+int myact_prepare_for_motion(myact_ctx_t* ctx,
+                             uint32_t brake_timeout_ms,
+                             uint32_t poll_ms);
 
 /* read identity / status / basic feedback / angle */
 int myact_read_status1(myact_ctx_t* ctx, myact_status1_t* out);

@@ -714,36 +714,15 @@ static int check_motion_voltage_or_skip(const test_opts_t* o, const myact_status
 }
 
 static int test_axis_enable(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1) {
-    uint64_t t0 = now_ms(NULL);
     int rc = prepare_sync(ctx);
     if (rc < 0) return rc;
 
-    rc = myact_read_status1(ctx, s1);
+    rc = myact_prepare_for_motion(ctx, o->brake_release_timeout_ms, o->brake_poll_ms);
     if (rc < 0) return rc;
-    if (s1->brake_release_command_state) return MYACT_OK;
-
-    rc = myact_brake_release(ctx);
-    if (rc < 0) return rc;
-
-    t0 = now_ms(NULL);
-    while (now_ms(NULL) - t0 < o->brake_release_timeout_ms) {
-        rc = myact_read_status1(ctx, s1);
-        if (rc < 0) return rc;
-        if (s1->brake_release_command_state) {
-            printf("brake released after %llums\n",
-                   (unsigned long long)(now_ms(NULL) - t0));
-            return MYACT_OK;
-        }
-        msleep(o->brake_poll_ms);
-    }
 
     rc = myact_read_status1(ctx, s1);
     if (rc < 0) return rc;
-
-    printf("brake release timeout: still %s after %ums\n",
-           s1->brake_release_command_state ? "released" : "locked",
-           o->brake_release_timeout_ms);
-    return s1->brake_release_command_state ? MYACT_OK : MYACT_ESTATE;
+    return s1->brake_release_command_state ? MYACT_OK : MYACT_EBRAKE;
 }
 
 static int axis_enable_for_motion(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1, const char* n) {
@@ -904,22 +883,10 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
     print_motion_commissioning_snapshot("speed-step-test", snap_rc, &snap);
 
-    if (!s1->brake_release_command_state) {
-        printf("speed-step-test: brake locked, sending 0x77 release command\n");
-        rc = myact_brake_release(c);
-        if (rc < 0) return rc;
-        t0 = now_ms(NULL);
-        while (now_ms(NULL) - t0 < o->brake_release_timeout_ms) {
-            rc = myact_read_status1(c, s1);
-            if (rc < 0) return rc;
-            if (s1->brake_release_command_state) break;
-            msleep(o->brake_poll_ms);
-        }
-        if (!s1->brake_release_command_state) {
-            printf("[FAIL] speed-step-test: brake release command state did not reach 1 before timeout\n");
-            return MYACT_ESTATE;
-        }
-    }
+    rc = myact_prepare_for_motion(c, o->brake_release_wait_ms, o->brake_poll_ms);
+    if (rc < 0) return rc;
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
 
     rc = check_motion_voltage_or_skip(o, s1, "speed-step-test");
     if (rc < 0) return rc;
