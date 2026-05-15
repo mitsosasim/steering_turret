@@ -1407,7 +1407,6 @@ out:
 }
 
 static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    uint64_t t0 = now_ms(NULL);
     int rc;
 
     rc = prepare_sync(c);
@@ -1435,36 +1434,15 @@ static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_st
         }
     }
 
-    t0 = now_ms(NULL);
-    rc = myact_brake_release(c);
+    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
     if (rc < 0) return rc;
-    printf("brake release: sent 0x77\n");
-
-    while (now_ms(NULL) - t0 < o->brake_release_timeout_ms) {
-        rc = myact_read_status1(c, s1);
-        if (rc < 0) return rc;
-        if (s1->brake_release_command_state) {
-            printf("brake latency: %llums\n",
-                   (unsigned long long)(now_ms(NULL) - t0));
-            return MYACT_OK;
-        }
-        msleep(o->brake_poll_ms);
-    }
-
     rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
-    if (s1->brake_release_command_state) {
-        printf("brake latency: %llums\n",
-               (unsigned long long)(now_ms(NULL) - t0));
-        return MYACT_OK;
-    }
-    printf("brake latency: timeout (%ums)\n", o->brake_release_timeout_ms);
-    return MYACT_ESTATE;
+    return s1->brake_release_command_state ? MYACT_OK : MYACT_ESTATE;
 }
 
 static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     myact_runmode_t rm = MYACT_RUNMODE_UNKNOWN;
-    uint64_t t0 = now_ms(NULL);
     int rc;
 
     rc = prepare_sync(c);
@@ -1486,19 +1464,8 @@ static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t
     }
 
     if (!s1->brake_release_command_state) {
-        rc = myact_brake_release(c);
+        rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
         if (rc < 0) return rc;
-        t0 = now_ms(NULL);
-        while (now_ms(NULL) - t0 < o->brake_release_timeout_ms) {
-            rc = myact_read_status1(c, s1);
-            if (rc < 0) return rc;
-            if (s1->brake_release_command_state) {
-                printf("enable-hold: brake released after %llums\n",
-                       (unsigned long long)(now_ms(NULL) - t0));
-                break;
-            }
-            msleep(o->brake_poll_ms);
-        }
     }
 
     rc = myact_read_status1(c, s1);
@@ -1945,13 +1912,9 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
     a_before = myact_raw_0p01_to_deg(a_before_raw);
 
     if (!s1_before.brake_release_command_state) {
-        uint64_t t0 = now_ms(NULL);
-        rc = myact_brake_release(c); if (rc < 0) return rc;
-        while (now_ms(NULL) - t0 < 2500) {
-            rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
-            if (s1_before.brake_release_command_state) break;
-            msleep(o->brake_poll_ms ? o->brake_poll_ms : 50);
-        }
+        rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
+        if (rc < 0) return rc;
+        rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
         if (!s1_before.brake_release_command_state) return MYACT_ETIMEDOUT;
     }
 

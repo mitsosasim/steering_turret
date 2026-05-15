@@ -859,7 +859,9 @@ int myact_read_status3(myact_ctx_t* ctx, myact_status3_t* out) {
 
 int myact_shutdown_send(myact_ctx_t* ctx) {
     uint8_t tx[8] = { MYACT_CMD_SHUTDOWN, 0,0,0,0,0,0,0 };
-    return myact_send_frame(ctx, ctx->cmd_id, tx);
+    int rc = myact_send_frame(ctx, ctx->cmd_id, tx);
+    if (rc >= 0) myact_reset_cache(ctx);
+    return rc;
 }
 
 int myact_stop_send(myact_ctx_t* ctx) {
@@ -971,7 +973,9 @@ int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t de
 
 int myact_shutdown(myact_ctx_t* ctx) {
     uint8_t tx[8] = { MYACT_CMD_SHUTDOWN, 0,0,0,0,0,0,0 };
-    return myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_SHUTDOWN, NULL);
+    int rc = myact_txrx(ctx, ctx->cmd_id, tx, ctx->reply_id, MYACT_CMD_SHUTDOWN, NULL);
+    if (rc >= 0) myact_reset_cache(ctx);
+    return rc;
 }
 
 int myact_stop(myact_ctx_t* ctx) {
@@ -1092,39 +1096,52 @@ int myact_prepare_for_motion(myact_ctx_t* ctx,
                              uint32_t poll_ms) {
     myact_status1_t s1;
     uint64_t start_ms;
-    uint32_t timeout = (brake_timeout_ms == 0u) ? 2500u : brake_timeout_ms;
+    uint64_t next_retry_ms;
+    uint64_t now;
+    uint64_t latency_ms = 0u;
+    uint32_t retries = 0u;
+    bool brake_before_locked;
+    bool brake_after_locked;
+    uint32_t timeout = (brake_timeout_ms == 0u) ? 3000u : brake_timeout_ms;
     uint32_t poll = (poll_ms == 0u) ? 50u : poll_ms;
     int rc;
     if (!ctx) return MYACT_EINVAL;
 
     rc = myact_read_status1(ctx, &s1);
     if (rc < 0) return rc;
-    printf("brake_before=%s\n", s1.brake_release_command_state ? "released" : "locked");
-    if (s1.brake_release_command_state) {
-        printf("brake_after=released\n");
-        printf("brake_release_latency_ms=0\n");
-        return MYACT_OK;
+    brake_before_locked = !s1.brake_release_command_state;
+    start_ms = myact_now_ms(ctx);
+    next_retry_ms = start_ms + 500u;
+
+    if (brake_before_locked) {
+        rc = myact_brake_release(ctx);
+        if (rc < 0) return rc;
+        retries = 1u;
     }
 
-    rc = myact_brake_release(ctx);
-    if (rc < 0) return rc;
-    start_ms = myact_now_ms(ctx);
-    for (;;) {
+    brake_after_locked = brake_before_locked;
+    while (brake_after_locked) {
         rc = myact_read_status1(ctx, &s1);
         if (rc < 0) return rc;
-        if (s1.brake_release_command_state) {
-            printf("brake_after=released\n");
-            printf("brake_release_latency_ms=%llu\n",
-                   (unsigned long long)(myact_now_ms(ctx) - start_ms));
-            return MYACT_OK;
+        brake_after_locked = !s1.brake_release_command_state;
+        now = myact_now_ms(ctx);
+        latency_ms = now - start_ms;
+        if (!brake_after_locked) break;
+        if (latency_ms >= timeout) break;
+        if (now >= next_retry_ms) {
+            rc = myact_brake_release(ctx);
+            if (rc < 0) return rc;
+            retries++;
+            next_retry_ms = now + 500u;
         }
-        if ((myact_now_ms(ctx) - start_ms) >= timeout) break;
         usleep((useconds_t)(poll * 1000u));
     }
 
-    printf("brake_after=locked\n");
-    printf("brake_release_latency_ms=%u\n", timeout);
-    return (s1.brake_release_command_state ? MYACT_OK : MYACT_EBRAKE);
+    printf("brake_before=%s\n", brake_before_locked ? "locked" : "released");
+    printf("brake_after=%s\n", brake_after_locked ? "locked" : "released");
+    printf("brake_release_latency_ms=%llu\n", (unsigned long long)latency_ms);
+    printf("brake_release_retries=%u\n", retries);
+    return brake_after_locked ? MYACT_EBRAKE : MYACT_OK;
 }
 
 int myact_fault_clear(myact_ctx_t* ctx) {
