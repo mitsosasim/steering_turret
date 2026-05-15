@@ -790,6 +790,22 @@ static int send_stop_and_sample(myact_ctx_t* c, const char* n) {
     return MYACT_OK;
 }
 
+static unsigned myact_motion_quiet_wait_ms(uint8_t command, double delta_or_hold, double speed) {
+    double exec_ms = 700.0;
+    (void)command;
+
+    if (command == 0xA4 || command == 0xA8) {
+        if (speed > 0.0) {
+            double travel_ms = (fabs(delta_or_hold) / speed) * 1000.0 + 300.0;
+            if (travel_ms > exec_ms) exec_ms = travel_ms;
+        }
+    } else if (command == 0xA2 || command == 0xA1) {
+        if (delta_or_hold > exec_ms) exec_ms = delta_or_hold;
+    }
+    if (exec_ms < 1.0) exec_ms = 1.0;
+    return (unsigned)exec_ms;
+}
+
 static int bench_result(const char* n, int rc) {
     if (rc == MYACT_OK) {
         printf("[PASS] %s\n", n);
@@ -851,8 +867,6 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     myact_status2_t s2;
     myact_motion_commissioning_snapshot_t snap;
     int snap_rc;
-    myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
-    myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
     bool low_voltage_condition = false;
     bool pos_sign_ok = false;
@@ -905,13 +919,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         rc = myact_speed_dps_send(c, o->speed_step_dps);
         if (rc < 0) { ret = rc; goto cleanup; }
         must_stop = true;
-
-        (void)myact_read_operating_mode(c, &runmode_before);
-        (void)myact_read_operating_mode(c, &runmode_after_command);
-        if (runmode_after_command != MYACT_RUNMODE_SPEED) {
-            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
-                   (unsigned)MYACT_RUNMODE_SPEED, (unsigned)runmode_after_command);
-        }
+        msleep(myact_motion_quiet_wait_ms(0xA2, (double)o->speed_step_hold_ms, 0.0));
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
@@ -938,12 +946,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         printf("speed-step-test cycle %u: sending A2 -speed\n", i + 1);
         rc = myact_speed_dps_send(c, -o->speed_step_dps);
         if (rc < 0) { ret = rc; goto cleanup; }
-
-        (void)myact_read_operating_mode(c, &runmode_after_command);
-        if (runmode_after_command != MYACT_RUNMODE_SPEED) {
-            printf("RUNMODE_DIAGNOSTIC_MISMATCH expected=%u observed=%u\n",
-                   (unsigned)MYACT_RUNMODE_SPEED, (unsigned)runmode_after_command);
-        }
+        msleep(myact_motion_quiet_wait_ms(0xA2, (double)o->speed_step_hold_ms, 0.0));
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
@@ -1184,9 +1187,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
             goto cleanup;
         }
         acked = true;
-        (void)myact_read_operating_mode(c, &runmode_before);
-        (void)myact_read_operating_mode(c, &runmode_after_command);
-        printf("torque-step-test: runmode diagnostic after +A1=%u\n", (unsigned)runmode_after_command);
+        msleep(myact_motion_quiet_wait_ms(0xA1, (double)o->torque_step_hold_ms, 0.0));
 
         t0 = now_ms(NULL);
         while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
@@ -1211,8 +1212,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
                 goto cleanup;
             }
             acked = true;
-            (void)myact_read_operating_mode(c, &runmode_after_command);
-            printf("torque-step-test: runmode diagnostic after -A1=%u\n", (unsigned)runmode_after_command);
+            msleep(myact_motion_quiet_wait_ms(0xA1, (double)o->torque_step_hold_ms, 0.0));
 
             t0 = now_ms(NULL);
             while (now_ms(NULL) - t0 < o->torque_step_hold_ms) {
@@ -1285,7 +1285,6 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     uint8_t a4_frame[8] = {0};
     int rc;
     uint64_t t0 = now_ms(NULL);
-    myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
 
@@ -1317,14 +1316,12 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     rc = axis_enable_for_motion(c, o, s1, "native-a4-abs-test");
     if (rc < 0) return rc;
 
-    (void)myact_read_operating_mode(c, &runmode_before);
-
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) {
         printf("[FAIL_TX] native-a4-abs-test: send failed rc=%d (%s)\n", rc, myact_strerror(rc));
         goto out;
     }
-    (void)myact_read_operating_mode(c, &runmode_after_command);
+    msleep(myact_motion_quiet_wait_ms(0xA4, o->abs_delta_deg, o->abs_speed_dps));
 
     t0 = now_ms(NULL);
     for (;;) {
@@ -1531,6 +1528,7 @@ static int run_a8_delta_observed(myact_ctx_t* c,
 
     rc = myact_position_inc_send(c, max_speed_raw, req_delta_raw);
     if (rc < 0 && rc != MYACT_ETIMEDOUT) return rc;
+    msleep(myact_motion_quiet_wait_ms(0xA8, delta_deg, speed_dps));
 
     t0 = now_ms(NULL);
     for (;;) {
