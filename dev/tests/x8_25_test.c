@@ -838,8 +838,7 @@ static int bench_result(const char* n, int rc, int* warnings) {
             printf("note: do not permanently mark A2/A4 unsupported based only on 22.7 V tests.\n");
         }
         printf("[ENOMOTION] %s: %s (%d)\n", n, myact_strerror(rc), rc);
-        if (warnings) (*warnings)++;
-        return 0;
+        return 1;
     }
 
     if (rc == RET_COMMS_FAIL) {
@@ -2212,6 +2211,7 @@ int main(int argc, char** argv) {
     int32_t a = 0;
     int rc;
     int failures = 0;
+    int passed = 0;
     int warnings = 0;
     int tests_run = 0;
 
@@ -2290,6 +2290,7 @@ int main(int argc, char** argv) {
             if (run_independent_qual(&ctx, &o, &s1, &tests_run, &failures, &warnings) != RET_OK) {
                 failures++;
             }
+            passed = tests_run - failures;
         } else if (o.production_qual) {
             int b;
             bool required_pass = true;
@@ -2303,6 +2304,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2310,6 +2313,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2317,6 +2322,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2324,6 +2331,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2331,6 +2340,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2338,6 +2349,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2345,6 +2358,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2352,6 +2367,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2359,6 +2376,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2366,6 +2385,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2373,6 +2394,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             tests_run++;
@@ -2380,6 +2403,8 @@ int main(int argc, char** argv) {
             if (b != RET_OK) {
                 failures++;
                 required_pass = false;
+            } else {
+                passed++;
             }
 
             printf("production-qual summary: %s\n", required_pass ? "PASS" : "FAIL");
@@ -2388,31 +2413,31 @@ int main(int argc, char** argv) {
             any_dispatched = true;
             printf("[PASS] diagnostics\n");
             tests_run++; b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1), &warnings);
-            if (b != RET_OK) failures++;
+            if (b != RET_OK) failures++; else passed++;
             tests_run++; b = bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1), &warnings);
-            if (b != RET_OK) failures++;
+            if (b != RET_OK) failures++; else passed++;
             tests_run++; b = bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1), &warnings);
-            if (b != RET_OK) failures++;
+            if (b != RET_OK) failures++; else passed++;
             if (o.run_mit_in_experimental_all) {
                 tests_run++; b = bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1), &warnings);
-                if (b != RET_OK) failures++;
+                if (b != RET_OK) failures++; else passed++;
             } else {
                 printf("[SKIP] mit-mode-test: not requested (use --bench-all-mit)\n");
             }
         } else {
-            if (o.brake_latency_test) { any_dispatched = true; tests_run++; if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.enable_hold) { any_dispatched = true; tests_run++; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.raw_motion_smoke) { any_dispatched = true; tests_run++; if (bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false), &warnings) > 0) failures++; }
-            if (o.raw_motion_smoke_sendonly) { any_dispatched = true; tests_run++; if (bench_result("raw-motion-smoke-sendonly", run_raw_motion_smoke(&ctx, &o, &s1, true), &warnings) > 0) failures++; }
-            if (o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all) { any_dispatched = true; tests_run++; if (bench_result("raw-smoke-suite", run_raw_smoke_suite(&ctx, &o), &warnings) > 0) failures++; }
-            if (o.brake_persistence_test) { any_dispatched = true; tests_run++; if (bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.rt_inc_burst) { any_dispatched = true; tests_run++; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.speed_step_test) { any_dispatched = true; tests_run++; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.speed_stream_test) { any_dispatched = true; tests_run++; if (bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.native_a4_abs_test) { any_dispatched = true; tests_run++; if (bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.active_telemetry_rt_test) { any_dispatched = true; tests_run++; if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.torque_step_test || o.torque_sweep_test) { any_dispatched = true; tests_run++; if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
-            if (o.mit_mode_test) { any_dispatched = true; tests_run++; if (bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.brake_latency_test) { any_dispatched = true; tests_run++; { int b = bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.enable_hold) { any_dispatched = true; tests_run++; { int b = bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.raw_motion_smoke) { any_dispatched = true; tests_run++; { int b = bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.raw_motion_smoke_sendonly) { any_dispatched = true; tests_run++; { int b = bench_result("raw-motion-smoke-sendonly", run_raw_motion_smoke(&ctx, &o, &s1, true), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all) { any_dispatched = true; tests_run++; { int b = bench_result("raw-smoke-suite", run_raw_smoke_suite(&ctx, &o), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.brake_persistence_test) { any_dispatched = true; tests_run++; { int b = bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.rt_inc_burst) { any_dispatched = true; tests_run++; { int b = bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.speed_step_test) { any_dispatched = true; tests_run++; { int b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.speed_stream_test) { any_dispatched = true; tests_run++; { int b = bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.native_a4_abs_test) { any_dispatched = true; tests_run++; { int b = bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.active_telemetry_rt_test) { any_dispatched = true; tests_run++; { int b = bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.torque_step_test || o.torque_sweep_test) { any_dispatched = true; tests_run++; { int b = bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
+            if (o.mit_mode_test) { any_dispatched = true; tests_run++; { int b = bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1), &warnings); if (b > 0) failures++; else passed++; } }
         }
 
         if (any_test_requested && !any_dispatched) {
@@ -2424,7 +2449,7 @@ int main(int argc, char** argv) {
 
     rc = (failures > 0) ? RET_COMMS_FAIL : RET_OK;
     printf("tests_run=%d passed=%d failed=%d warnings=%d\n",
-           tests_run, tests_run - failures, failures, warnings);
+           tests_run, passed, failures, warnings);
 
 done:
     if (o.no_shutdown_on_exit) {
