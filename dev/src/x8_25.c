@@ -71,6 +71,40 @@ static void wr_u32_le(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)((v >> 24) & 0xFFu);
 }
 
+int myact_pack_a1_torque(int16_t iq_0p01a, uint8_t out[8]) {
+    if (!out) return MYACT_EINVAL;
+    memset(out, 0, 8);
+    out[0] = MYACT_CMD_TORQUE;
+    wr_u16_le(&out[4], (uint16_t)iq_0p01a);
+    return MYACT_OK;
+}
+
+int myact_pack_a2_speed(int32_t speed_0p01dps, uint8_t out[8]) {
+    if (!out) return MYACT_EINVAL;
+    memset(out, 0, 8);
+    out[0] = MYACT_CMD_SPEED;
+    wr_u32_le(&out[4], (uint32_t)speed_0p01dps);
+    return MYACT_OK;
+}
+
+int myact_pack_a4_abs(uint16_t speed_dps, int32_t target_0p01deg, uint8_t out[8]) {
+    if (!out) return MYACT_EINVAL;
+    memset(out, 0, 8);
+    out[0] = MYACT_CMD_POSITION_ABS;
+    wr_u16_le(&out[2], speed_dps);
+    wr_u32_le(&out[4], (uint32_t)target_0p01deg);
+    return MYACT_OK;
+}
+
+int myact_pack_a8_inc(uint16_t speed_dps, int32_t delta_0p01deg, uint8_t out[8]) {
+    if (!out) return MYACT_EINVAL;
+    memset(out, 0, 8);
+    out[0] = MYACT_CMD_POSITION_INC;
+    wr_u16_le(&out[2], speed_dps);
+    wr_u32_le(&out[4], (uint32_t)delta_0p01deg);
+    return MYACT_OK;
+}
+
 double myact_clamp(double x, double x_min, double x_max) {
     if (x < x_min) return x_min;
     if (x > x_max) return x_max;
@@ -843,22 +877,24 @@ int myact_stop_and_shutdown(myact_ctx_t* ctx, uint32_t settle_ms) {
 }
 
 int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a) {
-    uint8_t tx[8] = { MYACT_CMD_TORQUE, 0,0,0,0,0,0,0 };
+    uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
     rc = myact_prepare_for_motion(ctx, 0u, 0u);
     if (rc < 0) return rc;
-    wr_u16_le(&tx[4], (uint16_t)iq_0p01a);
+    rc = myact_pack_a1_torque(iq_0p01a, tx);
+    if (rc < 0) return rc;
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
 int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps) {
-    uint8_t tx[8] = { MYACT_CMD_SPEED, 0,0,0,0,0,0,0 };
+    uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
     rc = myact_prepare_for_motion(ctx, 0u, 0u);
     if (rc < 0) return rc;
-    wr_u32_le(&tx[4], (uint32_t)speed_0p01dps);
+    rc = myact_pack_a2_speed(speed_0p01dps, tx);
+    if (rc < 0) return rc;
     if (ctx->log_fn) {
         char msg[180];
         (void)snprintf(msg, sizeof(msg),
@@ -881,13 +917,13 @@ int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps) {
 }
 
 int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg) {
-    uint8_t tx[8] = { MYACT_CMD_POSITION_ABS, 0,0,0,0,0,0,0 };
+    uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
     rc = myact_prepare_for_motion(ctx, 0u, 0u);
     if (rc < 0) return rc;
-    wr_u16_le(&tx[2], max_speed_dps);
-    wr_u32_le(&tx[4], (uint32_t)angle_0p01deg);
+    rc = myact_pack_a4_abs(max_speed_dps, angle_0p01deg, tx);
+    if (rc < 0) return rc;
     if (ctx->log_fn) {
         char msg[220];
         (void)snprintf(msg, sizeof(msg),
@@ -921,13 +957,13 @@ int myact_position_single_send(myact_ctx_t* ctx, uint8_t spin_direction, uint16_
 }
 
 int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg) {
-    uint8_t tx[8] = { MYACT_CMD_POSITION_INC, 0,0,0,0,0,0,0 };
+    uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
     rc = myact_prepare_for_motion(ctx, 0u, 0u);
     if (rc < 0) return rc;
-    wr_u16_le(&tx[2], max_speed_dps);
-    wr_u32_le(&tx[4], (uint32_t)delta_angle_0p01deg);
+    rc = myact_pack_a8_inc(max_speed_dps, delta_angle_0p01deg, tx);
+    if (rc < 0) return rc;
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 

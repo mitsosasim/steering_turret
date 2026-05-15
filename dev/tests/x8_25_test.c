@@ -2011,29 +2011,15 @@ static int run_raw_smoke_suite(myact_ctx_t* c, const test_opts_t* o) {
     return rc;
 }
 
-static int selftest_send_cb(const myact_can_frame_t* fr, void* user) {
-    myact_can_frame_t* cap = (myact_can_frame_t*)user;
-    if (!fr || !cap) return MYACT_EINVAL;
-    *cap = *fr;
-    return MYACT_OK;
-}
-
-static int selftest_recv_cb(myact_can_frame_t* out, uint32_t timeout_ms, void* user) {
-    (void)out; (void)timeout_ms; (void)user;
-    return MYACT_ETIMEDOUT;
-}
-
 static void print_bytes(const uint8_t b[8]) {
     printf("%02X %02X %02X %02X %02X %02X %02X %02X",
            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
 }
 
 static int run_selftest_pack(void) {
-    myact_io_t io;
-    myact_ctx_t ctx;
-    myact_can_frame_t cap;
     int rc;
     int fails = 0;
+    uint8_t actual[8] = {0};
 
     struct {
         const char* name;
@@ -2048,40 +2034,27 @@ static int run_selftest_pack(void) {
         {"A8 -360 deg @500 dps", {0xA8,0x00,0xF4,0x01,0x60,0x73,0xFF,0xFF}, NULL},
     };
 
-    memset(&io, 0, sizeof(io));
-    memset(&cap, 0, sizeof(cap));
-    io.send = selftest_send_cb;
-    io.recv = selftest_recv_cb;
-    io.time_ms = now_ms;
-    io.user = &cap;
-
-    rc = myact_init(&ctx, 1, &io);
-    if (rc < 0) {
-        fprintf(stderr, "selftest-pack init failed rc=%d (%s)\n", rc, myact_strerror(rc));
-        return RET_COMMS_FAIL;
-    }
-
     #define CHECK_CASE(idx, call_expr) do { \
-        memset(&cap, 0, sizeof(cap)); \
+        memset(actual, 0, sizeof(actual)); \
         rc = (call_expr); \
         if (rc < 0) { \
-            fprintf(stderr, "[FAIL] %s send rc=%d (%s)\n", cases[idx].name, rc, myact_strerror(rc)); \
+            fprintf(stderr, "[FAIL] %s pack rc=%d (%s)\n", cases[idx].name, rc, myact_strerror(rc)); \
             ++fails; \
-        } else if (memcmp(cap.data, cases[idx].expected, 8) != 0) { \
+        } else if (memcmp(actual, cases[idx].expected, 8) != 0) { \
             printf("[FAIL] %s expected=", cases[idx].name); print_bytes(cases[idx].expected); \
-            printf(" actual="); print_bytes(cap.data); printf("\n"); \
+            printf(" actual="); print_bytes(actual); printf("\n"); \
             ++fails; \
         } else { \
             printf("[PASS] %s\n", cases[idx].name); \
         } \
     } while (0)
 
-    CHECK_CASE(0, myact_speed_dps_send(&ctx, 100.0));
-    CHECK_CASE(1, myact_speed_dps_send(&ctx, -100.0));
-    CHECK_CASE(2, myact_position_abs_deg_send(&ctx, 360.0, 500));
-    CHECK_CASE(3, myact_position_abs_deg_send(&ctx, -360.0, 500));
-    CHECK_CASE(4, myact_position_inc_send(&ctx, 500, 36000));
-    CHECK_CASE(5, myact_position_inc_send(&ctx, 500, -36000));
+    CHECK_CASE(0, myact_pack_a2_speed(10000, actual));
+    CHECK_CASE(1, myact_pack_a2_speed(-10000, actual));
+    CHECK_CASE(2, myact_pack_a4_abs(500, 36000, actual));
+    CHECK_CASE(3, myact_pack_a4_abs(500, -36000, actual));
+    CHECK_CASE(4, myact_pack_a8_inc(500, 36000, actual));
+    CHECK_CASE(5, myact_pack_a8_inc(500, -36000, actual));
 
     if (fails) {
         printf("selftest-pack: %d mismatch(es)\n", fails);
