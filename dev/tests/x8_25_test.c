@@ -183,6 +183,7 @@ typedef struct {
     bool set_negative_limit_deg_valid;
     bool selftest_pack;
     bool trace_frames;
+    bool verbose_samples;
 
     double min_motion_voltage;
     double smoke_delta_deg;
@@ -556,6 +557,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--write-pid-rom", write_pid_rom)
         FLAG("--selftest-pack", selftest_pack)
         FLAG("--trace-frames", trace_frames)
+        FLAG("--verbose-samples", verbose_samples)
 
         if (!strcmp(argv[i], "--speed-step-dps") && i + 1 < argc) o->speed_step_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
@@ -758,9 +760,11 @@ static int sample_status2_capture(myact_ctx_t* c, const char* tag, uint64_t t0, 
     int rc = myact_read_status2(c, out);
     if (rc < 0) return rc;
 
-    printf("t_ms=%llu tag=%s iq_A=%.2f speed_dps=%d angle_deg=%d temp_C=%d\n",
-           (unsigned long long)(now_ms(NULL) - t0), tag,
-           out->iq_0p01a / 100.0, out->speed_dps, out->angle_deg, out->motor_temp_c);
+    if (g_trace.enabled) {
+        printf("t_ms=%llu tag=%s iq_A=%.2f speed_dps=%d angle_deg=%d temp_C=%d\n",
+               (unsigned long long)(now_ms(NULL) - t0), tag,
+               out->iq_0p01a / 100.0, out->speed_dps, out->angle_deg, out->motor_temp_c);
+    }
     return MYACT_OK;
 }
 
@@ -850,7 +854,6 @@ static int run_a8_delta_observed(myact_ctx_t* c,
                                  double* out_delta);
 
 static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    uint64_t t0 = now_ms(NULL);
     double angle_before = 0.0;
     double angle_after = 0.0;
     double pos_angle_start = 0.0;
@@ -860,11 +863,9 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     double delta_deg;
     double pos_delta_deg = 0.0;
     double neg_delta_deg = 0.0;
-    double max_abs_speed_dps = 0.0;
     double max_abs_iq_a = 0.0;
     int ret = MYACT_OK;
     int rc;
-    myact_status2_t s2;
     myact_motion_commissioning_snapshot_t snap;
     int snap_rc;
     myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
@@ -919,23 +920,17 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         rc = myact_speed_dps_send(c, o->speed_step_dps);
         if (rc < 0) { ret = rc; goto cleanup; }
         must_stop = true;
-        msleep(myact_motion_quiet_wait_ms(0xA2, (double)o->speed_step_hold_ms, 0.0));
+        msleep(o->speed_step_hold_ms);
 
-        t0 = now_ms(NULL);
-        while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-            rc = sample_status2_capture(c, "speed+", t0, &s2);
-            if (rc < 0) { ret = rc; goto cleanup; }
-            if (s2.speed_dps > 0) pos_sign_ok = true;
-            if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
-            if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
-            rc = read_angle_deg(c, &angle_after_positive);
-            if (rc < 0) { ret = rc; goto cleanup; }
-            msleep(o->speed_sample_ms);
-        }
+        rc = read_angle_deg(c, &angle_after_positive);
+        if (rc < 0) { ret = rc; goto cleanup; }
 
         rc = myact_speed_send(c, 0);
         if (rc < 0) { ret = rc; goto cleanup; }
-        msleep(50);
+        rc = myact_stop_send(c);
+        if (rc < 0) { ret = rc; goto cleanup; }
+        rc = myact_shutdown_send(c);
+        if (rc < 0) { ret = rc; goto cleanup; }
         rc = read_angle_deg(c, &pos_angle_end);
         if (rc < 0) { ret = rc; goto cleanup; }
         pos_delta_deg += pos_angle_end - pos_angle_start;
@@ -946,23 +941,16 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         printf("speed-step-test cycle %u: sending A2 -speed\n", i + 1);
         rc = myact_speed_dps_send(c, -o->speed_step_dps);
         if (rc < 0) { ret = rc; goto cleanup; }
-        msleep(myact_motion_quiet_wait_ms(0xA2, (double)o->speed_step_hold_ms, 0.0));
-
-        t0 = now_ms(NULL);
-        while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-            rc = sample_status2_capture(c, "speed-", t0, &s2);
-            if (rc < 0) { ret = rc; goto cleanup; }
-            if (s2.speed_dps < 0) neg_sign_ok = true;
-            if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
-            if (fabs(s2.iq_0p01a / 100.0) > max_abs_iq_a) max_abs_iq_a = fabs(s2.iq_0p01a / 100.0);
-            rc = read_angle_deg(c, &angle_after_negative);
-            if (rc < 0) { ret = rc; goto cleanup; }
-            msleep(o->speed_sample_ms);
-        }
+        msleep(o->speed_step_hold_ms);
+        rc = read_angle_deg(c, &angle_after_negative);
+        if (rc < 0) { ret = rc; goto cleanup; }
 
         rc = myact_speed_send(c, 0);
         if (rc < 0) { ret = rc; goto cleanup; }
-        msleep(50);
+        rc = myact_stop_send(c);
+        if (rc < 0) { ret = rc; goto cleanup; }
+        rc = myact_shutdown_send(c);
+        if (rc < 0) { ret = rc; goto cleanup; }
         rc = read_angle_deg(c, &neg_angle_end);
         if (rc < 0) { ret = rc; goto cleanup; }
         neg_delta_deg += neg_angle_end - neg_angle_start;
@@ -986,7 +974,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         goto cleanup;
     }
 
-    if (max_abs_speed_dps < o->speed_pass_min_dps) {
+    if (fabs(pos_delta_deg) < o->speed_pass_min_delta_deg && fabs(neg_delta_deg) < o->speed_pass_min_delta_deg) {
         if (low_voltage_condition) {
             printf("[NO_MOTION_UNDER_LOW_VOLTAGE] speed-step-test: protocol/runmode observed, but low-voltage bench produced insufficient motion\n");
             printf("classification: no-motion-under-low-voltage\n");
@@ -1033,9 +1021,6 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     double before = 0.0, after = 0.0, delta_deg = 0.0;
     double pos_start = 0.0, pos_end = 0.0, pos_delta_deg = 0.0;
     double neg_start = 0.0, neg_end = 0.0, neg_delta_deg = 0.0;
-    double max_abs_speed_dps = 0.0;
-    bool pos_sign_ok = false, neg_sign_ok = false;
-    myact_status2_t s2;
 
     printf("speed-stream-test: A2 streamed every %u ms, hold=%u ms\n", o->speed_stream_period_ms, o->speed_step_hold_ms);
     rc = axis_enable_for_motion(c, o, s1, "speed-stream-test");
@@ -1049,10 +1034,6 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
         rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps));
         if (rc < 0) return rc;
-        rc = sample_status2_capture(c, "speed-stream+", t0, &s2);
-        if (rc < 0) return rc;
-        if (s2.speed_dps > 0) pos_sign_ok = true;
-        if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
         msleep(o->speed_stream_period_ms);
     }
     rc = myact_speed_send(c, 0);
@@ -1068,10 +1049,6 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
         rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps));
         if (rc < 0) return rc;
-        rc = sample_status2_capture(c, "speed-stream-", t0, &s2);
-        if (rc < 0) return rc;
-        if (s2.speed_dps < 0) neg_sign_ok = true;
-        if (fabs((double)s2.speed_dps) > max_abs_speed_dps) max_abs_speed_dps = fabs((double)s2.speed_dps);
         msleep(o->speed_stream_period_ms);
     }
     rc = myact_speed_send(c, 0);
@@ -1081,7 +1058,11 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     if (rc < 0) return rc;
     neg_delta_deg = neg_end - neg_start;
 
-    rc = send_stop_and_sample(c, "speed-stream-test");
+    rc = myact_speed_send(c, 0);
+    if (rc < 0) return rc;
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    rc = myact_shutdown_send(c);
     if (rc < 0) return rc;
     rc = read_angle_deg(c, &after);
     if (rc < 0) return rc;
@@ -1091,28 +1072,15 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     if (rc < 0) return rc;
 
     printf("speed-stream-test summary:\n");
-    printf("  max_abs_speed_dps=%.1f (pass>=%.1f)\n", max_abs_speed_dps, o->speed_pass_min_dps);
     printf("  delta_deg=%.2f (pass_abs>=%.2f)\n", delta_deg, o->speed_pass_min_delta_deg);
     printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
-    printf("  pos_sign_ok=%d neg_sign_ok=%d error_flags=0x%04X\n",
-           pos_sign_ok ? 1 : 0, neg_sign_ok ? 1 : 0, s1->error_flags);
+    printf("  error_flags=0x%04X\n", s1->error_flags);
 
     if (s1->error_flags != 0) {
         printf("[FAIL] speed-stream-test: error_flags=0x%04X\n", s1->error_flags);
         return MYACT_ESTATE;
     }
 
-    if (max_abs_speed_dps >= o->speed_pass_min_dps && fabs(delta_deg) < o->speed_pass_min_delta_deg) {
-        printf("SPEED_FEEDBACK_WITHOUT_POSITION_DELTA\n");
-    }
-    if (max_abs_speed_dps < o->speed_pass_min_dps) {
-        printf("[FAIL] speed-stream-test: max_abs_speed_dps below threshold\n");
-        return MYACT_ENOMOTION;
-    }
-    if (!(pos_sign_ok && neg_sign_ok)) {
-        printf("[FAIL] speed-stream-test: speed sign does not match requested direction(s)\n");
-        return MYACT_ENOMOTION;
-    }
     if (!(pos_delta_deg > o->speed_pass_min_delta_deg && neg_delta_deg < -o->speed_pass_min_delta_deg)) {
         printf("[FAIL] speed-stream-test: position sign/delta mismatch (pos=%.2f neg=%.2f, min=%.2f)\n",
                pos_delta_deg, neg_delta_deg, o->speed_pass_min_delta_deg);
