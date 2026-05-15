@@ -999,7 +999,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     int rc;
     myact_motion_commissioning_snapshot_t snap;
     int snap_rc;
-    myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_shutdown = MYACT_RUNMODE_UNKNOWN;
     bool low_voltage_condition = false;
     bool pos_sign_ok = false;
     bool neg_sign_ok = false;
@@ -1136,7 +1136,8 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
 cleanup:
     if (must_stop) {
         int stop_rc = send_stop_and_sample(c, "speed-step-test");
-        (void)myact_read_operating_mode(c, &runmode_after_stop);
+        msleep(350);
+    (void)myact_read_operating_mode(c, &runmode_after_shutdown);
         if (stop_rc < 0 && ret == MYACT_OK) ret = stop_rc;
     }
     return ret;
@@ -1244,7 +1245,7 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     double max_abs_speed_dps = 0.0;
     bool acked = false;
     myact_status2_t s2;
-    myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
+    myact_runmode_t runmode_after_shutdown = MYACT_RUNMODE_UNKNOWN;
     bool shutdown_sent = false;
 
     printf("torque-step-test: WARNING torque mode can move unexpectedly\n");
@@ -1350,7 +1351,8 @@ cleanup:
     rc = read_angle_deg(c, &angle_after);
     if (rc < 0 && ret == MYACT_OK) ret = rc;
 
-    (void)myact_read_operating_mode(c, &runmode_after_stop);
+    msleep(350);
+    (void)myact_read_operating_mode(c, &runmode_after_shutdown);
     angle_delta_deg = angle_after - angle_before;
     printf("torque-step-test summary:\n");
     printf("  requested_iq_a=%.2f\n", o->torque_step_a);
@@ -1361,7 +1363,11 @@ cleanup:
     printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
     printf("  status1 error_flags=0x%04X\n", s1->error_flags);
     printf("  shutdown_sent=%s\n", shutdown_sent ? "yes" : "no");
-    printf("  runmode_after_stop=%u\n", (unsigned)runmode_after_stop);
+    printf("  runmode_after_shutdown=%u\n", (unsigned)runmode_after_shutdown);
+    if (runmode_after_shutdown != MYACT_RUNMODE_IDLE_OR_OFF) {
+        printf("  WARNING runmode_after_shutdown=%u (expected 0 right after shutdown)\n",
+               (unsigned)runmode_after_shutdown);
+    }
 
     if (ret < 0) return ret;
 
