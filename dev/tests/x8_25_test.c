@@ -258,6 +258,7 @@ typedef struct {
 } trace_state_t;
 
 static trace_state_t g_trace = {false, 0};
+static bool g_verbose_samples = false;
 static uint8_t expected_reply_opcode_for_tx(uint8_t op);
 static void trace_frame_line(const char* dir, const myact_can_frame_t* fr, uint8_t expected_reply);
 
@@ -313,7 +314,7 @@ static int sockcan_send_cb(const myact_can_frame_t* fr, void* user) {
     c.can_id = fr->id & CAN_SFF_MASK;
     c.can_dlc = fr->dlc;
     memcpy(c.data, fr->data, 8);
-    if (g_trace.enabled) {
+    if (g_trace.enabled || g_verbose_samples) {
         g_trace.expected_reply_opcode = (fr->dlc > 0) ? expected_reply_opcode_for_tx(fr->data[0]) : 0;
         trace_frame_line("TX", fr, g_trace.expected_reply_opcode);
     }
@@ -760,7 +761,7 @@ static int sample_status2_capture(myact_ctx_t* c, const char* tag, uint64_t t0, 
     int rc = myact_read_status2(c, out);
     if (rc < 0) return rc;
 
-    if (g_trace.enabled) {
+    if (g_trace.enabled || g_verbose_samples) {
         printf("t_ms=%llu tag=%s iq_A=%.2f speed_dps=%d angle_deg=%d temp_C=%d\n",
                (unsigned long long)(now_ms(NULL) - t0), tag,
                out->iq_0p01a / 100.0, out->speed_dps, out->angle_deg, out->motor_temp_c);
@@ -1459,8 +1460,8 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     rc = myact_read_status1(c, &s1_before);
     if (rc < 0) return rc;
     if (!s1_before.brake_release_command_state) {
-        rc = myact_prepare_for_motion(c, 0u, 0u);
-        if (rc < 0) return rc;
+        printf("%s: brake not released before motion command\n", tag);
+        return MYACT_EBRAKE;
     }
 
     rc = read_angle_deg(c, &before_deg);
@@ -1543,7 +1544,7 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
     if (rc < 0) return rc;
 
     for (unsigned i = 0; i < o->cycles; i++) {
-        printf("rt-inc-burst cycle=%u\n", i + 1);
+        if (o->verbose_samples || o->trace_frames) printf("rt-inc-burst cycle=%u\n", i + 1);
         rc = run_a8_delta_observed(c, "rt-inc-burst +", o->inc_delta_deg, o->inc_speed_dps,
                                    o->inc_wait_ms, fmax(1.0, 0.20 * fabs(o->inc_delta_deg)),
                                    NULL, NULL, NULL);
@@ -2142,6 +2143,7 @@ int main(int argc, char** argv) {
 
     myact_set_timeout_ms(&ctx, 300);
     g_trace.enabled = o.trace_frames;
+    g_verbose_samples = o.verbose_samples;
     if (g_trace.enabled &&
         (o.speed_step_test || o.native_a4_abs_test || o.rt_inc_burst || o.raw_motion_smoke || o.raw_motion_smoke_sendonly)) {
         printf("candump filter: candump -tz -ae can0,141:7FF,241:7FF,401:7FF,501:7FF\n");
