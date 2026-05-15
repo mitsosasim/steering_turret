@@ -814,6 +814,11 @@ static int bench_result(const char* n, int rc) {
         return RET_OK;
     }
 
+    if (rc == RET_COMMS_FAIL) {
+        printf("[FAIL] %s\n", n);
+        return RET_COMMS_FAIL;
+    }
+
     printf("[FAIL] %s: %s (%d)\n", n, myact_strerror(rc), rc);
     return RET_COMMS_FAIL;
 }
@@ -2002,13 +2007,47 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
     return pass ? RET_OK : RET_COMMS_FAIL;
 }
 
+static int run_raw_a1_smoke(myact_ctx_t* c, const test_opts_t* o) {
+    return run_one_raw_smoke(c, o, RAW_SMOKE_A1);
+}
+
+static int run_raw_a2_smoke(myact_ctx_t* c, const test_opts_t* o) {
+    return run_one_raw_smoke(c, o, RAW_SMOKE_A2);
+}
+
+static int run_raw_a4_smoke(myact_ctx_t* c, const test_opts_t* o) {
+    return run_one_raw_smoke(c, o, RAW_SMOKE_A4);
+}
+
+static int run_raw_a8_smoke(myact_ctx_t* c, const test_opts_t* o) {
+    return run_one_raw_smoke(c, o, RAW_SMOKE_A8);
+}
+
 static int run_raw_smoke_suite(myact_ctx_t* c, const test_opts_t* o) {
-    int rc = RET_OK;
-    if (o->raw_a1_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A1)!=RET_OK) rc = RET_COMMS_FAIL;
-    if (o->raw_a2_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A2)!=RET_OK) rc = RET_COMMS_FAIL;
-    if (o->raw_a4_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A4)!=RET_OK) rc = RET_COMMS_FAIL;
-    if (o->raw_a8_smoke || o->raw_smoke_all) if (run_one_raw_smoke(c,o,RAW_SMOKE_A8)!=RET_OK) rc = RET_COMMS_FAIL;
-    return rc;
+    int selected = 0;
+    int pass = 0;
+    int fail = 0;
+
+    if (o->raw_smoke_all || o->raw_a1_smoke) {
+        ++selected;
+        if (run_raw_a1_smoke(c, o) == RET_OK) ++pass; else ++fail;
+    }
+    if (o->raw_smoke_all || o->raw_a2_smoke) {
+        ++selected;
+        if (run_raw_a2_smoke(c, o) == RET_OK) ++pass; else ++fail;
+    }
+    if (o->raw_smoke_all || o->raw_a4_smoke) {
+        ++selected;
+        if (run_raw_a4_smoke(c, o) == RET_OK) ++pass; else ++fail;
+    }
+    if (o->raw_smoke_all || o->raw_a8_smoke) {
+        ++selected;
+        if (run_raw_a8_smoke(c, o) == RET_OK) ++pass; else ++fail;
+    }
+
+    (void)selected;
+    printf("raw-smoke-suite: pass=%d fail=%d\n", pass, fail);
+    return (fail == 0) ? RET_OK : RET_COMMS_FAIL;
 }
 
 static void print_bytes(const uint8_t b[8]) {
