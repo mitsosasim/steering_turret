@@ -382,6 +382,12 @@ int myact_read_encoder_offset(myact_ctx_t* ctx, int32_t* out_encoder_offset);
 int myact_motion_pack(float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, uint8_t out_data[8]);
 int myact_motion_unpack_reply(const myact_can_frame_t* fr, myact_motion_feedback_t* out);
 
+/* Pure frame pack helpers (no CAN I/O). */
+int myact_pack_a1_torque(int16_t iq_0p01a, uint8_t out[8]);
+int myact_pack_a2_speed(int32_t speed_0p01dps, uint8_t out[8]);
+int myact_pack_a4_abs(uint16_t speed_dps, int32_t target_0p01deg, uint8_t out[8]);
+int myact_pack_a8_inc(uint16_t speed_dps, int32_t delta_0p01deg, uint8_t out[8]);
+
 /* unit helpers */
 int16_t  myact_current_a_to_raw(double amps);
 double   myact_current_raw_to_a(int16_t raw);
