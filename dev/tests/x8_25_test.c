@@ -860,6 +860,7 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
 static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_selftest_pack(void);
 static int run_raw_a1_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a1_smoke(c, o); }
 static int run_raw_a2_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a2_smoke(c, o); }
@@ -872,7 +873,10 @@ typedef struct {
     const char* name;
     int (*fn)(myact_ctx_t*, const test_opts_t*, myact_status1_t*);
     bool required;
+    bool required_after_fixes;
+    bool optional_safety_sensitive;
     bool motion_test;
+    bool always_run;
 } independent_qual_step_t;
 
 static bool is_critical_safety_error(int rc) {
@@ -882,21 +886,26 @@ static bool is_critical_safety_error(int rc) {
 static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1,
                                 int* tests_run, int* failures, int* warnings) {
     int required_failed = 0;
-    int executed = 0;
+    int executed = 0, passed = 0, failed = 0;
     bool stop_critical = false;
+    const char* first_failed_test = NULL;
+    myact_runmode_t final_runmode = MYACT_RUNMODE_UNKNOWN;
+    myact_status1_t final_status1;
+    memset(&final_status1, 0, sizeof(final_status1));
     independent_qual_step_t steps[] = {
-        {"diag", NULL, true, false},
-        {"brake-latency-test", run_brake_latency_test, true, false},
-        {"raw-a1-smoke", run_raw_a1_smoke_step, true, true},
-        {"raw-a2-smoke", run_raw_a2_smoke_step, true, true},
-        {"raw-a4-smoke", run_raw_a4_smoke_step, true, true},
-        {"raw-a8-smoke", run_raw_a8_smoke_step, true, true},
-        {"speed-step-test", run_speed_step_test, true, true},
-        {"native-a4-abs-test", run_native_a4_abs_test, true, true},
-        {"rt-inc-burst", run_rt_inc_burst, true, true},
-        {"speed-stream-test", run_speed_stream_test, true, true},
-        {"active-telemetry-rt-test", run_active_telemetry_rt_test, true, false},
-        {"final stop + shutdown + diag", run_brake_latency_test, true, false},
+        {"diag", NULL, true, false, false, false, false},
+        {"brake-latency-test", run_brake_latency_test, true, false, false, false, false},
+        {"raw-a1-smoke", run_raw_a1_smoke_step, false, false, true, true, false},
+        {"raw-a2-smoke", run_raw_a2_smoke_step, true, false, false, true, false},
+        {"raw-a4-smoke", run_raw_a4_smoke_step, true, false, false, true, false},
+        {"raw-a8-smoke", run_raw_a8_smoke_step, true, false, false, true, false},
+        {"speed-step-test", run_speed_step_test, false, true, false, true, false},
+        {"native-a4-abs-test", run_native_a4_abs_test, true, false, false, true, false},
+        {"rt-inc-burst", run_rt_inc_burst, true, false, false, true, false},
+        {"speed-stream-test", run_speed_stream_test, false, true, false, true, false},
+        {"active-telemetry-rt-test", run_active_telemetry_rt_test, false, true, false, false, false},
+        {"torque-step-test", run_torque_step_test, false, false, true, true, false},
+        {"final stop + shutdown + diag", run_brake_latency_test, true, false, false, false, true},
     };
 
     printf("[INDEPENDENT] step 1/13: selftest-pack\n");
@@ -905,39 +914,64 @@ static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_st
     if (run_selftest_pack() != RET_OK) {
         (*failures)++;
         required_failed++;
+        failed++;
+        if (!first_failed_test) first_failed_test = "selftest-pack";
+    } else {
+        passed++;
     }
 
     for (unsigned i = 0; i < sizeof(steps)/sizeof(steps[0]); ++i) {
         int test_rc = RET_OK;
         int bench_rc;
-        printf("[INDEPENDENT] step %u/13: %s\n", i + 2, steps[i].name);
+        if (stop_critical && !steps[i].always_run) {
+            printf("[SKIP_AFTER_CRITICAL] %s\n", steps[i].name);
+            continue;
+        }
+        printf("[INDEPENDENT] step %u/14: %s\n", i + 2, steps[i].name);
         (*tests_run)++;
         executed++;
 
         if (steps[i].fn) test_rc = steps[i].fn(ctx, o, s1);
         bench_rc = bench_result(steps[i].name, test_rc, warnings);
 
-        if (bench_rc != RET_OK && steps[i].required) {
+        if (bench_rc != RET_OK) {
+            failed++;
+            if (!first_failed_test) first_failed_test = steps[i].name;
+        } else {
+            passed++;
+        }
+
+        if (bench_rc != RET_OK && (steps[i].required || steps[i].required_after_fixes)) {
             (*failures)++;
             required_failed++;
         }
 
         if (steps[i].fn && is_critical_safety_error(test_rc)) {
             stop_critical = true;
-            printf("[CRITICAL] stopping independent-qual after %s\n", steps[i].name);
-            break;
+            printf("[CRITICAL] critical stop requested after %s\n", steps[i].name);
         }
 
-        if (bench_rc != RET_OK && steps[i].motion_test) {
+        if (bench_rc != RET_OK && (steps[i].motion_test || steps[i].optional_safety_sensitive)) {
             printf("[SAFE-CONTINUE] motion test '%s' failed; continuing with remaining sequence.\n", steps[i].name);
         }
     }
 
-    printf("independent-qual summary: executed=%d required_failed=%d critical_stop=%s result=%s\n",
-           executed, required_failed, stop_critical ? "yes" : "no",
-           (required_failed == 0 && !stop_critical) ? "PASS" : "FAIL");
+    (void)myact_read_operating_mode(ctx, &final_runmode);
+    (void)myact_read_status1(ctx, &final_status1);
 
-    return (required_failed == 0 && !stop_critical) ? RET_OK : RET_COMMS_FAIL;
+    printf("independent-qual summary:\n");
+    printf("  tests_run=%d\n", executed);
+    printf("  passed=%d\n", passed);
+    printf("  failed=%d\n", failed);
+    printf("  warnings=%d\n", *warnings);
+    printf("  critical_stop=%s\n", stop_critical ? "yes" : "no");
+    printf("  first_failed_test=%s\n", first_failed_test ? first_failed_test : "none");
+    printf("  final_runmode=%u\n", (unsigned)final_runmode);
+    printf("  final_error_flags=0x%04X\n", final_status1.error_flags);
+    printf("  final_brake_state=%s\n", final_status1.brake_release_command_state ? "released" : "locked");
+    printf("  result=%s\n", required_failed == 0 ? "PASS" : "FAIL");
+
+    return (required_failed == 0) ? RET_OK : RET_COMMS_FAIL;
 }
 
 static int run_a8_delta_observed(myact_ctx_t* c,
