@@ -208,6 +208,7 @@ typedef struct {
     double speed_pass_min_delta_deg;
 
     double torque_step_a;
+    double raw_a1_smoke_a;
     double torque_sweep_values_a[8];
     unsigned torque_sweep_count;
     unsigned torque_step_hold_ms;
@@ -495,7 +496,8 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
     o->speed_stream_period_ms = 20;
     o->speed_pass_min_dps = 5.0;
     o->speed_pass_min_delta_deg = 1.0;
-    o->torque_step_a = 0.30;
+    o->torque_step_a = 0.10;
+    o->raw_a1_smoke_a = 0.30;
     o->torque_sweep_values_a[0] = 0.30;
     o->torque_sweep_values_a[1] = 0.50;
     o->torque_sweep_values_a[2] = 0.80;
@@ -570,6 +572,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         else if (!strcmp(argv[i], "--speed-pass-min-dps") && i + 1 < argc) o->speed_pass_min_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-pass-min-delta-deg") && i + 1 < argc) o->speed_pass_min_delta_deg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--torque-step-a") && i + 1 < argc) o->torque_step_a = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--raw-a1-smoke-a") && i + 1 < argc) o->raw_a1_smoke_a = atof(argv[++i]);
         else if (!strcmp(argv[i], "--torque-sweep-values") && i + 1 < argc) {
             const char* list = argv[++i];
             char buf[128];
@@ -2029,7 +2032,7 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
 
     switch (kind) {
         case RAW_SMOKE_A1: {
-            const double iq_a = (fabs(o->torque_step_a) > 0.0) ? fabs(o->torque_step_a) : 0.20;
+            const double iq_a = (fabs(o->raw_a1_smoke_a) > 0.0) ? fabs(o->raw_a1_smoke_a) : 0.30;
             int16_t iq = myact_current_a_to_raw(iq_a);
             name = "raw-a1-smoke"; frame[0]=0xA1; frame[4]=iq & 0xFF; frame[5]=(iq>>8)&0xFF;
             rc = myact_torque_send(c, iq); if (rc < 0) return rc;
