@@ -1276,7 +1276,7 @@ cleanup:
 }
 
 static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    double current_abs = 0.0;
+    double before_abs = 0.0;
     double target_abs = 0.0;
     double final_abs = 0.0;
     double final_err = 0.0;
@@ -1284,24 +1284,26 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     uint16_t abs_speed_raw;
     uint8_t a4_frame[8] = {0};
     int rc;
-    uint64_t t0 = now_ms(NULL);
-    myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
-    myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
+    int ack_rc = MYACT_ETIMEDOUT;
+    const unsigned blind_wait_ms = myact_motion_quiet_wait_ms(0xA4, o->abs_delta_deg, o->abs_speed_dps);
 
     rc = prepare_sync(c);
     if (rc < 0) return rc;
 
     rc = myact_active_reply_disable_all(c);
     if (rc < 0) return rc;
-    rc = myact_drain_rx(c, 300);
-    if (rc < 0) return rc;
     rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
-
-    rc = read_angle_deg(c, &current_abs);
+    rc = myact_drain_rx(c, 300);
     if (rc < 0) return rc;
 
-    target_abs = current_abs + o->abs_delta_deg;
+    rc = read_angle_deg(c, &before_abs);
+    if (rc < 0) return rc;
+
+    rc = axis_enable_for_motion(c, o, s1, "native-a4-abs-test");
+    if (rc < 0) return rc;
+
+    target_abs = before_abs + o->abs_delta_deg;
     target_raw = myact_deg_to_raw_0p01(target_abs);
     abs_speed_raw = (uint16_t)o->abs_speed_dps;
     a4_frame[0] = 0xA4;
@@ -1313,95 +1315,55 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     a4_frame[6] = (uint8_t)((target_raw >> 16) & 0xFF);
     a4_frame[7] = (uint8_t)((target_raw >> 24) & 0xFF);
 
-    rc = axis_enable_for_motion(c, o, s1, "native-a4-abs-test");
-    if (rc < 0) return rc;
-
     rc = myact_position_abs_send(c, abs_speed_raw, target_raw);
     if (rc < 0) {
         printf("[FAIL_TX] native-a4-abs-test: send failed rc=%d (%s)\n", rc, myact_strerror(rc));
         goto out;
     }
-    msleep(myact_motion_quiet_wait_ms(0xA4, o->abs_delta_deg, o->abs_speed_dps));
 
-    t0 = now_ms(NULL);
-    for (;;) {
-        rc = read_angle_deg(c, &final_abs);
-        if (rc < 0) goto out;
-
-        final_err = target_abs - final_abs;
-        if (fabs(final_err) <= o->abs_tolerance_deg) break;
-        if (now_ms(NULL) - t0 >= o->abs_timeout_ms) {
-            rc = MYACT_ENOMOTION;
-            break;
+    {
+        myact_can_frame_t ack;
+        ack_rc = c->io.recv(&ack, 100, c->io.user);
+        if (ack_rc == 0 && !(ack.dlc > 0 && ack.data[0] == 0xA4)) ack_rc = MYACT_ETIMEDOUT;
+        if (ack_rc < 0 && ack_rc != MYACT_ETIMEDOUT) {
+            printf("[WARN_ACK_RX_ERROR] native-a4-abs-test: ACK wait rc=%d (%s)\n", ack_rc, myact_strerror(ack_rc));
         }
-        msleep(o->abs_poll_ms);
     }
+
+    msleep(blind_wait_ms);
 
 out:
     (void)myact_stop_and_shutdown(c, 100);
-    (void)myact_read_operating_mode(c, &runmode_after_stop);
-    (void)myact_read_status1(c, s1);
+    rc = read_angle_deg(c, &final_abs);
+    if (rc < 0) return rc;
+    { myact_status2_t s2_after; rc = myact_read_status2(c, &s2_after); if (rc < 0) return rc; }
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
 
     final_err = target_abs - final_abs;
     print_cmd_summary("native-a4-abs-test", a4_frame, "absolute-target",
-                      current_abs, final_abs, final_abs - current_abs, final_err,
+                      before_abs, final_abs, final_abs - before_abs, final_err,
                       fabs(final_err) <= o->abs_tolerance_deg && s1->error_flags == 0,
                       "final_err vs tolerance");
 
-    {
-        const double angle_delta = final_abs - current_abs;
-        const bool target_reached = fabs(final_err) <= o->abs_tolerance_deg;
-        const bool motion_confirmed = fabs(angle_delta) >= (o->abs_tolerance_deg * 0.5);
-        const bool acked = rc >= 0;
-        const bool runmode_mismatch = (runmode_after_command != MYACT_RUNMODE_UNKNOWN) &&
-                                      (runmode_after_command != MYACT_RUNMODE_POSITION);
-        const bool direction_wrong = motion_confirmed && (o->abs_delta_deg * angle_delta < 0.0);
-
-        if (s1->error_flags != 0) {
-            printf("[FAIL_ERROR_FLAGS] native-a4-abs-test: error_flags=0x%04X\n", s1->error_flags);
-            return MYACT_EIO;
+    if (fabs(final_err) <= o->abs_tolerance_deg && s1->error_flags == 0) {
+        printf("[PASS_TARGET_REACHED] native-a4-abs-test: target reached (err=%.2f deg)\n", final_err);
+        if (ack_rc == MYACT_ETIMEDOUT) {
+            printf("[WARN_ACK_MISSING_BUT_MOTION_CONFIRMED] native-a4-abs-test: target reached despite missing ACK\n");
         }
-
-        if (target_reached) {
-            printf("[PASS_TARGET_REACHED] native-a4-abs-test: target reached (err=%.2f deg)\n", final_err);
-            if (!acked) {
-                printf("[WARN_ACK_MISSING_BUT_MOTION_CONFIRMED] native-a4-abs-test: target reached despite missing ACK\n");
-            }
-            if (runmode_mismatch) {
-                printf("[WARN_RUNMODE_MISMATCH] native-a4-abs-test: expected=%u observed=%u\n",
-                       (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
-            }
-            return MYACT_OK;
-        }
-
-        if (direction_wrong) {
-            printf("[FAIL_DIRECTION_WRONG] native-a4-abs-test: commanded_delta=%.2f observed_delta=%.2f\n",
-                   o->abs_delta_deg, angle_delta);
-            return MYACT_ENOMOTION;
-        }
-
-        if (motion_confirmed) {
-            printf("[PASS_MEASURED_MOTION] native-a4-abs-test: measured motion %.2f deg but target tolerance not met (err=%.2f deg)\n",
-                   angle_delta, final_err);
-            if (!acked) {
-                printf("[WARN_ACK_MISSING_BUT_MOTION_CONFIRMED] native-a4-abs-test: motion confirmed despite missing ACK\n");
-            }
-            if (runmode_mismatch) {
-                printf("[WARN_RUNMODE_MISMATCH] native-a4-abs-test: expected=%u observed=%u\n",
-                       (unsigned)MYACT_RUNMODE_POSITION, (unsigned)runmode_after_command);
-            }
-            return MYACT_OK;
-        }
-
-        if (acked) {
-            printf("[FAIL_ACK_NO_MOTION] native-a4-abs-test: ACK observed but no measurable motion\n");
-            return MYACT_ENOMOTION;
-        }
-
-        printf("[FAIL_NO_ACK_NO_MOTION] native-a4-abs-test: no ACK and no measurable motion\n");
-        return MYACT_ETIMEDOUT;
+        return MYACT_OK;
     }
+
+    if (s1->error_flags != 0) {
+        printf("[FAIL_ERROR_FLAGS] native-a4-abs-test: error_flags=0x%04X\n", s1->error_flags);
+        return MYACT_EIO;
+    }
+
+    printf("[FAIL_TARGET_MISS] native-a4-abs-test: final_err=%.2f deg tolerance=%.2f deg\n",
+           final_err, o->abs_tolerance_deg);
+    return MYACT_ENOMOTION;
 }
+
 
 static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
