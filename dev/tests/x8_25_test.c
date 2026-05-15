@@ -1113,6 +1113,8 @@ cleanup:
 static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
     uint64_t t0;
+    int32_t angle_raw = 0;
+    myact_status1_t s1_final;
     double initial_angle = 0.0, final_angle = 0.0, return_to_origin_error_deg = 0.0;
     double angle_before_positive = 0.0, angle_after_positive = 0.0, pos_delta_deg = 0.0;
     double angle_before_negative = 0.0, angle_after_negative = 0.0, neg_delta_deg = 0.0;
@@ -1120,13 +1122,23 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     bool neg_phase_moved = false;
 
     printf("speed-stream-test: A2 streamed every %u ms, hold=%u ms\n", o->speed_stream_period_ms, o->speed_step_hold_ms);
-    rc = axis_enable_for_motion(c, o, s1, "speed-stream-test");
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
+    rc = myact_drain_rx(c, 300);
+    if (rc < 0) return rc;
+    rc = myact_read_angle_multi(c, &angle_raw);
+    if (rc < 0) return rc;
+    initial_angle = myact_raw_0p01_to_deg(angle_raw);
 
-    rc = read_angle_deg(c, &initial_angle);
+    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
     if (rc < 0) return rc;
-    rc = read_angle_deg(c, &angle_before_positive);
+    rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
+    rc = check_motion_voltage_or_skip(o, s1, "speed-stream-test");
+    if (rc < 0) return rc;
+    if (!s1->brake_release_command_state) return MYACT_EBRAKE;
+
+    angle_before_positive = initial_angle;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
         rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps));
@@ -1136,13 +1148,13 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     rc = myact_speed_send(c, 0);
     if (rc < 0) return rc;
     msleep(50);
-    rc = read_angle_deg(c, &angle_after_positive);
+    rc = myact_read_angle_multi(c, &angle_raw);
     if (rc < 0) return rc;
+    angle_after_positive = myact_raw_0p01_to_deg(angle_raw);
     pos_delta_deg = angle_after_positive - angle_before_positive;
     pos_phase_moved = pos_delta_deg >= o->speed_pass_min_delta_deg;
 
-    rc = read_angle_deg(c, &angle_before_negative);
-    if (rc < 0) return rc;
+    angle_before_negative = angle_after_positive;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
         rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps));
@@ -1152,31 +1164,30 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     rc = myact_speed_send(c, 0);
     if (rc < 0) return rc;
     msleep(50);
-    rc = read_angle_deg(c, &angle_after_negative);
+    rc = myact_read_angle_multi(c, &angle_raw);
     if (rc < 0) return rc;
+    angle_after_negative = myact_raw_0p01_to_deg(angle_raw);
     neg_delta_deg = angle_after_negative - angle_before_negative;
     neg_phase_moved = neg_delta_deg <= -o->speed_pass_min_delta_deg;
 
-    rc = myact_speed_send(c, 0);
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
-    rc = myact_stop_send(c);
+
+    rc = myact_read_angle_multi(c, &angle_raw);
     if (rc < 0) return rc;
-    rc = myact_shutdown_send(c);
-    if (rc < 0) return rc;
-    rc = read_angle_deg(c, &final_angle);
-    if (rc < 0) return rc;
+    final_angle = myact_raw_0p01_to_deg(angle_raw);
     return_to_origin_error_deg = final_angle - initial_angle;
 
-    rc = myact_read_status1(c, s1);
+    rc = myact_read_status1(c, &s1_final);
     if (rc < 0) return rc;
 
     printf("speed-stream-test summary:\n");
     printf("  return_to_origin_error_deg=%.2f (diagnostic only)\n", return_to_origin_error_deg);
     printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
-    printf("  error_flags=0x%04X\n", s1->error_flags);
+    printf("  final_92_deg=%.2f final_9A_error_flags=0x%04X\n", final_angle, s1_final.error_flags);
 
-    if (s1->error_flags != 0) {
-        printf("[FAIL] speed-stream-test: error_flags=0x%04X\n", s1->error_flags);
+    if (s1_final.error_flags != 0) {
+        printf("[FAIL] speed-stream-test: error_flags=0x%04X\n", s1_final.error_flags);
         return MYACT_ESTATE;
     }
 
