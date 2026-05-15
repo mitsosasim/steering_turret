@@ -185,6 +185,7 @@ typedef struct {
     bool selftest_pack;
     bool trace_frames;
     bool verbose_samples;
+    bool verbose_brake;
 
     double min_motion_voltage;
     double smoke_delta_deg;
@@ -563,6 +564,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--selftest-pack", selftest_pack)
         FLAG("--trace-frames", trace_frames)
         FLAG("--verbose-samples", verbose_samples)
+        FLAG("--verbose-brake", verbose_brake)
 
         if (!strcmp(argv[i], "--speed-step-dps") && i + 1 < argc) o->speed_step_dps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--speed-step-hold-ms") && i + 1 < argc) o->speed_step_hold_ms = (unsigned)atoi(argv[++i]);
@@ -721,11 +723,67 @@ static int check_motion_voltage_or_skip(const test_opts_t* o, const myact_status
     return MYACT_OK;
 }
 
+static int prepare_for_motion_with_brake_log(myact_ctx_t* ctx,
+                                             uint32_t brake_timeout_ms,
+                                             uint32_t poll_ms,
+                                             bool verbose_brake,
+                                             const char* phase_tag) {
+    myact_status1_t s1;
+    uint64_t start_ms, now, next_retry_ms;
+    uint32_t timeout = (brake_timeout_ms == 0u) ? 3000u : brake_timeout_ms;
+    uint32_t poll = (poll_ms == 0u) ? 50u : poll_ms;
+    uint32_t retries = 0u;
+    bool locked_before, locked_after;
+    int rc;
+
+    rc = myact_read_status1(ctx, &s1);
+    if (rc < 0) return rc;
+    locked_before = !s1.brake_release_command_state;
+    locked_after = locked_before;
+    start_ms = now_ms(NULL);
+    next_retry_ms = start_ms + 500u;
+
+    if (locked_before) {
+        rc = myact_brake_release(ctx);
+        if (rc < 0) return rc;
+        retries = 1u;
+    }
+
+    while (locked_after) {
+        rc = myact_read_status1(ctx, &s1);
+        if (rc < 0) return rc;
+        locked_after = !s1.brake_release_command_state;
+        now = now_ms(NULL);
+        if (verbose_brake) {
+            printf("%s: brake_poll t=%llums state=%s retries=%u\n",
+                   phase_tag, (unsigned long long)(now - start_ms),
+                   locked_after ? "locked" : "released", retries);
+        }
+        if (!locked_after || (now - start_ms) >= timeout) break;
+        if (now >= next_retry_ms) {
+            rc = myact_brake_release(ctx);
+            if (rc < 0) return rc;
+            retries++;
+            next_retry_ms = now + 500u;
+        }
+        msleep(poll);
+    }
+
+    printf("%s: brake prepare before=%s after=%s latency_ms=%llu retries=%u\n",
+           phase_tag,
+           locked_before ? "locked" : "released",
+           locked_after ? "locked" : "released",
+           (unsigned long long)(now_ms(NULL) - start_ms),
+           retries);
+    return locked_after ? MYACT_EBRAKE : MYACT_OK;
+}
+
 static int test_axis_enable(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1) {
     int rc = prepare_sync(ctx);
     if (rc < 0) return rc;
 
-    rc = myact_prepare_for_motion(ctx, o->brake_release_timeout_ms, o->brake_poll_ms);
+    rc = prepare_for_motion_with_brake_log(ctx, o->brake_release_timeout_ms, o->brake_poll_ms,
+                                           o->verbose_brake, "axis-enable");
     if (rc < 0) return rc;
 
     rc = myact_read_status1(ctx, s1);
@@ -1034,7 +1092,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
     print_motion_commissioning_snapshot("speed-step-test", snap_rc, &snap);
 
-    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
+    rc = prepare_for_motion_with_brake_log(c, o->brake_release_timeout_ms, o->brake_poll_ms, o->verbose_brake, "motion-phase");
     if (rc < 0) return rc;
     rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
@@ -1164,7 +1222,7 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     if (rc < 0) return rc;
     initial_angle = myact_raw_0p01_to_deg(angle_raw);
 
-    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
+    rc = prepare_for_motion_with_brake_log(c, o->brake_release_timeout_ms, o->brake_poll_ms, o->verbose_brake, "motion-phase");
     if (rc < 0) return rc;
     rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
@@ -1505,7 +1563,7 @@ static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_st
         }
     }
 
-    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
+    rc = prepare_for_motion_with_brake_log(c, o->brake_release_timeout_ms, o->brake_poll_ms, o->verbose_brake, "motion-phase");
     if (rc < 0) return rc;
     rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
@@ -1535,7 +1593,7 @@ static int run_enable_hold(myact_ctx_t* c, const test_opts_t* o, myact_status1_t
     }
 
     if (!s1->brake_release_command_state) {
-        rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
+        rc = prepare_for_motion_with_brake_log(c, o->brake_release_timeout_ms, o->brake_poll_ms, o->verbose_brake, "motion-phase");
         if (rc < 0) return rc;
     }
 
@@ -2081,7 +2139,7 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
     rc = myact_read_angle_multi(c, &a_before_raw); if (rc < 0) return rc;
     a_before = myact_raw_0p01_to_deg(a_before_raw);
 
-    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
+    rc = prepare_for_motion_with_brake_log(c, o->brake_release_timeout_ms, o->brake_poll_ms, o->verbose_brake, "motion-phase");
     if (rc < 0) return rc;
     rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
     if (!s1_before.brake_release_command_state) return MYACT_ETIMEDOUT;
