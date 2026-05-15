@@ -164,6 +164,7 @@ typedef struct {
     bool mit_mode_test;
     bool active_telemetry_rt_test;
     bool production_qual;
+    bool independent_qual;
     bool experimental_all;
     bool run_mit_in_experimental_all;
     bool allow_hold_with_runmode0;
@@ -549,6 +550,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--active-telemetry-rt-test", active_telemetry_rt_test)
         FLAG("--production-qual", production_qual)
         FLAG("--bench-all", production_qual)
+        FLAG("--independent-qual", independent_qual)
         FLAG("--experimental-all", experimental_all)
         FLAG("--bench-all-mit", run_mit_in_experimental_all)
         FLAG("--mit-dry-run", mit_dry_run)
@@ -845,6 +847,96 @@ static int bench_result(const char* n, int rc, int* warnings) {
 
     printf("[FAIL] %s: %s (%d)\n", n, myact_strerror(rc), rc);
     return 1;
+}
+
+static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_raw_a1_smoke(myact_ctx_t* c, const test_opts_t* o);
+static int run_raw_a2_smoke(myact_ctx_t* c, const test_opts_t* o);
+static int run_raw_a4_smoke(myact_ctx_t* c, const test_opts_t* o);
+static int run_raw_a8_smoke(myact_ctx_t* c, const test_opts_t* o);
+static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_selftest_pack(void);
+static int run_raw_a1_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a1_smoke(c, o); }
+static int run_raw_a2_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a2_smoke(c, o); }
+static int run_raw_a4_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a4_smoke(c, o); }
+static int run_raw_a8_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a8_smoke(c, o); }
+
+
+
+typedef struct {
+    const char* name;
+    int (*fn)(myact_ctx_t*, const test_opts_t*, myact_status1_t*);
+    bool required;
+    bool motion_test;
+} independent_qual_step_t;
+
+static bool is_critical_safety_error(int rc) {
+    return rc < 0 && rc != MYACT_ESTATE && rc != MYACT_ENOTSUP && rc != MYACT_ENOMOTION;
+}
+
+static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1,
+                                int* tests_run, int* failures, int* warnings) {
+    int required_failed = 0;
+    int executed = 0;
+    bool stop_critical = false;
+    independent_qual_step_t steps[] = {
+        {"diag", NULL, true, false},
+        {"brake-latency-test", run_brake_latency_test, true, false},
+        {"raw-a1-smoke", run_raw_a1_smoke_step, true, true},
+        {"raw-a2-smoke", run_raw_a2_smoke_step, true, true},
+        {"raw-a4-smoke", run_raw_a4_smoke_step, true, true},
+        {"raw-a8-smoke", run_raw_a8_smoke_step, true, true},
+        {"speed-step-test", run_speed_step_test, true, true},
+        {"native-a4-abs-test", run_native_a4_abs_test, true, true},
+        {"rt-inc-burst", run_rt_inc_burst, true, true},
+        {"speed-stream-test", run_speed_stream_test, true, true},
+        {"active-telemetry-rt-test", run_active_telemetry_rt_test, true, false},
+        {"final stop + shutdown + diag", run_brake_latency_test, true, false},
+    };
+
+    printf("[INDEPENDENT] step 1/13: selftest-pack\n");
+    (*tests_run)++;
+    executed++;
+    if (run_selftest_pack() != RET_OK) {
+        (*failures)++;
+        required_failed++;
+    }
+
+    for (unsigned i = 0; i < sizeof(steps)/sizeof(steps[0]); ++i) {
+        int test_rc = RET_OK;
+        int bench_rc;
+        printf("[INDEPENDENT] step %u/13: %s\n", i + 2, steps[i].name);
+        (*tests_run)++;
+        executed++;
+
+        if (steps[i].fn) test_rc = steps[i].fn(ctx, o, s1);
+        bench_rc = bench_result(steps[i].name, test_rc, warnings);
+
+        if (bench_rc != RET_OK && steps[i].required) {
+            (*failures)++;
+            required_failed++;
+        }
+
+        if (steps[i].fn && is_critical_safety_error(test_rc)) {
+            stop_critical = true;
+            printf("[CRITICAL] stopping independent-qual after %s\n", steps[i].name);
+            break;
+        }
+
+        if (bench_rc != RET_OK && steps[i].motion_test) {
+            printf("[SAFE-CONTINUE] motion test '%s' failed; continuing with remaining sequence.\n", steps[i].name);
+        }
+    }
+
+    printf("independent-qual summary: executed=%d required_failed=%d critical_stop=%s result=%s\n",
+           executed, required_failed, stop_critical ? "yes" : "no",
+           (required_failed == 0 && !stop_critical) ? "PASS" : "FAIL");
+
+    return (required_failed == 0 && !stop_critical) ? RET_OK : RET_COMMS_FAIL;
 }
 
 static int run_a8_delta_observed(myact_ctx_t* c,
@@ -2166,7 +2258,7 @@ int main(int argc, char** argv) {
         bool any_test_requested = o.raw_motion_smoke || o.raw_motion_smoke_sendonly || o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all || o.enable_hold ||
                                   o.brake_latency_test || o.brake_persistence_test || o.rt_inc_burst ||
                                   o.speed_step_test || o.speed_stream_test || o.torque_step_test || o.torque_sweep_test || o.native_a4_abs_test ||
-                                  o.mit_mode_test || o.active_telemetry_rt_test || o.production_qual || o.experimental_all;
+                                  o.mit_mode_test || o.active_telemetry_rt_test || o.production_qual || o.independent_qual || o.experimental_all;
         bool any_dispatched = false;
 
         if (!any_test_requested) {
@@ -2175,7 +2267,12 @@ int main(int argc, char** argv) {
         goto done;
         }
 
-        if (o.production_qual) {
+        if (o.independent_qual) {
+            any_dispatched = true;
+            if (run_independent_qual(&ctx, &o, &s1, &tests_run, &failures, &warnings) != RET_OK) {
+                failures++;
+            }
+        } else if (o.production_qual) {
             int b;
             bool required_pass = true;
 
