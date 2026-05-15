@@ -870,12 +870,30 @@ int myact_stop_send(myact_ctx_t* ctx) {
 }
 
 int myact_stop_and_shutdown(myact_ctx_t* ctx, uint32_t settle_ms) {
+    myact_runmode_t runmode;
     int rc;
+
     if (!ctx) return MYACT_EINVAL;
-    rc = myact_stop_send(ctx);
+
+    rc = myact_stop_send(ctx); /* 0x81 */
     if (rc < 0) return rc;
-    if (settle_ms > 0u) usleep((useconds_t)(settle_ms * 1000u));
-    return myact_shutdown_send(ctx);
+
+    /* Stop-to-shutdown spacing required by device behavior. */
+    usleep(50000u);
+
+    rc = myact_shutdown_send(ctx); /* 0x80 */
+    if (rc < 0) return rc;
+
+    /* Let shutdown settle, then flush stale replies from prior commands. */
+    if (settle_ms < 300u) settle_ms = 300u;
+    usleep((useconds_t)(settle_ms * 1000u));
+
+    rc = myact_drain_rx(ctx, 120u);
+    if (rc < 0) return rc;
+
+    /* Optional post-shutdown runmode probe (0x70), best-effort only. */
+    (void)myact_read_operating_mode(ctx, &runmode);
+    return MYACT_OK;
 }
 
 int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a) {
