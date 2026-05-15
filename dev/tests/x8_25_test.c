@@ -999,7 +999,7 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
     snap_rc = myact_read_motion_commissioning_snapshot(c, &snap);
     print_motion_commissioning_snapshot("speed-step-test", snap_rc, &snap);
 
-    rc = myact_prepare_for_motion(c, o->brake_release_wait_ms, o->brake_poll_ms);
+    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
     if (rc < 0) return rc;
     rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
@@ -2022,12 +2022,10 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
     rc = myact_read_angle_multi(c, &a_before_raw); if (rc < 0) return rc;
     a_before = myact_raw_0p01_to_deg(a_before_raw);
 
-    if (!s1_before.brake_release_command_state) {
-        rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
-        if (rc < 0) return rc;
-        rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
-        if (!s1_before.brake_release_command_state) return MYACT_ETIMEDOUT;
-    }
+    rc = myact_prepare_for_motion(c, o->brake_release_timeout_ms, o->brake_poll_ms);
+    if (rc < 0) return rc;
+    rc = myact_read_status1(c, &s1_before); if (rc < 0) return rc;
+    if (!s1_before.brake_release_command_state) return MYACT_ETIMEDOUT;
 
     switch (kind) {
         case RAW_SMOKE_A1: {
