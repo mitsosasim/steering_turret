@@ -1465,6 +1465,8 @@ static int run_a8_delta_observed(myact_ctx_t* c,
                                  double* out_after,
                                  double* out_delta) {
     myact_status1_t s1;
+    myact_status1_t s1_before;
+    myact_status1_t s1_after;
     double before_deg = 0.0;
     double after_deg = 0.0;
     double observed_delta = 0.0;
@@ -1473,7 +1475,8 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     int32_t req_delta_raw = myact_deg_to_raw_0p01(delta_deg);
     uint8_t a8_frame[8] = {0xA8, 0x00, 0, 0, 0, 0, 0, 0};
     bool target_reached = false;
-    uint64_t t0;
+    bool ack_missing = false;
+    const unsigned blind_wait_ms = myact_motion_quiet_wait_ms(0xA8, delta_deg, speed_dps);
     int rc;
 
     a8_frame[2] = (uint8_t)(max_speed_raw & 0xFF);
@@ -1483,31 +1486,36 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     a8_frame[6] = (uint8_t)((req_delta_raw >> 16) & 0xFF);
     a8_frame[7] = (uint8_t)((req_delta_raw >> 24) & 0xFF);
 
-    rc = prepare_sync(c);
+    rc = myact_read_status1(c, &s1_before);
     if (rc < 0) return rc;
+    if (!s1_before.brake_release_command_state) {
+        rc = myact_prepare_for_motion(c, 0u, 0u);
+        if (rc < 0) return rc;
+    }
+
     rc = read_angle_deg(c, &before_deg);
     if (rc < 0) return rc;
 
     rc = myact_position_inc_send(c, max_speed_raw, req_delta_raw);
-    if (rc < 0 && rc != MYACT_ETIMEDOUT) return rc;
-    msleep(myact_motion_quiet_wait_ms(0xA8, delta_deg, speed_dps));
-
-    t0 = now_ms(NULL);
-    for (;;) {
-        rc = read_angle_deg(c, &after_deg);
-        if (rc < 0) return rc;
-        observed_delta = after_deg - before_deg;
-        error_deg = observed_delta - delta_deg;
-        if (fabs(error_deg) <= pass_tolerance_deg) {
-            target_reached = true;
-            break;
-        }
-        if (now_ms(NULL) - t0 >= wait_ms) break;
-        msleep(50);
+    if (rc == MYACT_ETIMEDOUT) {
+        ack_missing = true;
+    } else if (rc < 0) {
+        return rc;
     }
 
-    rc = myact_read_status1(c, &s1);
+    /* Do not poll 0x92 immediately after A8; wait for motion completion window first. */
+    msleep(blind_wait_ms);
+    if (wait_ms > blind_wait_ms) msleep(wait_ms - blind_wait_ms);
+
+    rc = read_angle_deg(c, &after_deg);
     if (rc < 0) return rc;
+    observed_delta = after_deg - before_deg;
+    error_deg = observed_delta - delta_deg;
+    target_reached = fabs(error_deg) <= pass_tolerance_deg;
+
+    rc = myact_read_status1(c, &s1_after);
+    if (rc < 0) return rc;
+    s1 = s1_after;
 
     print_cmd_summary(tag, a8_frame, "incremental-delta",
                       before_deg, after_deg, observed_delta, error_deg,
@@ -1518,6 +1526,9 @@ static int run_a8_delta_observed(myact_ctx_t* c,
     if (out_after) *out_after = after_deg;
     if (out_delta) *out_delta = observed_delta;
 
+    if (ack_missing) {
+        printf("%s: note: A8 ACK not observed within host timeout; movement-based validation applied\n", tag);
+    }
     if (!target_reached) return MYACT_ETIMEDOUT;
     if (s1.error_flags != 0) return MYACT_ESTATE;
     return MYACT_OK;
