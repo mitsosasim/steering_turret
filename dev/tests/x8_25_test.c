@@ -1661,7 +1661,7 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
 }
 
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
-    enum { ACTIVE_WARMUP_MS = 300, ACTIVE_DRAIN_IDLE_TARGET = 3 };
+    enum { ACTIVE_WARMUP_FRAMES = 3, ACTIVE_DRAIN_IDLE_TARGET = 3 };
     uint64_t t_start;
     uint64_t t_end;
     uint64_t prev_ts = 0;
@@ -1678,6 +1678,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     double commanded_delta = o->active_move_delta_deg;
     double move_tol_deg = fmax(1.0, 0.20 * fabs(commanded_delta));
     bool command_sent = false;
+    myact_status2_t s2_final;
     int rc;
 
     printf("active-telemetry-rt-test:\n");
@@ -1705,8 +1706,9 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     if (rc < 0) return rc;
 
     {
-        uint64_t warmup_end = now_ms(NULL) + ACTIVE_WARMUP_MS;
-        while (now_ms(NULL) < warmup_end) {
+        unsigned warmup_frames = 0;
+        uint64_t warmup_deadline = now_ms(NULL) + ((uint64_t)o->active_interval_ms * 8u) + 200u;
+        while (warmup_frames < ACTIVE_WARMUP_FRAMES && now_ms(NULL) < warmup_deadline) {
             int ev = myact_poll(c, o->active_interval_ms + 20);
             if (ev == MYACT_ETIMEDOUT) continue;
             if (ev < 0) {
@@ -1728,13 +1730,15 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
                     interval_count++;
                 }
                 prev_ts = ts;
+                warmup_frames++;
             }
         }
     }
 
-    if (frame_count == 0) {
+    if (frame_count < ACTIVE_WARMUP_FRAMES) {
         (void)myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
-        printf("[FAIL_TEST_SEQUENCE_ERROR] active-telemetry-rt-test: no active telemetry during warm-up window\n");
+        printf("[FAIL_TEST_SEQUENCE_ERROR_NO_MOTION_COMMAND] active-telemetry-rt-test: insufficient active telemetry warm-up before motion command (frames=%u required=%u)\n",
+               frame_count, ACTIVE_WARMUP_FRAMES);
         return MYACT_ESTATE;
     }
 
@@ -1803,6 +1807,10 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
 
     rc = read_angle_deg(c, &end_angle_deg);
     if (rc < 0) return rc;
+    rc = myact_read_status2(c, &s2_final);
+    if (rc < 0) return rc;
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
 
     angle_delta_deg = end_angle_deg - start_angle_deg;
     if (interval_count > 0) avg_interval_ms = (double)interval_sum / (double)interval_count;
@@ -1829,6 +1837,8 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
         printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
         printf("  commanded_delta_deg=%.2f\n", commanded_delta);
         printf("  move_tolerance_deg=%.2f\n", move_tol_deg);
+        printf("  final_92_deg=%.2f\n", end_angle_deg);
+        printf("  final_9A_speed_dps=%d\n", s2_final.speed_dps);
         printf("  error_flags=0x%04X\n", s1->error_flags);
 
         if (avg_interval_ms > (double)o->active_interval_ms) {
@@ -1842,7 +1852,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
             return MYACT_ESTATE;
         }
         if (!command_sent) {
-            printf("[FAIL_TEST_SEQUENCE_ERROR] active-telemetry-rt-test: movement command not sent while active replies were enabled\n");
+            printf("[FAIL_TEST_SEQUENCE_ERROR_NO_MOTION_COMMAND] active-telemetry-rt-test: movement command not sent while active replies were enabled\n");
             return MYACT_ESTATE;
         }
         if (!motion_ok) {
