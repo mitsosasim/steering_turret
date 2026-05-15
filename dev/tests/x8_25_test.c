@@ -1105,14 +1105,13 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
     double max_abs_speed_dps = 0.0;
     bool acked = false;
     myact_status2_t s2;
-    myact_runmode_t runmode_before = MYACT_RUNMODE_UNKNOWN;
-    myact_runmode_t runmode_after_command = MYACT_RUNMODE_UNKNOWN;
     myact_runmode_t runmode_after_stop = MYACT_RUNMODE_UNKNOWN;
     bool shutdown_sent = false;
 
     printf("torque-step-test: WARNING torque mode can move unexpectedly\n");
     if (!o->torque_sweep_test && fabs(o->torque_step_a) > 0.50) {
-        printf("torque-step-test: WARNING high torque-current can cause fast free rotation.\n");
+        printf("torque-step-test: WARNING high torque-current %.2fA exceeds 0.50A safety envelope; reduce before live bench use.\n",
+               fabs(o->torque_step_a));
     }
     if (o->torque_sweep_test) {
         printf("torque-sweep-test enabled: levels=");
@@ -1147,7 +1146,8 @@ static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_stat
         for (unsigned j = 0; j < (o->torque_sweep_test ? o->torque_sweep_count : 1); j++) {
         double tq = o->torque_sweep_test ? o->torque_sweep_values_a[j] : o->torque_step_a;
         if (fabs(tq) > 0.50) {
-            printf("torque-step-test: WARNING high torque-current can cause fast free rotation.\n");
+            printf("torque-step-test: WARNING high torque-current %.2fA exceeds 0.50A safety envelope; reduce before live bench use.\n",
+                   fabs(tq));
         }
         rc = myact_torque_send(c, myact_current_a_to_raw(tq));
         if (rc < 0) {
@@ -1222,8 +1222,7 @@ cleanup:
     printf("  angle_delta_deg=%.2f\n", angle_delta_deg);
     printf("  status1 error_flags=0x%04X\n", s1->error_flags);
     printf("  shutdown_sent=%s\n", shutdown_sent ? "yes" : "no");
-    printf("  runmode_before=%u runmode_after_command=%u runmode_after_stop=%u\n",
-           (unsigned)runmode_before, (unsigned)runmode_after_command, (unsigned)runmode_after_stop);
+    printf("  runmode_after_stop=%u\n", (unsigned)runmode_after_stop);
 
     if (ret < 0) return ret;
 
@@ -1859,7 +1858,8 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
 
     switch (kind) {
         case RAW_SMOKE_A1: {
-            int16_t iq = myact_current_a_to_raw(0.20);
+            const double iq_a = (fabs(o->torque_step_a) > 0.0) ? fabs(o->torque_step_a) : 0.20;
+            int16_t iq = myact_current_a_to_raw(iq_a);
             name = "raw-a1-smoke"; frame[0]=0xA1; frame[4]=iq & 0xFF; frame[5]=(iq>>8)&0xFF;
             rc = myact_torque_send(c, iq); if (rc < 0) return rc;
             msleep(200);
@@ -1888,13 +1888,20 @@ static int run_one_raw_smoke(myact_ctx_t* c, const test_opts_t* o, raw_smoke_kin
     }
 
     rc = myact_stop_and_shutdown(c, 100); if (rc < 0) return rc;
+    rc = myact_read_angle_multi(c, &a_after_raw); if (rc < 0) return rc;
     rc = myact_read_status1(c, &s1_after); if (rc < 0) return rc;
     rc = myact_read_status2(c, &s2_after); if (rc < 0) return rc;
-    rc = myact_read_angle_multi(c, &a_after_raw); if (rc < 0) return rc;
     a_after = myact_raw_0p01_to_deg(a_after_raw);
     delta = a_after - a_before;
 
-    if (kind == RAW_SMOKE_A1) pass = fabs(delta) >= o->torque_pass_min_delta_deg || fabs(s2_after.iq_0p01a/100.0) >= o->torque_pass_min_iq_a;
+    if (kind == RAW_SMOKE_A1) {
+        double measured_iq_a = fabs(s2_after.iq_0p01a / 100.0);
+        pass = (fabs(delta) >= o->torque_pass_min_delta_deg || measured_iq_a >= o->torque_pass_min_iq_a) &&
+               s1_after.error_flags == 0;
+        if (s1_after.error_flags != 0) {
+            printf("[FAIL] raw-a1-smoke: error_flags=0x%04X\n", s1_after.error_flags);
+        }
+    }
     else if (kind == RAW_SMOKE_A2) pass = fabs(delta) >= o->speed_pass_min_delta_deg;
     else if (kind == RAW_SMOKE_A4) pass = fabs(a_after - target_abs_deg) <= o->abs_tolerance_deg;
     else pass = fabs(delta - cmd_delta_deg) <= fmax(1.0, 0.20 * fabs(cmd_delta_deg));
