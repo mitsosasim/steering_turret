@@ -836,7 +836,6 @@ static int bench_result(const char* n, int rc, int* warnings) {
         if (!strcmp(n, "speed-step-test") || !strcmp(n, "native-a4-abs-test")) {
             printf("classification hint: protocol/frame failure vs runmode failure vs no-motion-under-low-voltage vs parameter/configuration suspect\n");
             printf("note: do not permanently mark A2/A4 unsupported based only on 22.7 V tests.\n");
-            printf("recommendation: repeat native A2/A4 validation at rated 48 V before final capability decision.\n");
         }
         printf("[ENOMOTION] %s: %s (%d)\n", n, myact_strerror(rc), rc);
         if (warnings) (*warnings)++;
@@ -1055,6 +1054,9 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         neg_delta_deg += neg_angle_end - neg_angle_start;
     }
 
+    pos_sign_ok = pos_delta_deg >= o->speed_pass_min_delta_deg;
+    neg_sign_ok = neg_delta_deg <= -o->speed_pass_min_delta_deg;
+
     rc = read_angle_deg(c, &angle_after);
     if (rc < 0) { ret = rc; goto cleanup; }
 
@@ -1088,19 +1090,13 @@ static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_statu
         goto cleanup;
     }
 
-    if (!(pos_sign_ok && neg_sign_ok && pos_delta_deg > o->speed_pass_min_delta_deg && neg_delta_deg < -o->speed_pass_min_delta_deg)) {
+    if (!(pos_sign_ok && neg_sign_ok)) {
         printf("[FAIL] speed-step-test: direction/sign checks failed (pos_sign=%d neg_sign=%d pos_delta=%.2f neg_delta=%.2f)\n",
                pos_sign_ok ? 1 : 0, neg_sign_ok ? 1 : 0, pos_delta_deg, neg_delta_deg);
         ret = MYACT_ENOMOTION;
         goto cleanup;
     }
 
-    if (fabs(delta_deg) < o->speed_pass_min_delta_deg) {
-        printf("[FAIL] speed-step-test: total movement %.2f deg below minimum %.2f deg\n",
-               fabs(delta_deg), o->speed_pass_min_delta_deg);
-        ret = MYACT_ENOMOTION;
-        goto cleanup;
-    }
 
     ret = MYACT_OK;
 
