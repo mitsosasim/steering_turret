@@ -810,18 +810,20 @@ static unsigned myact_motion_quiet_wait_ms(uint8_t command, double delta_or_hold
     return (unsigned)exec_ms;
 }
 
-static int bench_result(const char* n, int rc) {
+static int bench_result(const char* n, int rc, int* warnings) {
     if (rc == MYACT_OK) {
         printf("[PASS] %s\n", n);
-        return RET_OK;
+        return 0;
     }
     if (rc == MYACT_ESTATE) {
         printf("[SKIP] %s: reason already printed\n", n);
-        return RET_OK;
+        if (warnings) (*warnings)++;
+        return 0;
     }
     if (rc == MYACT_ENOTSUP) {
         printf("[ENOTSUP] %s: %s (%d)\n", n, myact_strerror(rc), rc);
-        return RET_OK;
+        if (warnings) (*warnings)++;
+        return 0;
     }
     if (rc == MYACT_ENOMOTION && (!strcmp(n, "speed-step-test") || !strcmp(n, "speed-stream-test") || !strcmp(n, "torque-step-test") || !strcmp(n, "native-a4-abs-test"))) {
         printf("[ACK_NO_MOTION] %s: command ACK observed but actuator produced no measurable motion\n", n);
@@ -831,16 +833,17 @@ static int bench_result(const char* n, int rc) {
             printf("recommendation: repeat native A2/A4 validation at rated 48 V before final capability decision.\n");
         }
         printf("[ENOMOTION] %s: %s (%d)\n", n, myact_strerror(rc), rc);
-        return RET_OK;
+        if (warnings) (*warnings)++;
+        return 0;
     }
 
     if (rc == RET_COMMS_FAIL) {
         printf("[FAIL] %s\n", n);
-        return RET_COMMS_FAIL;
+        return 1;
     }
 
     printf("[FAIL] %s: %s (%d)\n", n, myact_strerror(rc), rc);
-    return RET_COMMS_FAIL;
+    return 1;
 }
 
 static int run_a8_delta_observed(myact_ctx_t* c,
@@ -2083,7 +2086,7 @@ static int run_selftest_pack(void) {
 
     if (fails) {
         printf("selftest-pack: %d mismatch(es)\n", fails);
-        return RET_COMMS_FAIL;
+        return 1;
     }
     printf("selftest-pack: all packing checks passed\n");
     return RET_OK;
@@ -2097,7 +2100,9 @@ int main(int argc, char** argv) {
     myact_status1_t s1;
     int32_t a = 0;
     int rc;
-    int ret = RET_OK;
+    int failures = 0;
+    int warnings = 0;
+    int tests_run = 0;
 
     if (argc < 2) {
         print_usage(argv[0]);
@@ -2132,7 +2137,7 @@ int main(int argc, char** argv) {
     rc = myact_init(&ctx, (uint8_t)atoi(argv[2]), &io);
     if (rc < 0) {
         close(bus.s);
-        return RET_COMMS_FAIL;
+        return 1;
     }
 
     myact_set_timeout_ms(&ctx, 300);
@@ -2176,75 +2181,87 @@ int main(int argc, char** argv) {
 
             printf("[PASS] diagnostics\n");
 
-            b = bench_result("identity-status-read", RET_OK);
+            tests_run++;
+            b = bench_result("identity-status-read", RET_OK, &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("brake-release-confirmation", run_enable_hold(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("brake-release-confirmation", run_enable_hold(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("stop-shutdown", run_brake_latency_test(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("stop-shutdown", run_brake_latency_test(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("active-telemetry", run_active_telemetry_rt_test(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("active-telemetry", run_active_telemetry_rt_test(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("incremental-step-correctness", run_raw_motion_smoke(&ctx, &o, &s1, false));
+            tests_run++;
+            b = bench_result("incremental-step-correctness", run_raw_motion_smoke(&ctx, &o, &s1, false), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("profile-position-correctness", run_native_a4_abs_test(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("profile-position-correctness", run_native_a4_abs_test(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("jog-profile-velocity-correctness", run_speed_stream_test(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("jog-profile-velocity-correctness", run_speed_stream_test(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("command-stream-timeout", run_rt_inc_burst(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("command-stream-timeout", run_rt_inc_burst(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("startup-bringup-repeatability", run_rt_inc_burst(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("startup-bringup-repeatability", run_rt_inc_burst(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("stop-latency", run_brake_latency_test(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("stop-latency", run_brake_latency_test(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("fault-stop-behavior", run_brake_persistence_test(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("fault-stop-behavior", run_brake_persistence_test(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
-            b = bench_result("telemetry-freshness", run_active_telemetry_rt_test(&ctx, &o, &s1));
+            tests_run++;
+            b = bench_result("telemetry-freshness", run_active_telemetry_rt_test(&ctx, &o, &s1), &warnings);
             if (b != RET_OK) {
-                ret = RET_COMMS_FAIL;
+                failures++;
                 required_pass = false;
             }
 
@@ -2253,32 +2270,32 @@ int main(int argc, char** argv) {
             int b;
             any_dispatched = true;
             printf("[PASS] diagnostics\n");
-            b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1));
-            if (b != RET_OK) ret = RET_COMMS_FAIL;
-            b = bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1));
-            if (b != RET_OK) ret = RET_COMMS_FAIL;
-            b = bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1));
-            if (b != RET_OK) ret = RET_COMMS_FAIL;
+            tests_run++; b = bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1), &warnings);
+            if (b != RET_OK) failures++;
+            tests_run++; b = bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1), &warnings);
+            if (b != RET_OK) failures++;
+            tests_run++; b = bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1), &warnings);
+            if (b != RET_OK) failures++;
             if (o.run_mit_in_experimental_all) {
-                b = bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1));
-                if (b != RET_OK) ret = RET_COMMS_FAIL;
+                tests_run++; b = bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1), &warnings);
+                if (b != RET_OK) failures++;
             } else {
                 printf("[SKIP] mit-mode-test: not requested (use --bench-all-mit)\n");
             }
         } else {
-            if (o.brake_latency_test) { any_dispatched = true; if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.enable_hold) { any_dispatched = true; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.raw_motion_smoke) { any_dispatched = true; if (bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.raw_motion_smoke_sendonly) { any_dispatched = true; if (bench_result("raw-motion-smoke-sendonly", run_raw_motion_smoke(&ctx, &o, &s1, true)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all) { any_dispatched = true; if (bench_result("raw-smoke-suite", run_raw_smoke_suite(&ctx, &o)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.brake_persistence_test) { any_dispatched = true; if (bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.rt_inc_burst) { any_dispatched = true; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.speed_step_test) { any_dispatched = true; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.speed_stream_test) { any_dispatched = true; if (bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.native_a4_abs_test) { any_dispatched = true; if (bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.active_telemetry_rt_test) { any_dispatched = true; if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.torque_step_test || o.torque_sweep_test) { any_dispatched = true; if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
-            if (o.mit_mode_test) { any_dispatched = true; if (bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1)) != RET_OK) ret = RET_COMMS_FAIL; }
+            if (o.brake_latency_test) { any_dispatched = true; tests_run++; if (bench_result("brake-latency-test", run_brake_latency_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.enable_hold) { any_dispatched = true; tests_run++; if (bench_result("enable-hold", run_enable_hold(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.raw_motion_smoke) { any_dispatched = true; tests_run++; if (bench_result("raw-motion-smoke", run_raw_motion_smoke(&ctx, &o, &s1, false), &warnings) > 0) failures++; }
+            if (o.raw_motion_smoke_sendonly) { any_dispatched = true; tests_run++; if (bench_result("raw-motion-smoke-sendonly", run_raw_motion_smoke(&ctx, &o, &s1, true), &warnings) > 0) failures++; }
+            if (o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all) { any_dispatched = true; tests_run++; if (bench_result("raw-smoke-suite", run_raw_smoke_suite(&ctx, &o), &warnings) > 0) failures++; }
+            if (o.brake_persistence_test) { any_dispatched = true; tests_run++; if (bench_result("brake-persistence-test", run_brake_persistence_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.rt_inc_burst) { any_dispatched = true; tests_run++; if (bench_result("rt-inc-burst", run_rt_inc_burst(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.speed_step_test) { any_dispatched = true; tests_run++; if (bench_result("speed-step-test", run_speed_step_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.speed_stream_test) { any_dispatched = true; tests_run++; if (bench_result("speed-stream-test", run_speed_stream_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.native_a4_abs_test) { any_dispatched = true; tests_run++; if (bench_result("native-a4-abs-test", run_native_a4_abs_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.active_telemetry_rt_test) { any_dispatched = true; tests_run++; if (bench_result("active-telemetry-rt-test", run_active_telemetry_rt_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.torque_step_test || o.torque_sweep_test) { any_dispatched = true; tests_run++; if (bench_result("torque-step-test", run_torque_step_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
+            if (o.mit_mode_test) { any_dispatched = true; tests_run++; if (bench_result("mit-mode-test", run_mit_mode_test(&ctx, &o, &s1), &warnings) > 0) failures++; }
         }
 
         if (any_test_requested && !any_dispatched) {
@@ -2288,7 +2305,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    rc = ret;
+    rc = (failures > 0) ? RET_COMMS_FAIL : RET_OK;
+    printf("tests_run=%d passed=%d failed=%d warnings=%d\n",
+           tests_run, tests_run - failures, failures, warnings);
 
 done:
     if (o.no_shutdown_on_exit) {
