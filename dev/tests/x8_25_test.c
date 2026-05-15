@@ -1113,17 +1113,19 @@ cleanup:
 static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
     uint64_t t0;
-    double before = 0.0, after = 0.0, delta_deg = 0.0;
-    double pos_start = 0.0, pos_end = 0.0, pos_delta_deg = 0.0;
-    double neg_start = 0.0, neg_end = 0.0, neg_delta_deg = 0.0;
+    double initial_angle = 0.0, final_angle = 0.0, return_to_origin_error_deg = 0.0;
+    double angle_before_positive = 0.0, angle_after_positive = 0.0, pos_delta_deg = 0.0;
+    double angle_before_negative = 0.0, angle_after_negative = 0.0, neg_delta_deg = 0.0;
+    bool pos_phase_moved = false;
+    bool neg_phase_moved = false;
 
     printf("speed-stream-test: A2 streamed every %u ms, hold=%u ms\n", o->speed_stream_period_ms, o->speed_step_hold_ms);
     rc = axis_enable_for_motion(c, o, s1, "speed-stream-test");
     if (rc < 0) return rc;
 
-    rc = read_angle_deg(c, &before);
+    rc = read_angle_deg(c, &initial_angle);
     if (rc < 0) return rc;
-    rc = read_angle_deg(c, &pos_start);
+    rc = read_angle_deg(c, &angle_before_positive);
     if (rc < 0) return rc;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
@@ -1134,11 +1136,12 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     rc = myact_speed_send(c, 0);
     if (rc < 0) return rc;
     msleep(50);
-    rc = read_angle_deg(c, &pos_end);
+    rc = read_angle_deg(c, &angle_after_positive);
     if (rc < 0) return rc;
-    pos_delta_deg = pos_end - pos_start;
+    pos_delta_deg = angle_after_positive - angle_before_positive;
+    pos_phase_moved = pos_delta_deg >= o->speed_pass_min_delta_deg;
 
-    rc = read_angle_deg(c, &neg_start);
+    rc = read_angle_deg(c, &angle_before_negative);
     if (rc < 0) return rc;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
@@ -1149,9 +1152,10 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     rc = myact_speed_send(c, 0);
     if (rc < 0) return rc;
     msleep(50);
-    rc = read_angle_deg(c, &neg_end);
+    rc = read_angle_deg(c, &angle_after_negative);
     if (rc < 0) return rc;
-    neg_delta_deg = neg_end - neg_start;
+    neg_delta_deg = angle_after_negative - angle_before_negative;
+    neg_phase_moved = neg_delta_deg <= -o->speed_pass_min_delta_deg;
 
     rc = myact_speed_send(c, 0);
     if (rc < 0) return rc;
@@ -1159,15 +1163,15 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     if (rc < 0) return rc;
     rc = myact_shutdown_send(c);
     if (rc < 0) return rc;
-    rc = read_angle_deg(c, &after);
+    rc = read_angle_deg(c, &final_angle);
     if (rc < 0) return rc;
-    delta_deg = after - before;
+    return_to_origin_error_deg = final_angle - initial_angle;
 
     rc = myact_read_status1(c, s1);
     if (rc < 0) return rc;
 
     printf("speed-stream-test summary:\n");
-    printf("  delta_deg=%.2f (pass_abs>=%.2f)\n", delta_deg, o->speed_pass_min_delta_deg);
+    printf("  return_to_origin_error_deg=%.2f (diagnostic only)\n", return_to_origin_error_deg);
     printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
     printf("  error_flags=0x%04X\n", s1->error_flags);
 
@@ -1176,15 +1180,11 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
         return MYACT_ESTATE;
     }
 
-    if (!(pos_delta_deg > o->speed_pass_min_delta_deg && neg_delta_deg < -o->speed_pass_min_delta_deg)) {
-        printf("[FAIL] speed-stream-test: position sign/delta mismatch (pos=%.2f neg=%.2f, min=%.2f)\n",
+    if (!(pos_phase_moved && neg_phase_moved)) {
+        printf("[FAIL] speed-stream-test: phase delta/sign mismatch (pos=%.2f neg=%.2f, min=%.2f)\n",
                pos_delta_deg, neg_delta_deg, o->speed_pass_min_delta_deg);
-        return MYACT_ENOMOTION;
-    }
-    if (fabs(delta_deg) < o->speed_pass_min_delta_deg) {
-        printf("[FAIL] speed-stream-test: total movement %.2f deg below minimum %.2f deg\n",
-               fabs(delta_deg), o->speed_pass_min_delta_deg);
-        return MYACT_ENOMOTION;
+        if (!pos_phase_moved && !neg_phase_moved) return MYACT_ENOMOTION;
+        return RET_COMMS_FAIL;
     }
     return MYACT_OK;
 }
