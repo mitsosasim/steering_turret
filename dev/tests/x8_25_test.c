@@ -1493,6 +1493,7 @@ static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_st
     rc = prepare_sync(c);
     if (rc < 0) return rc;
 
+    printf("native-a4-abs-test: hidden preflight => disable active replies, stop+shutdown, drain rx\n");
     rc = myact_active_reply_disable_all(c);
     if (rc < 0) return rc;
     rc = myact_stop_and_shutdown(c, 100);
@@ -1801,6 +1802,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     uint64_t interval_max = 0;
     unsigned interval_count = 0;
     unsigned frame_count = 0;
+    unsigned warmup_frame_count = 0;
     int max_abs_speed = 0;
     double start_angle_deg = 0.0;
     double end_angle_deg = 0.0;
@@ -1855,7 +1857,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
                 const myact_cache_t* cache = myact_cache(c);
                 uint64_t ts = cache->status2.ts_ms;
                 int abs_speed;
-                frame_count++;
+                warmup_frame_count++;
                 abs_speed = cache->status2.speed_dps >= 0 ? cache->status2.speed_dps : -cache->status2.speed_dps;
                 if (abs_speed > max_abs_speed) max_abs_speed = abs_speed;
                 if (prev_ts != 0 && ts > prev_ts) {
@@ -1871,10 +1873,10 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
         }
     }
 
-    if (frame_count < ACTIVE_WARMUP_FRAMES) {
+    if (warmup_frame_count < ACTIVE_WARMUP_FRAMES) {
         (void)myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
         printf("[FAIL_TEST_SEQUENCE_ERROR_NO_MOTION_COMMAND] active-telemetry-rt-test: insufficient active telemetry warm-up before motion command (frames=%u required=%u)\n",
-               frame_count, ACTIVE_WARMUP_FRAMES);
+               warmup_frame_count, ACTIVE_WARMUP_FRAMES);
         return MYACT_ESTATE;
     }
 
@@ -1970,6 +1972,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
 
         printf("  expected_frames=%u\n", expected_frames);
         printf("  min_required=%u\n", min_required);
+        printf("  warmup_frames=%u\n", warmup_frame_count);
         printf("  frames_received=%u\n", frame_count);
         printf("  avg_interval_ms=%.1f\n", avg_interval_ms);
         printf("  min_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_min : 0));
