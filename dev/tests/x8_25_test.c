@@ -1724,6 +1724,7 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
 
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     enum { ACTIVE_WARMUP_FRAMES = 3, ACTIVE_DRAIN_IDLE_TARGET = 3 };
+    const char* phase = "enable-active-reply";
     uint64_t t_start;
     uint64_t t_end;
     uint64_t prev_ts = 0;
@@ -1747,19 +1748,19 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     printf("  interval_ms=%u duration_ms=%u\n", o->active_interval_ms, o->active_duration_ms);
 
     rc = myact_active_reply_disable_all(c);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     rc = myact_drain_rx(c, 500);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     rc = myact_stop_and_shutdown(c, 100);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     rc = read_angle_deg(c, &start_angle_deg);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     rc = axis_enable_for_motion(c, o, s1, "active-telemetry-rt-test");
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     if (!s1->brake_release_command_state || !s1->valid || s1->error_flags != 0) {
         printf("[FAIL] active-telemetry-rt-test: status1 precheck failed (brake_released=%u bus_valid=%u error_flags=0x%04X)\n",
@@ -1767,9 +1768,11 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
         return MYACT_ESTATE;
     }
 
+    phase = "enable-active-reply";
     rc = myact_active_reply_config(c, MYACT_CMD_STATUS2, true, (uint16_t)(o->active_interval_ms / 10));
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
+    phase = "warmup";
     {
         unsigned warmup_frames = 0;
         uint64_t warmup_deadline = now_ms(NULL) + ((uint64_t)o->active_interval_ms * 8u) + 200u;
@@ -1807,15 +1810,18 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
         return MYACT_ESTATE;
     }
 
+    phase = "send-motion-command";
     rc = myact_position_inc_send_raw(c,
                                      (uint16_t)o->active_move_speed_dps,
                                      myact_deg_to_raw_0p01(o->active_move_delta_deg));
     if (rc < 0) {
         (void)myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
+        printf("[FAIL_TEST_SEQUENCE_ERROR] active-telemetry-rt-test: A8 raw send failed rc=%d\n", rc);
         return rc;
     }
     command_sent = true;
 
+    phase = "collect";
     t_start = now_ms(NULL);
     t_end = t_start + o->active_duration_ms;
 
@@ -1844,9 +1850,11 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
         }
     }
 
+    phase = "disable-active-reply";
     rc = myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
+    phase = "final-sync-read";
     {
         unsigned idle_polls = 0;
         while (idle_polls < ACTIVE_DRAIN_IDLE_TARGET) {
@@ -1855,7 +1863,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
                 idle_polls++;
                 continue;
             }
-            if (ev < 0) return ev;
+            if (ev < 0) { if (ev == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return ev; }
             if ((ev & MYACT_EVENT_STATUS2) != 0) {
                 idle_polls = 0;
                 continue;
@@ -1865,17 +1873,17 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     }
 
     rc = myact_drain_rx(c, 500);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     rc = myact_stop_and_shutdown(c, 100);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     rc = read_angle_deg(c, &end_angle_deg);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
     rc = myact_read_status2(c, &s2_final);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
     rc = myact_read_status1(c, s1);
-    if (rc < 0) return rc;
+    if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
 
     angle_delta_deg = end_angle_deg - start_angle_deg;
     if (interval_count > 0) avg_interval_ms = (double)interval_sum / (double)interval_count;
@@ -1921,7 +1929,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
             return MYACT_ESTATE;
         }
         if (!motion_ok) {
-            printf("[FAIL] active-telemetry-rt-test: movement mismatch (actual=%.2f commanded=%.2f tolerance=%.2f)\n",
+            printf("[FAIL_ACTIVE_MOTION_MISMATCH] active-telemetry-rt-test: movement mismatch (actual=%.2f commanded=%.2f tolerance=%.2f)\n",
                    angle_delta_deg, commanded_delta, move_tol_deg);
             return MYACT_ESTATE;
         }
