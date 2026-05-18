@@ -338,6 +338,17 @@ int myact_shutdown(myact_ctx_t* ctx);
 int myact_stop(myact_ctx_t* ctx);
 int myact_brake_release(myact_ctx_t* ctx);
 int myact_fault_clear(myact_ctx_t* ctx);
+typedef struct {
+    bool brake_before_locked;
+    bool brake_after_locked;
+    uint32_t latency_ms;
+    uint32_t retries;
+    myact_status1_t final_status1;
+} myact_prepare_result_t;
+int myact_prepare_for_motion_ex(myact_ctx_t* ctx,
+                                uint32_t brake_timeout_ms,
+                                uint32_t poll_ms,
+                                myact_prepare_result_t* out);
 int myact_prepare_for_motion(myact_ctx_t* ctx,
                              uint32_t brake_timeout_ms,
                              uint32_t poll_ms);
