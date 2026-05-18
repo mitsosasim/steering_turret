@@ -1816,6 +1816,12 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
 
     printf("active-telemetry-rt-test:\n");
     printf("  interval_ms=%u duration_ms=%u\n", o->active_interval_ms, o->active_duration_ms);
+    printf("active-telemetry-rt-test expected CAN order:\n");
+    printf("  B6 enable 9C\n");
+    printf("  active 9C warmup frames\n");
+    printf("  A8 raw motion command\n");
+    printf("  active 9C collect frames\n");
+    printf("  B6 disable 9C\n");
 
     rc = myact_active_reply_disable_all(c);
     if (rc < 0) { if (rc == MYACT_ETIMEDOUT) printf("active-telemetry-rt-test phase=%s\n", phase); return rc; }
@@ -1974,6 +1980,9 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
         printf("  min_required=%u\n", min_required);
         printf("  warmup_frames=%u\n", warmup_frame_count);
         printf("  frames_received=%u\n", frame_count);
+        printf("active_warmup_frames=%u\n", warmup_frame_count);
+        printf("active_collect_frames=%u\n", frame_count);
+        printf("a8_raw_sent=%s\n", command_sent ? "yes" : "no");
         printf("  avg_interval_ms=%.1f\n", avg_interval_ms);
         printf("  min_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_min : 0));
         printf("  max_interval_ms=%llu\n", (unsigned long long)(interval_count ? interval_max : 0));
