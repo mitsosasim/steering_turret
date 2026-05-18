@@ -1230,13 +1230,18 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     uint64_t t0;
     int32_t angle_raw = 0;
     myact_status1_t s1_final;
+    unsigned tx_count_pos = 0;
+    unsigned tx_count_neg = 0;
     double initial_angle = 0.0, final_angle = 0.0, return_to_origin_error_deg = 0.0;
     double angle_before_positive = 0.0, angle_after_positive = 0.0, pos_delta_deg = 0.0;
     double angle_before_negative = 0.0, angle_after_negative = 0.0, neg_delta_deg = 0.0;
     bool pos_phase_moved = false;
     bool neg_phase_moved = false;
 
-    printf("speed-stream-test: A2 streamed every %u ms, hold=%u ms\n", o->speed_stream_period_ms, o->speed_step_hold_ms);
+    printf("speed-stream-test:\n");
+    printf("  period_ms=%u\n", o->speed_stream_period_ms);
+    printf("  hold_ms=%u\n", o->speed_step_hold_ms);
+    printf("  requested_dps=%.0f\n", o->speed_step_dps);
     rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
     rc = myact_drain_rx(c, 300);
@@ -1256,11 +1261,12 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     angle_before_positive = initial_angle;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-        rc = myact_speed_send(c, myact_speed_dps_to_raw(o->speed_step_dps));
+        rc = myact_speed_send_raw(c, myact_speed_dps_to_raw(o->speed_step_dps));
         if (rc < 0) return rc;
+        tx_count_pos++;
         msleep(o->speed_stream_period_ms);
     }
-    rc = myact_speed_send(c, 0);
+    rc = myact_speed_send_raw(c, 0);
     if (rc < 0) return rc;
     msleep(50);
     rc = myact_read_angle_multi(c, &angle_raw);
@@ -1272,11 +1278,12 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     angle_before_negative = angle_after_positive;
     t0 = now_ms(NULL);
     while (now_ms(NULL) - t0 < o->speed_step_hold_ms) {
-        rc = myact_speed_send(c, myact_speed_dps_to_raw(-o->speed_step_dps));
+        rc = myact_speed_send_raw(c, myact_speed_dps_to_raw(-o->speed_step_dps));
         if (rc < 0) return rc;
+        tx_count_neg++;
         msleep(o->speed_stream_period_ms);
     }
-    rc = myact_speed_send(c, 0);
+    rc = myact_speed_send_raw(c, 0);
     if (rc < 0) return rc;
     msleep(50);
     rc = myact_read_angle_multi(c, &angle_raw);
@@ -1296,10 +1303,12 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     rc = myact_read_status1(c, &s1_final);
     if (rc < 0) return rc;
 
-    printf("speed-stream-test summary:\n");
+    printf("  tx_count_pos=%u\n", tx_count_pos);
+    printf("  tx_count_neg=%u\n", tx_count_neg);
+    printf("  pos_delta_deg=%.2f\n", pos_delta_deg);
+    printf("  neg_delta_deg=%.2f\n", neg_delta_deg);
     printf("  return_to_origin_error_deg=%.2f (diagnostic only)\n", return_to_origin_error_deg);
-    printf("  pos_delta_deg=%.2f neg_delta_deg=%.2f\n", pos_delta_deg, neg_delta_deg);
-    printf("  final_92_deg=%.2f final_9A_error_flags=0x%04X\n", final_angle, s1_final.error_flags);
+    printf("  error_flags=0x%04X\n", s1_final.error_flags);
 
     if (s1_final.error_flags != 0) {
         printf("[FAIL] speed-stream-test: error_flags=0x%04X\n", s1_final.error_flags);
@@ -1312,6 +1321,7 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
         if (!pos_phase_moved && !neg_phase_moved) return MYACT_ENOMOTION;
         return RET_COMMS_FAIL;
     }
+    printf("[PASS] speed-stream-test\n");
     return MYACT_OK;
 }
 
