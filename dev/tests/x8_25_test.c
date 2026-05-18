@@ -168,6 +168,7 @@ typedef struct {
     bool experimental_all;
     bool run_mit_in_experimental_all;
     bool allow_hold_with_runmode0;
+    bool allow_final_brake_released;
     bool commissioning_write_enable;
     bool write_pid_ram;
     bool write_pid_rom;
@@ -558,6 +559,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--bench-all-mit", run_mit_in_experimental_all)
         FLAG("--mit-dry-run", mit_dry_run)
         FLAG("--allow-hold-with-runmode0", allow_hold_with_runmode0)
+        FLAG("--allow-final-brake-released", allow_final_brake_released)
         FLAG("--commissioning-write-enable", commissioning_write_enable)
         FLAG("--write-pid-ram", write_pid_ram)
         FLAG("--write-pid-rom", write_pid_rom)
@@ -884,6 +886,7 @@ static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_
 static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_final_cleanup_diag(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_selftest_pack(void);
 static int run_raw_a1_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a1_smoke(c, o); }
 static int run_raw_a2_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a2_smoke(c, o); }
@@ -928,7 +931,7 @@ static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_st
         {"speed-stream-test", run_speed_stream_test, false, true, false, true, false},
         {"active-telemetry-rt-test", run_active_telemetry_rt_test, false, true, false, false, false},
         {"torque-step-test", run_torque_step_test, false, false, true, true, false},
-        {"final stop + shutdown + diag", run_brake_latency_test, true, false, false, false, true},
+        {"final cleanup + diag", run_final_cleanup_diag, true, false, false, false, true},
     };
 
     printf("[INDEPENDENT] step 1/13: selftest-pack\n");
@@ -995,6 +998,45 @@ static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_st
     printf("  result=%s\n", required_failed == 0 ? "PASS" : "FAIL");
 
     return (required_failed == 0) ? RET_OK : RET_COMMS_FAIL;
+}
+
+static int run_final_cleanup_diag(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    int rc;
+    myact_runmode_t runmode = MYACT_RUNMODE_UNKNOWN;
+    int32_t angle_raw = 0;
+
+    rc = myact_active_reply_disable_all(c);
+    if (rc < 0) return rc;
+    rc = myact_drain_rx(c, 300);
+    if (rc < 0) return rc;
+
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    msleep(50);
+
+    rc = myact_shutdown_send(c);
+    if (rc < 0) return rc;
+    msleep(500);
+
+    rc = myact_drain_rx(c, 300);
+    if (rc < 0) return rc;
+
+    rc = myact_read_operating_mode(c, &runmode);
+    if (rc < 0) return rc;
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
+    rc = myact_read_angle_multi(c, &angle_raw);
+    if (rc < 0) return rc;
+
+    printf("final-cleanup-diag: runmode=%u status1_err=0x%04X brake=%s angle=%.2f\n",
+           (unsigned)runmode, s1->error_flags,
+           s1->brake_release_command_state ? "released" : "locked",
+           myact_raw_0p01_to_deg(angle_raw));
+
+    if (runmode != 0) return MYACT_ESTATE;
+    if (s1->error_flags != 0) return MYACT_ESTATE;
+    if (!o->allow_final_brake_released && s1->brake_release_command_state) return MYACT_EBRAKE;
+    return MYACT_OK;
 }
 
 static int run_a8_delta_observed(myact_ctx_t* c,
