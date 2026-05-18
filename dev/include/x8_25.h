@@ -358,6 +358,12 @@ int myact_read_motion_commissioning_snapshot(myact_ctx_t* ctx,
 int myact_active_reply_config(myact_ctx_t* ctx, uint8_t reply_cmd, bool enable, uint16_t interval_10ms);
 int myact_active_reply_disable_all(myact_ctx_t* ctx);
 int myact_disable_all_active_replies(myact_ctx_t* ctx); /* deprecated alias */
+int myact_torque_send_raw(myact_ctx_t* ctx, int16_t iq_0p01a); /* native A1 raw send-only */
+int myact_speed_send_raw(myact_ctx_t* ctx, int32_t speed_0p01dps); /* native A2 raw send-only */
+int myact_speed_dps_send_raw(myact_ctx_t* ctx, double speed_dps); /* native A2 wrapper raw send-only */
+int myact_position_abs_send_raw(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg); /* native A4 raw send-only */
+int myact_position_abs_deg_send_raw(myact_ctx_t* ctx, double target_deg, uint16_t max_speed_dps); /* native A4 wrapper raw send-only */
+int myact_position_inc_send_raw(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg); /* A8 raw send-only */
 int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps); /* native A2 raw: 0.01 dps/LSB */
 int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps); /* native A2 wrapper: dps -> raw */
 int myact_speed(myact_ctx_t* ctx, int32_t speed_0p01dps, myact_basic_feedback_t* out); /* native A2 */

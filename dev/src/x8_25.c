@@ -896,74 +896,49 @@ int myact_stop_and_shutdown(myact_ctx_t* ctx, uint32_t settle_ms) {
     return MYACT_OK;
 }
 
-int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a) {
+int myact_torque_send_raw(myact_ctx_t* ctx, int16_t iq_0p01a) {
     uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
-    rc = myact_prepare_for_motion(ctx, 0u, 0u);
-    if (rc < 0) return rc;
     rc = myact_pack_a1_torque(iq_0p01a, tx);
     if (rc < 0) return rc;
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
-int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps) {
+int myact_speed_send_raw(myact_ctx_t* ctx, int32_t speed_0p01dps) {
     uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
-    rc = myact_prepare_for_motion(ctx, 0u, 0u);
-    if (rc < 0) return rc;
     rc = myact_pack_a2_speed(speed_0p01dps, tx);
     if (rc < 0) return rc;
-    if (ctx->log_fn) {
-        char msg[180];
-        (void)snprintf(msg, sizeof(msg),
-                       "A2 tx speed_dps=%.2f raw_0p01dps=%ld frame=%02X %02X %02X %02X %02X %02X %02X %02X",
-                       ((double)speed_0p01dps) / 100.0,
-                       (long)speed_0p01dps,
-                       tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7]);
-        ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
-    }
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
-int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps) {
+int myact_speed_dps_send_raw(myact_ctx_t* ctx, double speed_dps) {
     double raw_f;
     if (!ctx) return MYACT_EINVAL;
     if (!isfinite(speed_dps)) return MYACT_ERANGE;
     raw_f = round(speed_dps * 100.0);
     if (raw_f < (double)INT32_MIN || raw_f > (double)INT32_MAX) return MYACT_ERANGE;
-    return myact_speed_send(ctx, (int32_t)raw_f);
+    return myact_speed_send_raw(ctx, (int32_t)raw_f);
 }
 
-int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg) {
+int myact_position_abs_send_raw(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg) {
     uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
-    rc = myact_prepare_for_motion(ctx, 0u, 0u);
-    if (rc < 0) return rc;
     rc = myact_pack_a4_abs(max_speed_dps, angle_0p01deg, tx);
     if (rc < 0) return rc;
-    if (ctx->log_fn) {
-        char msg[220];
-        (void)snprintf(msg, sizeof(msg),
-                       "A4 tx target_deg=%.2f target_raw_0p01deg=%ld maxSpeed=%u frame=%02X %02X %02X %02X %02X %02X %02X %02X",
-                       ((double)angle_0p01deg) / 100.0,
-                       (long)angle_0p01deg,
-                       (unsigned)max_speed_dps,
-                       tx[0], tx[1], tx[2], tx[3], tx[4], tx[5], tx[6], tx[7]);
-        ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
-    }
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
-int myact_position_abs_deg_send(myact_ctx_t* ctx, double target_deg, uint16_t max_speed_dps) {
+int myact_position_abs_deg_send_raw(myact_ctx_t* ctx, double target_deg, uint16_t max_speed_dps) {
     double raw_f;
     if (!ctx) return MYACT_EINVAL;
     if (!isfinite(target_deg)) return MYACT_ERANGE;
     raw_f = round(target_deg * 100.0);
     if (raw_f < (double)INT32_MIN || raw_f > (double)INT32_MAX) return MYACT_ERANGE;
-    return myact_position_abs_send(ctx, max_speed_dps, (int32_t)raw_f);
+    return myact_position_abs_send_raw(ctx, max_speed_dps, (int32_t)raw_f);
 }
 
 int myact_position_single_send(myact_ctx_t* ctx, uint8_t spin_direction, uint16_t max_speed_dps, uint16_t angle_0p01deg) {
@@ -976,16 +951,21 @@ int myact_position_single_send(myact_ctx_t* ctx, uint8_t spin_direction, uint16_
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
 
-int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg) {
+int myact_position_inc_send_raw(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg) {
     uint8_t tx[8];
     int rc;
     if (!ctx) return MYACT_EINVAL;
-    rc = myact_prepare_for_motion(ctx, 0u, 0u);
-    if (rc < 0) return rc;
     rc = myact_pack_a8_inc(max_speed_dps, delta_angle_0p01deg, tx);
     if (rc < 0) return rc;
     return myact_send_frame(ctx, ctx->cmd_id, tx);
 }
+
+int myact_torque_send(myact_ctx_t* ctx, int16_t iq_0p01a) { return myact_torque_send_raw(ctx, iq_0p01a); }
+int myact_speed_send(myact_ctx_t* ctx, int32_t speed_0p01dps) { return myact_speed_send_raw(ctx, speed_0p01dps); }
+int myact_speed_dps_send(myact_ctx_t* ctx, double speed_dps) { return myact_speed_dps_send_raw(ctx, speed_dps); }
+int myact_position_abs_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t angle_0p01deg) { return myact_position_abs_send_raw(ctx, max_speed_dps, angle_0p01deg); }
+int myact_position_abs_deg_send(myact_ctx_t* ctx, double target_deg, uint16_t max_speed_dps) { return myact_position_abs_deg_send_raw(ctx, target_deg, max_speed_dps); }
+int myact_position_inc_send(myact_ctx_t* ctx, uint16_t max_speed_dps, int32_t delta_angle_0p01deg) { return myact_position_inc_send_raw(ctx, max_speed_dps, delta_angle_0p01deg); }
 
 /* synchronous control */
 
