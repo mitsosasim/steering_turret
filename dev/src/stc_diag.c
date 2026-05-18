@@ -63,3 +63,27 @@ void stc_diag_set_cbit_critical(shared_data_t* shared, bool critical) {
   if (!slot) return;
   slot->critical = critical;
 }
+
+stc_diag_myact_severity_t stc_diag_myact_error_severity(uint16_t error_flags) {
+  if (error_flags == 0u) return STC_DIAG_MYACT_SEV_NONE;
+  if (error_flags & (uint16_t)(0x0001u | 0x0002u | 0x0004u | 0x0010u | 0x0020u | 0x1000u | 0x2000u)) {
+    return STC_DIAG_MYACT_SEV_CRITICAL;
+  }
+  if (error_flags & (uint16_t)(0x0100u | 0x0800u)) {
+    return STC_DIAG_MYACT_SEV_WARNING;
+  }
+  return STC_DIAG_MYACT_SEV_WARNING;
+}
+
+uint16_t stc_diag_myact_primary_error_code(uint16_t error_flags) {
+  if (error_flags & 0x0001u) return STC_DIAG_ERR_MYACT_STALL;
+  if (error_flags & 0x0002u) return STC_DIAG_ERR_MYACT_UNDERVOLT;
+  if (error_flags & 0x0004u) return STC_DIAG_ERR_MYACT_OVERVOLT;
+  if (error_flags & 0x0010u) return STC_DIAG_ERR_MYACT_OVERCURRENT;
+  if (error_flags & 0x0020u) return STC_DIAG_ERR_MYACT_OVERSPEED;
+  if (error_flags & 0x2000u) return STC_DIAG_ERR_MYACT_ENCODER_CAL;
+  if (error_flags & 0x1000u) return STC_DIAG_ERR_MYACT_OVERTEMP;
+  if (error_flags & 0x0100u) return STC_DIAG_WARN_MYACT_POWER_OVERRUN;
+  if (error_flags & 0x0800u) return STC_DIAG_WARN_MYACT_CAL_WRITE;
+  return 0u;
+}

@@ -28,6 +28,13 @@ int main(void) {
   assert(motor_status_flags(0, 0, 0, 1) == 0x08u);
   assert(motor_status_flags(1, 1, 1, 1) == 0x0Fu);
 
+  assert(stc_diag_myact_error_severity(0x0000u) == STC_DIAG_MYACT_SEV_NONE);
+  assert(stc_diag_myact_error_severity(0x0010u) == STC_DIAG_MYACT_SEV_CRITICAL);
+  assert(stc_diag_myact_error_severity(0x1000u) == STC_DIAG_MYACT_SEV_CRITICAL);
+  assert(stc_diag_myact_primary_error_code(0x0000u) == 0u);
+  assert(stc_diag_myact_primary_error_code(0x0010u) == STC_DIAG_ERR_MYACT_OVERCURRENT);
+  assert(stc_diag_myact_primary_error_code(0x1000u) == STC_DIAG_ERR_MYACT_OVERTEMP);
+
   puts("test_diag_codes: PASS");
   return 0;
 }
