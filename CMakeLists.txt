@@ -41,6 +41,13 @@ add_executable(stc_server
   dev/src/myact_backend.c
 )
 
+if(NOT USE_SIMULATOR)
+  target_sources(stc_server PRIVATE
+    dev/src/x8_25.c
+    dev/src/myact_socketcan.c
+  )
+endif()
+
 add_executable(icd_tx_tcp
   dev/tools/icd_tx_tcp.c
   dev/src/stc_icd.c
@@ -67,6 +74,11 @@ target_link_libraries(stc_server PRIVATE pthread m)
 if(USE_SIMULATOR)
   target_compile_definitions(stc_server PRIVATE SIMULATION)
   target_link_libraries(stc_server PRIVATE simulator)
+else()
+  target_compile_definitions(stc_server PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
 endif()
 
 add_executable(test_actions
