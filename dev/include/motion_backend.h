@@ -2,6 +2,7 @@
 #define STC_MOTION_BACKEND_H
 
 #include "stc_model.h"
+#include "stc_actions.h"
 
 #include <stdint.h>
 
@@ -77,6 +78,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
 void motion_backend_stop(motion_backend_t* backend);
 int motion_backend_discover(motion_backend_t* backend);
 int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]);
+int motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]);
 int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]);
 int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask);
 int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask);

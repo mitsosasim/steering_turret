@@ -124,6 +124,14 @@ void stc_action_make_pp_move(stc_action_t* action, uint32_t axes_mask, const dou
   memcpy(action->u.target_deg, target_deg, sizeof(action->u.target_deg));
 }
 
+
+void stc_action_make_motion(stc_action_t* action, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double value_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]) {
+  stc_action_make_simple(action, ACTION_PP_MOVE, axes_mask);
+  memcpy(action->u.motion.kind, kind, sizeof(action->u.motion.kind));
+  memcpy(action->u.motion.value_deg_or_dps, value_deg_or_dps, sizeof(action->u.motion.value_deg_or_dps));
+  memcpy(action->u.motion.speed_limit_deg_s, speed_limit_deg_s, sizeof(action->u.motion.speed_limit_deg_s));
+}
+
 void stc_action_make_stream_speed(stc_action_t* action, uint32_t axes_mask, const double speed_deg_s[STC_AXIS_COUNT]) {
   stc_action_make_simple(action, ACTION_STREAM_SPEED, axes_mask);
   memcpy(action->u.speed_deg_s, speed_deg_s, sizeof(action->u.speed_deg_s));
