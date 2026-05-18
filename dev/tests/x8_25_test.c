@@ -1746,13 +1746,13 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     printf("active-telemetry-rt-test:\n");
     printf("  interval_ms=%u duration_ms=%u\n", o->active_interval_ms, o->active_duration_ms);
 
-    rc = myact_stop_and_shutdown(c, 100);
-    if (rc < 0) return rc;
-
     rc = myact_active_reply_disable_all(c);
     if (rc < 0) return rc;
 
     rc = myact_drain_rx(c, 500);
+    if (rc < 0) return rc;
+
+    rc = myact_stop_and_shutdown(c, 100);
     if (rc < 0) return rc;
 
     rc = read_angle_deg(c, &start_angle_deg);
@@ -1761,8 +1761,11 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     rc = axis_enable_for_motion(c, o, s1, "active-telemetry-rt-test");
     if (rc < 0) return rc;
 
-    rc = prepare_sync(c);
-    if (rc < 0) return rc;
+    if (!s1->brake_release_command_state || !s1->valid || s1->error_flags != 0) {
+        printf("[FAIL] active-telemetry-rt-test: status1 precheck failed (brake_released=%u bus_valid=%u error_flags=0x%04X)\n",
+               (unsigned)s1->brake_release_command_state, (unsigned)s1->valid, s1->error_flags);
+        return MYACT_ESTATE;
+    }
 
     rc = myact_active_reply_config(c, MYACT_CMD_STATUS2, true, (uint16_t)(o->active_interval_ms / 10));
     if (rc < 0) return rc;
@@ -1804,9 +1807,9 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
         return MYACT_ESTATE;
     }
 
-    rc = myact_position_inc_send(c,
-                                 (uint16_t)o->active_move_speed_dps,
-                                 myact_deg_to_raw_0p01(o->active_move_delta_deg));
+    rc = myact_position_inc_send_raw(c,
+                                     (uint16_t)o->active_move_speed_dps,
+                                     myact_deg_to_raw_0p01(o->active_move_delta_deg));
     if (rc < 0) {
         (void)myact_active_reply_config(c, MYACT_CMD_STATUS2, false, 0);
         return rc;
