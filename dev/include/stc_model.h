@@ -14,14 +14,42 @@ typedef enum axis_vel_raw_units_e {
   AXIS_VEL_RAW_DEG_PER_SEC = 0
 } axis_vel_raw_units_t;
 
+typedef enum stc_axis_driver_e {
+  STC_AXIS_DRIVER_DISABLED = 0,
+  STC_AXIS_DRIVER_PD4C,
+  STC_AXIS_DRIVER_MYACT_X8_25,
+  STC_AXIS_DRIVER_SIM
+} stc_axis_driver_t;
+
 typedef struct axis_cfg_s {
+  stc_axis_driver_t driver;
+  int node_id;
+
+  double min_deg;
+  double max_deg;
+  double max_speed_deg_s;
+  double storage_deg;
+
+  double command_sign;
+  double telemetry_sign;
+  double zero_physical_deg;
+  double zero_raw_deg;
+  int zero_on_start;
+
+  int brake_release_timeout_ms;
+  int brake_poll_ms;
+  int active_status2_enable;
+  int active_status2_interval_ms;
+  int feedback_timeout_ms;
+
+  /* PD4C-only fields. */
   double counts_per_rev;
   double gear_ratio;
   axis_vel_raw_units_t vel_raw_units;
   double vel_scale;
   double az_min_deg;
   double az_max_deg;
-  double max_speed_deg_s;
+  int vel_raw_mode;
   uint16_t pp_profile_vel;
 } axis_cfg_t;
 

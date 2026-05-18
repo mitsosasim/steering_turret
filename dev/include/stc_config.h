@@ -49,13 +49,27 @@ typedef struct stc_config_s {
   int controller_id_strict_legacy;
 
   int num_axes;
+  int axis_enabled[STC_AXIS_COUNT];
+  stc_axis_driver_t axis_driver[STC_AXIS_COUNT];
   int axis_node_id[STC_AXIS_COUNT];
+  double axis_command_sign[STC_AXIS_COUNT];
+  double axis_telemetry_sign[STC_AXIS_COUNT];
+  double axis_zero_physical_deg[STC_AXIS_COUNT];
+  double axis_zero_raw_deg[STC_AXIS_COUNT];
+  int axis_zero_on_start[STC_AXIS_COUNT];
   double axis_counts_per_rev[STC_AXIS_COUNT];
   double axis_gear_ratio[STC_AXIS_COUNT];
+  double axis_vel_scale[STC_AXIS_COUNT];
+  int axis_vel_raw_mode[STC_AXIS_COUNT];
   double axis_min_deg[STC_AXIS_COUNT];
   double axis_max_deg[STC_AXIS_COUNT];
   double axis_max_speed_deg_s[STC_AXIS_COUNT];
   double axis_storage_deg[STC_AXIS_COUNT];
+  int axis_brake_release_timeout_ms[STC_AXIS_COUNT];
+  int axis_brake_poll_ms[STC_AXIS_COUNT];
+  int axis_active_status2_enable[STC_AXIS_COUNT];
+  int axis_active_status2_interval_ms[STC_AXIS_COUNT];
+  int axis_feedback_timeout_ms[STC_AXIS_COUNT];
   uint16_t axis_pp_profile_vel[STC_AXIS_COUNT];
   uint8_t axis_diag_cat[STC_AXIS_COUNT];
   uint8_t axis_diag_subcat[STC_AXIS_COUNT];
