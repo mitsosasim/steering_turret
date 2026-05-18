@@ -114,14 +114,31 @@ static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg) {
     return -1;
   }
 
-  printf("RSP: cmd_id=0x%04X seq=%u result=%s err_code=%u payload_size=%u\n",
-         rsp.cmd_id, rsp.seq,
-         (rsp.result == STC_RSP_ACK ? "ACK" : "NACK"),
-         (unsigned)rsp.err_code,
+  const char* result_name = (rsp.result == STC_RSP_ACK ? "ACK" : "NACK");
+  const char* err_name = "UNKNOWN";
+  switch (rsp.err_code) {
+    case STC_ERR_NO_ERROR: err_name = "STC_ERR_NO_ERROR"; break;
+    case STC_ERR_CLIENT_UNKNOWN: err_name = "STC_ERR_CLIENT_UNKNOWN"; break;
+    case STC_ERR_PROTOCOL_MISMATCH: err_name = "STC_ERR_PROTOCOL_MISMATCH"; break;
+    case STC_ERR_SYNTAX_ERROR: err_name = "STC_ERR_SYNTAX_ERROR"; break;
+    case STC_ERR_VALUE_OUT_OF_RANGE: err_name = "STC_ERR_VALUE_OUT_OF_RANGE"; break;
+    case STC_ERR_NOT_ALLOWED_STATE: err_name = "STC_ERR_NOT_ALLOWED_STATE"; break;
+    case STC_ERR_INSUFFICIENT_RES: err_name = "STC_ERR_INSUFFICIENT_RES"; break;
+    case STC_ERR_TIMEOUT: err_name = "STC_ERR_TIMEOUT"; break;
+    case STC_ERR_COMMAND_NOT_IMPLEMENTED: err_name = "STC_ERR_COMMAND_NOT_IMPLEMENTED"; break;
+    case STC_ERR_GENERIC: err_name = "STC_ERR_GENERIC"; break;
+  }
+
+  printf("RSP: cmd_id=0x%04X seq=%u result=%s err_code=%u (%s) payload_size=%u\n",
+         rsp.cmd_id, rsp.seq, result_name,
+         (unsigned)rsp.err_code, err_name,
          (unsigned)rsp.payload_size);
 
+  printf("%s\n", result_name);
+  printf("error_code_name=%s\n", err_name);
+
   if (rsp.payload_size > 0) {
-    printf("RSP payload (ASCII): ");
+    printf("response_payload=");
     fwrite(rsp.payload, 1, rsp.payload_size, stdout);
     printf("\n");
   }
@@ -154,6 +171,8 @@ static void usage(const char* prog) {
     "  manualpos <lat> <lon> <alt> <heading>\n"
     "  posmode <gps|manual|0|1>\n"
     "  req_sw\n"
+    "  req_hw_info\n"
+    "  req_work_time\n"
     "\n"
     "Test suites:\n"
     "  suite          (sends many valid commands)\n"
@@ -466,6 +485,14 @@ int main(int argc, char** argv) {
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
   } else if (!strcmp(cmdn, "req_sw")) {
     INIT_CMD(STC_CMD_REQ_SW_VERSION);
+    if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+  } else if (!strcmp(cmdn, "req_hw_info")) {
+    INIT_CMD(STC_CMD_REQ_HW_INFO);
+    if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+  } else if (!strcmp(cmdn, "req_work_time")) {
+    INIT_CMD(STC_CMD_REQ_WORK_TIME);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
   } else {
