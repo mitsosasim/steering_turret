@@ -29,7 +29,8 @@ enum {
 typedef enum {
   AXIS_CMD_NONE = 0,
   AXIS_CMD_SPEED,
-  AXIS_CMD_POSITION,
+  AXIS_CMD_POSITION_ABS,
+  AXIS_CMD_POSITION_REL,
   AXIS_CMD_STOP,
 } axis_cmd_kind_t;
 
@@ -134,6 +135,14 @@ static double clamp_range(double v, double lo, double hi) {
 }
 
 
+static int prepare_for_motion_locked(struct motion_backend* b, size_t axis, uint64_t now) {
+  (void)now;
+  const uint8_t node_id = b->cfg.axis_node_id[axis];
+  if (!node_id) return -1;
+  (void)send_myact_cmd(b, node_id, MYACT_CMD_BRAKE_RELEASE, 0, 0);
+  return 0;
+}
+
 static void normalize_snapshot_from_feedback(struct motion_backend* b, size_t axis, int16_t iq_0p01a, int16_t speed_dps, int16_t angle_deg, uint64_t t_ms) {
   const axis_cfg_t* cfg = &b->cfg.axis_cfg[axis];
   const double gr = (cfg->gear_ratio > 0.0) ? cfg->gear_ratio : 1.0;
@@ -164,9 +173,14 @@ static void refresh_feedback_locked(struct motion_backend* b, uint64_t t_ms) {
   }
 }
 
-static void axis_stop_locked(struct motion_backend* b, size_t axis, uint64_t t_ms) {
+static void axis_stop_locked(struct motion_backend* b, size_t axis, uint64_t t_ms, int shutdown) {
   const uint8_t node_id = b->cfg.axis_node_id[axis];
   if (node_id) (void)send_myact_cmd(b, node_id, MYACT_CMD_STOP, 0, 0);
+  if (shutdown && node_id) {
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = 50 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    (void)send_myact_cmd(b, node_id, 0x80, 0, 0);
+  }
   b->speed_active[axis] = 0;
   b->velocity_session_ready[axis] = 0;
   b->last_speed_raw_0p01dps[axis] = 0;
@@ -212,11 +226,16 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->cmd_vel_raw[axis] = local_axis_deg_to_counts(cfg, clamped);
       b->cmd_ack_pending[axis] = 1u;
     }
-  } else if (m->kind == AXIS_CMD_POSITION) {
+  } else if (m->kind == AXIS_CMD_POSITION_ABS || m->kind == AXIS_CMD_POSITION_REL) {
+    if (prepare_for_motion_locked(b, axis, t_ms) != 0) return;
     const double target_deg = clamp_range(m->value, cfg->az_min_deg, cfg->az_max_deg);
     const uint16_t speed_dps = (uint16_t)fmax(1.0, fmin(65535.0, max_speed * gr));
     int cmd_ok = -1;
-    if (b->native_abs_validated[axis]) {
+    if (m->kind == AXIS_CMD_POSITION_REL) {
+      const int32_t delta_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
+      cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
+      if (cmd_ok == 0) b->last_abs_via_a8_service[axis] = 1;
+    } else if (b->native_abs_validated[axis]) {
       const int32_t target_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_ABS, speed_dps, target_0p01deg);
       if (cmd_ok == 0) b->last_abs_via_a8_service[axis] = 0;
@@ -239,7 +258,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->cmd_ack_pending[axis] = 1u;
     }
   } else if (m->kind == AXIS_CMD_STOP) {
-    axis_stop_locked(b, axis, t_ms);
+    axis_stop_locked(b, axis, t_ms, 1);
   }
 
   b->applied_seq[axis] = m->seq;
@@ -258,7 +277,7 @@ static void enforce_watchdog_locked(struct motion_backend* b, uint64_t t_ms) {
     if (!b->cfg.axis_node_id[axis] || !b->speed_active[axis]) continue;
     const uint64_t dt = t_ms - b->last_speed_cmd_ms[axis];
     if (dt > (uint64_t)b->cfg.speed_watchdog_ms) {
-      axis_stop_locked(b, axis, t_ms);
+      axis_stop_locked(b, axis, t_ms, 0);
       continue;
     }
     if (dt > (uint64_t)(b->cfg.speed_watchdog_ms / 2)) {
@@ -345,7 +364,7 @@ void myact_motion_backend_stop(motion_backend_t* backend) {
   pthread_mutex_unlock(&b->lock);
   (void)pthread_join(b->worker, NULL);
 
-  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) axis_stop_locked(b, axis, now_ms());
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) axis_stop_locked(b, axis, now_ms(), 1);
 
   close(b->can_socket);
   pthread_cond_destroy(&b->wake);
@@ -373,10 +392,33 @@ int myact_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_
   pthread_mutex_lock(&b->lock);
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if ((axes_mask & (1u << axis)) == 0) continue;
-    b->mailbox[axis].kind = AXIS_CMD_POSITION;
+    b->mailbox[axis].kind = AXIS_CMD_POSITION_ABS;
     b->mailbox[axis].value = targets_deg[axis];
     b->mailbox[axis].seq = b->next_seq++;
     b->mailbox[axis].cmd_ts_ms = now_ms();
+  }
+  pthread_cond_signal(&b->wake);
+  pthread_mutex_unlock(&b->lock);
+  return 0;
+}
+
+int myact_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]) {
+  (void)speed_limit_deg_s;
+  struct motion_backend* b = (struct motion_backend*)backend;
+  if (!b || !kind || !values_deg_or_dps) return -1;
+  const uint64_t t_ms = now_ms();
+  pthread_mutex_lock(&b->lock);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if ((axes_mask & (1u << axis)) == 0) continue;
+    switch (kind[axis]) {
+      case STC_AXIS_MOTION_SPEED: b->mailbox[axis].kind = AXIS_CMD_SPEED; break;
+      case STC_AXIS_MOTION_REL: b->mailbox[axis].kind = AXIS_CMD_POSITION_REL; break;
+      case STC_AXIS_MOTION_ABS:
+      default: b->mailbox[axis].kind = AXIS_CMD_POSITION_ABS; break;
+    }
+    b->mailbox[axis].value = values_deg_or_dps[axis];
+    b->mailbox[axis].seq = b->next_seq++;
+    b->mailbox[axis].cmd_ts_ms = t_ms;
   }
   pthread_cond_signal(&b->wake);
   pthread_mutex_unlock(&b->lock);

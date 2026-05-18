@@ -28,6 +28,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t*, motion_backend_t**);
 void myact_motion_backend_stop(motion_backend_t*);
 int myact_motion_backend_discover(motion_backend_t*);
 int myact_motion_backend_apply_pp_move(motion_backend_t*, uint32_t, const double[STC_AXIS_COUNT]);
+int myact_motion_backend_apply_motion(motion_backend_t*, uint32_t, const stc_axis_motion_kind_t[STC_AXIS_COUNT], const double[STC_AXIS_COUNT], const double[STC_AXIS_COUNT]);
 int myact_motion_backend_apply_speed(motion_backend_t*, uint32_t, const double[STC_AXIS_COUNT]);
 int myact_motion_backend_quick_stop(motion_backend_t*, uint32_t);
 int myact_motion_backend_clear_faults(motion_backend_t*, uint32_t);
@@ -70,6 +71,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
 void motion_backend_stop(motion_backend_t* b){ (void)b; if(!g_backend.impl) return; if(use_sim()) sim_motion_backend_stop(g_backend.impl); else myact_motion_backend_stop(g_backend.impl); g_backend.impl=NULL; }
 int motion_backend_discover(motion_backend_t* b){ (void)b; return use_sim()?sim_motion_backend_discover(g_backend.impl):myact_motion_backend_discover(g_backend.impl);} 
 int motion_backend_apply_pp_move(motion_backend_t* b,uint32_t m,const double t[STC_AXIS_COUNT]){(void)b;return use_sim()?sim_motion_backend_apply_pp_move(g_backend.impl,m,t):myact_motion_backend_apply_pp_move(g_backend.impl,m,t);} 
+int motion_backend_apply_motion(motion_backend_t* b,uint32_t m,const stc_axis_motion_kind_t k[STC_AXIS_COUNT],const double v[STC_AXIS_COUNT],const double s[STC_AXIS_COUNT]){(void)b;(void)s; if(use_sim()){double abs_t[STC_AXIS_COUNT]={0}; double sp[STC_AXIS_COUNT]={0}; for(size_t i=0;i<STC_AXIS_COUNT;i++){if(!(m&(1u<<i))) continue; if(k[i]==STC_AXIS_MOTION_SPEED) sp[i]=v[i]; else abs_t[i]=v[i];} if(sim_motion_backend_apply_speed(g_backend.impl,m,sp)==0) return sim_motion_backend_apply_pp_move(g_backend.impl,m,abs_t); return -1;} return myact_motion_backend_apply_motion(g_backend.impl,m,k,v,s);}
 int motion_backend_apply_speed(motion_backend_t* b,uint32_t m,const double s[STC_AXIS_COUNT]){(void)b;return use_sim()?sim_motion_backend_apply_speed(g_backend.impl,m,s):myact_motion_backend_apply_speed(g_backend.impl,m,s);} 
 int motion_backend_quick_stop(motion_backend_t* b,uint32_t m){(void)b;return use_sim()?sim_motion_backend_quick_stop(g_backend.impl,m):myact_motion_backend_quick_stop(g_backend.impl,m);} 
 int motion_backend_clear_faults(motion_backend_t* b,uint32_t m){(void)b;return use_sim()?sim_motion_backend_clear_faults(g_backend.impl,m):myact_motion_backend_clear_faults(g_backend.impl,m);} 

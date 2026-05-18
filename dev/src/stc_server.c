@@ -1119,7 +1119,9 @@ static void* can_worker_thread(void* arg) {
       }
       switch (act.type) {
         case ACTION_PP_MOVE:
-          (void)motion_backend_apply_pp_move(backend, act.axes_mask, act.u.target_deg);
+          if (motion_backend_apply_motion(backend, act.axes_mask, act.u.motion.kind, act.u.motion.value_deg_or_dps, act.u.motion.speed_limit_deg_s) != 0) {
+            (void)motion_backend_apply_pp_move(backend, act.axes_mask, act.u.target_deg);
+          }
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if (act.axes_mask & (1u << axis)) axis_enabled[axis] = 1;
           }
@@ -2641,7 +2643,25 @@ int main(int argc, char** argv) {
                   }
                   stc_action_make_stream_speed(&act, axes_mask, speeds);
                 } else {
-                  stc_action_make_pp_move(&act, axes_mask, targets);
+                  stc_axis_motion_kind_t kinds[STC_AXIS_COUNT];
+                  double values[STC_AXIS_COUNT];
+                  double speed_limits[STC_AXIS_COUNT];
+                  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+                    kinds[axis] = STC_AXIS_MOTION_ABS;
+                    values[axis] = targets[axis];
+                    speed_limits[axis] = sh.d.cfg[axis].max_speed_deg_s;
+                  }
+                  if ((cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_RELATIVE) ||
+                      (cmd.cmd_id == STC_CMD_SUT && cmd.u.sut.motion_type == STC_MOTION_RELATIVE) ||
+                      (cmd.cmd_id == STC_CMD_MIRROR && cmd.u.mirror.motion_type == STC_MOTION_RELATIVE)) {
+                    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) if (axes_mask & (1u << axis)) {
+                      kinds[axis] = STC_AXIS_MOTION_REL;
+                      values[axis] = (cmd.cmd_id == STC_CMD_MIRROR) ? cmd.u.mirror.elevation :
+                                     (cmd.cmd_id == STC_CMD_TURRET ? ((axis == (size_t)sh.d.turret_az_axis) ? cmd.u.turret.az : cmd.u.turret.el) :
+                                      values[axis] - axis_counts_to_deg(&sh.d.cfg[axis], sh.d.telem[axis].pos_raw));
+                    }
+                  }
+                  stc_action_make_motion(&act, axes_mask, kinds, values, speed_limits);
                 }
                 has_action = 1;
               }
