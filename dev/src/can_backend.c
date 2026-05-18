@@ -520,17 +520,36 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
       }
     } while (poll_rc >= PD4C_OK && poll_rc != PD4C_ETIMEDOUT);
     else if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
-      int32_t angle_raw_0p01 = 0;
-      myact_status1_t s1;
-      if (myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01) == MYACT_OK &&
-          myact_read_status1(&b->axis[axis].u.x8.ctx, &s1) == MYACT_OK) {
-        b->snap.pos_raw[axis] = angle_raw_0p01;
-        b->snap.vel_raw[axis] = 0;
-        b->snap.status_word[axis] = s1.temperature_celsius;
-        b->axis[axis].u.x8.last_raw_angle_deg = (double)angle_raw_0p01 / 100.0;
-        b->axis[axis].last_rx_ms = now;
+      int ev = MYACT_EVENT_NONE;
+      int polls = 0;
+      do {
+        ev = myact_poll(&b->axis[axis].u.x8.ctx, 0);
+        if (ev >= 0) {
+          b->axis[axis].last_rx_ms = now;
+          polls++;
+        }
+      } while (ev >= 0 && polls < 64);
+
+      const myact_cache_t* cache = &b->axis[axis].u.x8.ctx.cache;
+      if (cache->angle_multi_valid) {
+        b->snap.pos_raw[axis] = cache->angle_multi_0p01deg;
+        b->axis[axis].u.x8.last_raw_angle_deg = (double)cache->angle_multi_0p01deg / 100.0;
       }
-      poll_rc = MYACT_OK;
+      if (cache->status2.valid) {
+        b->snap.vel_raw[axis] = cache->status2.speed_dps;
+      }
+      if (cache->status1.valid) {
+        b->axis[axis].u.x8.error_flags = cache->status1.error_flags;
+        b->axis[axis].u.x8.bus_voltage_v = cache->status1.bus_voltage_v;
+        b->axis[axis].u.x8.motor_temp_c = cache->status1.temperature_celsius;
+        b->axis[axis].u.x8.brake_released = cache->status1.brake_release_command_state ? 1 : 0;
+      }
+      b->snap.status_word[axis] = b->axis[axis].u.x8.error_flags;
+      b->snap.diag_ext[axis] = ((uint32_t)(uint8_t)b->axis[axis].u.x8.motor_temp_c << 24)
+                             | ((uint32_t)(b->axis[axis].u.x8.brake_released ? 1u : 0u) << 16)
+                             | (uint32_t)(b->axis[axis].u.x8.bus_voltage_v * 10.0);
+
+      poll_rc = (ev == MYACT_ETIMEDOUT) ? MYACT_OK : ev;
     }
 
     if (poll_rc == PD4C_ETIMEDOUT && b->cfg.pp_sdo_diag) {
