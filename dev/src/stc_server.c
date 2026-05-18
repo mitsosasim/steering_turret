@@ -422,8 +422,6 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
       return STC_ERR_COMMAND_NOT_IMPLEMENTED;
   }
 
-  if (c->cmd_id == STC_CMD_CONFIG) return STC_ERR_COMMAND_NOT_IMPLEMENTED;
-
   // payload decoding must be consistent (for known payload-bearing commands)
   if (c->payload_size > 0 && c->payload_decoded == 0) {
     return STC_ERR_SYNTAX_ERROR;
