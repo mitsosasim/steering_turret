@@ -728,54 +728,19 @@ static int prepare_for_motion_with_brake_log(myact_ctx_t* ctx,
                                              uint32_t poll_ms,
                                              bool verbose_brake,
                                              const char* phase_tag) {
-    myact_status1_t s1;
-    uint64_t start_ms, now, next_retry_ms;
-    uint32_t timeout = (brake_timeout_ms == 0u) ? 3000u : brake_timeout_ms;
-    uint32_t poll = (poll_ms == 0u) ? 50u : poll_ms;
-    uint32_t retries = 0u;
-    bool locked_before, locked_after;
+    myact_prepare_result_t prep;
     int rc;
 
-    rc = myact_read_status1(ctx, &s1);
-    if (rc < 0) return rc;
-    locked_before = !s1.brake_release_command_state;
-    locked_after = locked_before;
-    start_ms = now_ms(NULL);
-    next_retry_ms = start_ms + 500u;
-
-    if (locked_before) {
-        rc = myact_brake_release(ctx);
-        if (rc < 0) return rc;
-        retries = 1u;
-    }
-
-    while (locked_after) {
-        rc = myact_read_status1(ctx, &s1);
-        if (rc < 0) return rc;
-        locked_after = !s1.brake_release_command_state;
-        now = now_ms(NULL);
-        if (verbose_brake) {
-            printf("%s: brake_poll t=%llums state=%s retries=%u\n",
-                   phase_tag, (unsigned long long)(now - start_ms),
-                   locked_after ? "locked" : "released", retries);
-        }
-        if (!locked_after || (now - start_ms) >= timeout) break;
-        if (now >= next_retry_ms) {
-            rc = myact_brake_release(ctx);
-            if (rc < 0) return rc;
-            retries++;
-            next_retry_ms = now + 500u;
-        }
-        msleep(poll);
-    }
+    (void)verbose_brake;
+    rc = myact_prepare_for_motion_ex(ctx, brake_timeout_ms, poll_ms, &prep);
 
     printf("%s: brake prepare before=%s after=%s latency_ms=%llu retries=%u\n",
            phase_tag,
-           locked_before ? "locked" : "released",
-           locked_after ? "locked" : "released",
-           (unsigned long long)(now_ms(NULL) - start_ms),
-           retries);
-    return locked_after ? MYACT_EBRAKE : MYACT_OK;
+           prep.brake_before_locked ? "locked" : "released",
+           prep.brake_after_locked ? "locked" : "released",
+           (unsigned long long)prep.latency_ms,
+           prep.retries);
+    return rc;
 }
 
 static int test_axis_enable(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1) {
