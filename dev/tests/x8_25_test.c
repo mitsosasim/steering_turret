@@ -126,6 +126,7 @@ gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
 #include <linux/can/raw.h>
 
 #define DEFAULT_MIN_MOTION_VOLTAGE_V 24.0
+#define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
 enum {
     RET_OK = 0,
@@ -254,6 +255,15 @@ typedef struct {
     double set_positive_limit_deg;
     double set_negative_limit_deg;
 } test_opts_t;
+
+typedef struct {
+    unsigned tests_run;
+    unsigned passed;
+    unsigned failed;
+    unsigned warnings;
+    const char* first_failed_test;
+    bool critical_stop;
+} test_summary_t;
 
 
 typedef struct {
@@ -910,9 +920,10 @@ static bool is_critical_safety_error(int rc) {
 }
 
 static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_status1_t* s1,
-                                int* tests_run, int* failures, int* warnings) {
+                                test_summary_t* summary) {
     int required_failed = 0;
     int executed = 0, passed = 0, failed = 0;
+    int warnings = (int)summary->warnings;
     bool stop_critical = false;
     const char* first_failed_test = NULL;
     myact_runmode_t final_runmode = MYACT_RUNMODE_UNKNOWN;
@@ -934,11 +945,11 @@ static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_st
         {"final cleanup + diag", run_final_cleanup_diag, true, false, false, false, true},
     };
 
-    printf("[INDEPENDENT] step 1/13: selftest-pack\n");
-    (*tests_run)++;
+    const unsigned total_steps = 1u + ARRAY_LEN(steps);
+
+    printf("[INDEPENDENT] step 1/%u: selftest-pack\n", total_steps);
     executed++;
     if (run_selftest_pack() != RET_OK) {
-        (*failures)++;
         required_failed++;
         failed++;
         if (!first_failed_test) first_failed_test = "selftest-pack";
@@ -946,19 +957,18 @@ static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_st
         passed++;
     }
 
-    for (unsigned i = 0; i < sizeof(steps)/sizeof(steps[0]); ++i) {
+    for (unsigned i = 0; i < ARRAY_LEN(steps); ++i) {
         int test_rc = RET_OK;
         int bench_rc;
         if (stop_critical && !steps[i].always_run) {
             printf("[SKIP_AFTER_CRITICAL] %s\n", steps[i].name);
             continue;
         }
-        printf("[INDEPENDENT] step %u/14: %s\n", i + 2, steps[i].name);
-        (*tests_run)++;
+        printf("[INDEPENDENT] step %u/%u: %s\n", i + 2, total_steps, steps[i].name);
         executed++;
 
         if (steps[i].fn) test_rc = steps[i].fn(ctx, o, s1);
-        bench_rc = bench_result(steps[i].name, test_rc, warnings);
+        bench_rc = bench_result(steps[i].name, test_rc, &warnings);
 
         if (bench_rc != RET_OK) {
             failed++;
@@ -968,7 +978,6 @@ static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_st
         }
 
         if (bench_rc != RET_OK && (steps[i].required || steps[i].required_after_fixes)) {
-            (*failures)++;
             required_failed++;
         }
 
@@ -989,13 +998,20 @@ static int run_independent_qual(myact_ctx_t* ctx, const test_opts_t* o, myact_st
     printf("  tests_run=%d\n", executed);
     printf("  passed=%d\n", passed);
     printf("  failed=%d\n", failed);
-    printf("  warnings=%d\n", *warnings);
+    printf("  warnings=%d\n", warnings);
     printf("  critical_stop=%s\n", stop_critical ? "yes" : "no");
     printf("  first_failed_test=%s\n", first_failed_test ? first_failed_test : "none");
     printf("  final_runmode=%u\n", (unsigned)final_runmode);
     printf("  final_error_flags=0x%04X\n", final_status1.error_flags);
     printf("  final_brake_state=%s\n", final_status1.brake_release_command_state ? "released" : "locked");
     printf("  result=%s\n", required_failed == 0 ? "PASS" : "FAIL");
+
+    summary->tests_run = (unsigned)executed;
+    summary->passed = (unsigned)passed;
+    summary->failed = (unsigned)failed;
+    summary->warnings = (unsigned)warnings;
+    summary->first_failed_test = first_failed_test;
+    summary->critical_stop = stop_critical;
 
     return (required_failed == 0) ? RET_OK : RET_COMMS_FAIL;
 }
@@ -2330,6 +2346,7 @@ int main(int argc, char** argv) {
     int passed = 0;
     int warnings = 0;
     int tests_run = 0;
+    test_summary_t summary = {0};
 
     if (argc < 2) {
         print_usage(argv[0]);
@@ -2403,10 +2420,13 @@ int main(int argc, char** argv) {
 
         if (o.independent_qual) {
             any_dispatched = true;
-            if (run_independent_qual(&ctx, &o, &s1, &tests_run, &failures, &warnings) != RET_OK) {
-                failures++;
+            if (run_independent_qual(&ctx, &o, &s1, &summary) != RET_OK) {
+                rc = RET_COMMS_FAIL;
             }
-            passed = tests_run - failures;
+            tests_run = (int)summary.tests_run;
+            passed = (int)summary.passed;
+            failures = (int)summary.failed;
+            warnings = (int)summary.warnings;
         } else if (o.production_qual) {
             int b;
             bool required_pass = true;
@@ -2563,9 +2583,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    rc = (failures > 0) ? RET_COMMS_FAIL : RET_OK;
-    printf("tests_run=%d passed=%d failed=%d warnings=%d\n",
-           tests_run, passed, failures, warnings);
+    if (!o.independent_qual) {
+        rc = (failures > 0) ? RET_COMMS_FAIL : RET_OK;
+        printf("tests_run=%d passed=%d failed=%d warnings=%d\n",
+               tests_run, passed, failures, warnings);
+    }
 
 done:
     if (o.no_shutdown_on_exit) {
