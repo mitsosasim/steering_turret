@@ -83,6 +83,22 @@ QString nackErrToString(uint16_t errCode) {
   }
 }
 
+
+QString decodeTlmlDiag(const stc_tlml_t &tlm) {
+  QStringList lines;
+  lines << QString("State: %1 (%2)").arg(stateToString(tlm.state)).arg(tlm.state);
+  lines << QString("Uptime: %1 s").arg(tlm.uptime_sec);
+  lines << QString("Position source: lat=%1 lon=%2 alt=%3m heading=%4deg")
+           .arg(tlm.lat, 0, 'f', 6).arg(tlm.lon, 0, 'f', 6).arg(tlm.alt_m, 0, 'f', 2).arg(tlm.heading_deg, 0, 'f', 2);
+  lines << QString("Environment: %1 C, %2 %%, %3 hPa").arg(tlm.temperature_c, 0, 'f', 1).arg(tlm.humidity_pct, 0, 'f', 1).arg(tlm.pressure_hpa, 0, 'f', 1);
+  QStringList laser;
+  for (int i = 0; i < 8; ++i) laser << QString("SUT%1=%2").arg(i + 1).arg(tlm.laser_status[i] ? "ON" : "OFF");
+  lines << QString("Lasers: %1").arg(laser.join(", "));
+  QStringList errors;
+  for (int i = 0; i < static_cast<int>(tlm.error_count); ++i) errors << QString("0x%1").arg(tlm.errors[i], 8, 16, QChar('0'));
+  lines << QString("Errors(%1): %2").arg(tlm.error_count).arg(errors.isEmpty() ? "none" : errors.join(", "));
+  return lines.join('\n');
+}
 enum class UiCommand {
   CuState,
   SelfLev,
@@ -177,6 +193,9 @@ class DiagnosticsWindow : public QMainWindow {
     connect(jogSpeedNegButton_, &QPushButton::clicked, this, [this]() { sendJogSpeed(-1.0); });
     connect(holdEnableButton_, &QPushButton::clicked, this, &DiagnosticsWindow::toggleHoldEnable);
     connect(estopButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendStopEstop);
+    connect(safeButton_, &QPushButton::clicked, this, [this]() { sendStateControl(2, "SAFE state sent"); });
+    connect(operButton_, &QPushButton::clicked, this, [this]() { sendStateControl(3, "OPER state sent"); });
+    connect(resetStateButton_, &QPushButton::clicked, this, [this]() { sendStateControl(0xFF, "FAIL reset/RESET state sent"); });
     connect(tlmHighPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(tlmLowPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(mirrorIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
@@ -352,6 +371,7 @@ class DiagnosticsWindow : public QMainWindow {
     if (!udpLow_->bind(QHostAddress::AnyIPv4, lowPort, flags)) {
       appendLog(QString("Failed binding low telemetry socket on %1: %2").arg(lowPort).arg(udpLow_->errorString()));
     }
+
   }
 
   QString commandName(uint16_t cmdId) const {
@@ -411,7 +431,7 @@ class DiagnosticsWindow : public QMainWindow {
 
       const bool ack = rsp.result == STC_RSP_ACK;
       const QString errText = nackErrToString(rsp.err_code);
-      ackLabel_->setText(QString("Last response: %1 | %2 (0x%3) seq=%4 | err_code=%5 (%6) | payload=%7B")
+      ackLabel_->setText(QString("Last ACK/NACK: %1 | %2 (0x%3) seq=%4 | err_code=%5 (%6) | payload=%7B")
                            .arg(ack ? "ACK" : "NACK")
                            .arg(commandName(rsp.cmd_id))
                            .arg(rsp.cmd_id, 4, 16, QChar('0'))
@@ -427,6 +447,7 @@ class DiagnosticsWindow : public QMainWindow {
       if (ack && rsp.cmd_id == STC_CMD_REQ_HW_INFO && rsp.payload_size > 0) {
         const QString hwInfo = QString::fromUtf8(reinterpret_cast<const char*>(rsp.payload), rsp.payload_size).trimmed();
         updateConfigFromHwInfoPayload(hwInfo);
+        hwInfoSummaryLabel_->setText(QString("HW summary: %1").arg(hwInfo.isEmpty() ? "<empty>" : hwInfo));
         updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
       }
     }
@@ -495,6 +516,12 @@ class DiagnosticsWindow : public QMainWindow {
           for (int id = 1; id <= qMin(count, 255); ++id) configuredMirrorIds_.push_back(id);
         }
       }
+    }
+    axisDriverNames_.fill("-");
+    for (int i = 0; i < kAxisCount; ++i) {
+      const QRegularExpression rx(QString("axis%1[^\\n,;]*driver\\s*=\\s*([A-Za-z0-9_\\-]+)").arg(i), QRegularExpression::CaseInsensitiveOption);
+      const auto m = rx.match(hwInfo);
+      if (m.hasMatch()) axisDriverNames_[i] = m.captured(1).trimmed();
     }
   }
 
@@ -709,21 +736,14 @@ class DiagnosticsWindow : public QMainWindow {
       updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
       updateCommandAvailability();
 
-      QStringList errors;
-      for (int i = 0; i < static_cast<int>(tlm.error_count); ++i) {
-        errors << QString("0x%1").arg(tlm.errors[i], 8, 16, QChar('0'));
-      }
-      tlmlPanel_->setPlainText(QString("seq=%1\nts=%2\nstate=%3\nuptime=%4 s\nlat=%5 lon=%6 alt=%7 heading=%8\nerrors(%9): %10")
-                                 .arg(tlm.seq)
-                                 .arg(tlm.timestamp_ms)
-                                 .arg(stateToString(tlm.state))
-                                 .arg(tlm.uptime_sec)
-                                 .arg(tlm.lat, 0, 'f', 6)
-                                 .arg(tlm.lon, 0, 'f', 6)
-                                 .arg(tlm.alt_m, 0, 'f', 2)
-                                 .arg(tlm.heading_deg, 0, 'f', 2)
-                                 .arg(tlm.error_count)
-                                 .arg(errors.join(", ")));
+      tlmlPanel_->setPlainText(decodeTlmlDiag(tlm));
+      const qint64 lowAgeMs = QDateTime::currentMSecsSinceEpoch() - static_cast<qint64>(tlm.timestamp_ms);
+      axis0BenchLabel_->setText(QString("Axis0 bench: pos=%1 deg speed=%2 deg/s fresh=%3 ms err=%4")
+                                  .arg(axisTable_->item(0, 1)->text())
+                                  .arg(axisTable_->item(0, 2)->text())
+                                  .arg(lowAgeMs)
+                                  .arg(tlm.error_count));
+      updateMotionControlsEnabled();
     }
   }
 
@@ -785,10 +805,15 @@ class DiagnosticsWindow : public QMainWindow {
                                   .arg(availableSut)
                                   .arg(qMin(connectedDevices, 2))
                                   .arg(discoveredDevices));
-    inventoryLabel_->setText(QString("Inventory: discovered=%1, connected=%2, SUT=%3")
+    QStringList drivers;
+    for (int i = 0; i < kAxisCount; ++i) {
+      if (axisDriverNames_[i] != "-") drivers << QString("axis%1=%2").arg(i).arg(axisDriverNames_[i]);
+    }
+    inventoryLabel_->setText(QString("Inventory: discovered=%1, connected=%2, SUT=%3 | drivers: %4")
                                .arg(discoveredDevices)
                                .arg(connectedDevices)
-                               .arg(availableSut));
+                               .arg(availableSut)
+                               .arg(drivers.isEmpty() ? "n/a" : drivers.join(", ")));
   }
 
   void onSimModeChanged(bool enabled) {
@@ -1052,6 +1077,21 @@ class DiagnosticsWindow : public QMainWindow {
     sendButton_->setEnabled(allowed);
   }
 
+
+  void updateMotionControlsEnabled() {
+    const bool oper = currentState_ == 3;
+    for (QWidget *w : {static_cast<QWidget*>(targetPosSpin_), static_cast<QWidget*>(relativeStepSpin_), static_cast<QWidget*>(jogSpeedSpin_),
+                       static_cast<QWidget*>(sendTargetButton_), static_cast<QWidget*>(jogPosButton_), static_cast<QWidget*>(jogNegButton_),
+                       static_cast<QWidget*>(jogSpeedPosButton_), static_cast<QWidget*>(jogSpeedNegButton_), static_cast<QWidget*>(holdEnableButton_),
+                       static_cast<QWidget*>(estopButton_)}) {
+      if (w) w->setEnabled(oper);
+    }
+  }
+
+  void sendStateControl(uint8_t state, const QString &label) {
+    stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_CU_STATE; cmd.u.cu_state.state = state; cmd.payload_size = 1;
+    sendPackedCommand(cmd, label);
+  }
   void tickSimulation() {
     const double dt = 0.02;
     for (int i = 0; i < kAxisCount; ++i) {
@@ -1149,10 +1189,15 @@ class DiagnosticsWindow : public QMainWindow {
     jogPosButton_ = new QPushButton("Jog +Step", cmdGroup); jogNegButton_ = new QPushButton("Jog -Step", cmdGroup);
     jogSpeedPosButton_ = new QPushButton("Jog +Speed", cmdGroup); jogSpeedNegButton_ = new QPushButton("Jog -Speed", cmdGroup);
     holdEnableButton_ = new QPushButton("Hold/Enable: HOLD", cmdGroup); estopButton_ = new QPushButton("STOP / E-STOP", cmdGroup);
+    safeButton_ = new QPushButton("SAFE", cmdGroup);
+    operButton_ = new QPushButton("OPER", cmdGroup);
+    resetStateButton_ = new QPushButton("FAIL reset / RESET", cmdGroup);
     cmdForm->addRow("Target position (deg)", targetPosSpin_); cmdForm->addRow(sendTargetButton_);
     cmdForm->addRow("Relative step (deg)", relativeStepSpin_); cmdForm->addRow(jogPosButton_, jogNegButton_);
     cmdForm->addRow("Jog speed (deg/s)", jogSpeedSpin_); cmdForm->addRow(jogSpeedPosButton_, jogSpeedNegButton_);
     cmdForm->addRow(holdEnableButton_); cmdForm->addRow(estopButton_);
+    cmdForm->addRow(safeButton_, operButton_);
+    cmdForm->addRow(resetStateButton_);
     cmdForm->addRow(reconnectButton_);
     cmdForm->addRow(canBringupButton_);
     cmdForm->addRow(clearErrorsButton_);
@@ -1171,7 +1216,9 @@ class DiagnosticsWindow : public QMainWindow {
     tcpStatusLabel_ = new QLabel("CU TCP: DISCONNECTED", statusGroup);
     connectionLabel_ = new QLabel("Laser status -", statusGroup);
     availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
-    ackLabel_ = new QLabel("Last response: -", statusGroup);
+    ackLabel_ = new QLabel("Last ACK/NACK: -", statusGroup);
+    hwInfoSummaryLabel_ = new QLabel("HW summary: pending REQ_HW_INFO", statusGroup);
+    axis0BenchLabel_ = new QLabel("Axis0 bench: -", statusGroup);
     telemetryStatusLabel_ = new QLabel("Telemetry: waiting", statusGroup);
     angleLiveLabel_ = new QLabel("Angle: -", statusGroup);
     speedLiveLabel_ = new QLabel("Speed: -", statusGroup);
@@ -1184,7 +1231,7 @@ class DiagnosticsWindow : public QMainWindow {
     simModeBox_ = new QCheckBox("Simulation mode", statusGroup);
 
     for (QLabel *label : {stateLabel_, modeLabel_, inventoryLabel_, highSeqLabel_, lowSeqLabel_, envLabel_,
-                          tcpStatusLabel_, connectionLabel_, availabilityLabel_, ackLabel_, telemetryStatusLabel_, angleLiveLabel_, speedLiveLabel_, currentLiveLabel_, voltageLiveLabel_, errorLiveLabel_, saturationLiveLabel_, backendModeLabel_, pathLabel_}) {
+                          tcpStatusLabel_, connectionLabel_, availabilityLabel_, ackLabel_, hwInfoSummaryLabel_, axis0BenchLabel_, telemetryStatusLabel_, angleLiveLabel_, speedLiveLabel_, currentLiveLabel_, voltageLiveLabel_, errorLiveLabel_, saturationLiveLabel_, backendModeLabel_, pathLabel_}) {
       label->setWordWrap(true);
     }
 
@@ -1198,13 +1245,15 @@ class DiagnosticsWindow : public QMainWindow {
     statusLayout->addWidget(connectionLabel_, 3, 1);
     statusLayout->addWidget(tcpStatusLabel_, 4, 0);
     statusLayout->addWidget(ackLabel_, 4, 1);
-    statusLayout->addWidget(simModeBox_, 5, 0, 1, 2);
-    statusLayout->addWidget(telemetryStatusLabel_, 6, 0, 1, 2);
-    statusLayout->addWidget(angleLiveLabel_, 7, 0); statusLayout->addWidget(speedLiveLabel_, 7, 1);
-    statusLayout->addWidget(currentLiveLabel_, 8, 0); statusLayout->addWidget(voltageLiveLabel_, 8, 1);
-    statusLayout->addWidget(errorLiveLabel_, 9, 0); statusLayout->addWidget(saturationLiveLabel_, 9, 1);
-    statusLayout->addWidget(backendModeLabel_, 10, 0, 1, 2);
-    statusLayout->addWidget(pathLabel_, 11, 0, 1, 2);
+    statusLayout->addWidget(hwInfoSummaryLabel_, 5, 0, 1, 2);
+    statusLayout->addWidget(axis0BenchLabel_, 6, 0, 1, 2);
+    statusLayout->addWidget(simModeBox_, 7, 0, 1, 2);
+    statusLayout->addWidget(telemetryStatusLabel_, 8, 0, 1, 2);
+    statusLayout->addWidget(angleLiveLabel_, 9, 0); statusLayout->addWidget(speedLiveLabel_, 9, 1);
+    statusLayout->addWidget(currentLiveLabel_, 10, 0); statusLayout->addWidget(voltageLiveLabel_, 10, 1);
+    statusLayout->addWidget(errorLiveLabel_, 11, 0); statusLayout->addWidget(saturationLiveLabel_, 11, 1);
+    statusLayout->addWidget(backendModeLabel_, 12, 0, 1, 2);
+    statusLayout->addWidget(pathLabel_, 13, 0, 1, 2);
 
     leftColumnLayout->addWidget(statusGroup);
     const bool devRaw = !QString::fromLocal8Bit(qgetenv(kDevRawPanelEnv)).trimmed().isEmpty();
@@ -1397,6 +1446,7 @@ class DiagnosticsWindow : public QMainWindow {
     simTargetVel_.fill(0.0);
     tlmhPanel_->setPlainText("Waiting for TLMH...");
     tlmlPanel_->setPlainText("Waiting for TLML...");
+    updateMotionControlsEnabled();
   }
 
   void appendLog(const QString &line) {
@@ -1428,6 +1478,9 @@ class DiagnosticsWindow : public QMainWindow {
   QPushButton *jogSpeedNegButton_{};
   QPushButton *holdEnableButton_{};
   QPushButton *estopButton_{};
+  QPushButton *safeButton_{};
+  QPushButton *operButton_{};
+  QPushButton *resetStateButton_{};
   QDoubleSpinBox *targetPosSpin_{};
   QDoubleSpinBox *relativeStepSpin_{};
   QDoubleSpinBox *jogSpeedSpin_{};
@@ -1465,6 +1518,8 @@ class DiagnosticsWindow : public QMainWindow {
   QLabel *connectionLabel_{};
   QLabel *availabilityLabel_{};
   QLabel *ackLabel_{};
+  QLabel *hwInfoSummaryLabel_{};
+  QLabel *axis0BenchLabel_{};
   QLabel *telemetryStatusLabel_{};
   QLabel *angleLiveLabel_{};
   QLabel *speedLiveLabel_{};
@@ -1498,6 +1553,7 @@ class DiagnosticsWindow : public QMainWindow {
   int lastDiscoveredDevices_{0};
   std::vector<int> configuredTurretAxes_{};
   std::vector<int> configuredMirrorIds_{};
+  std::array<QString, kAxisCount> axisDriverNames_{};
 
   std::array<double, kAxisCount> simPos_{};
   std::array<double, kAxisCount> simVel_{};
