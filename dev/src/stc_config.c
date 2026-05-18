@@ -65,6 +65,27 @@ static int parse_double(const char* value, double* out) {
   return 0;
 }
 
+
+static int parse_bool(const char* value, int* out) {
+  if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "TRUE") == 0 || strcmp(value, "yes") == 0 || strcmp(value, "on") == 0) {
+    *out = 1;
+    return 0;
+  }
+  if (strcmp(value, "0") == 0 || strcmp(value, "false") == 0 || strcmp(value, "FALSE") == 0 || strcmp(value, "no") == 0 || strcmp(value, "off") == 0) {
+    *out = 0;
+    return 0;
+  }
+  return -1;
+}
+
+static int parse_axis_driver(const char* value, stc_axis_driver_t* out) {
+  if (strcmp(value, "disabled") == 0) *out = STC_AXIS_DRIVER_DISABLED;
+  else if (strcmp(value, "pd4c") == 0) *out = STC_AXIS_DRIVER_PD4C;
+  else if (strcmp(value, "myact_x8_25") == 0) *out = STC_AXIS_DRIVER_MYACT_X8_25;
+  else if (strcmp(value, "sim") == 0) *out = STC_AXIS_DRIVER_SIM;
+  else return -1;
+  return 0;
+}
 static int parse_motor_status_map(const char* value, int8_t out[8]) {
   char tmp[256];
   snprintf(tmp, sizeof(tmp), "%s", value);
@@ -122,10 +143,24 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->mirror_count = 0;
 
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
+    cfg->axis_enabled[i] = 1;
+    cfg->axis_driver[i] = STC_AXIS_DRIVER_PD4C;
     cfg->axis_node_id[i] = (int)(i + 1);
+    cfg->axis_command_sign[i] = 1.0;
+    cfg->axis_telemetry_sign[i] = 1.0;
+    cfg->axis_zero_physical_deg[i] = 0.0;
+    cfg->axis_zero_raw_deg[i] = 0.0;
+    cfg->axis_zero_on_start[i] = 0;
     cfg->axis_counts_per_rev[i] = 4096.0;
+    cfg->axis_vel_scale[i] = 1.0;
+    cfg->axis_vel_raw_mode[i] = 0;
     cfg->axis_storage_deg[i] = 0.0;
     cfg->axis_pp_profile_vel[i] = 500;
+    cfg->axis_brake_release_timeout_ms[i] = 3000;
+    cfg->axis_brake_poll_ms[i] = 50;
+    cfg->axis_active_status2_enable[i] = 0;
+    cfg->axis_active_status2_interval_ms[i] = 50;
+    cfg->axis_feedback_timeout_ms[i] = 500;
     cfg->axis_diag_cat[i] = 0x06;
     cfg->axis_diag_subcat[i] = 0x3F;
 
@@ -301,6 +336,22 @@ bool load_config(const char* path, stc_config_t* cfg) {
       }
       continue;
     }
+    if (strcmp(section, "CAN") == 0) {
+      bool recognized = true;
+      if (strcmp(key, "ifname") == 0) {
+        if (strlen(value) >= sizeof(cfg->can_if)) goto parse_error;
+        strcpy(cfg->can_if, value);
+      } else if (strcmp(key, "bitrate") == 0) {
+        /* reserved */
+      } else {
+        recognized = false;
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
+      }
+      continue;
+    }
 
     if (strcmp(section, "Runtime") == 0) {
       bool recognized = true;
@@ -339,7 +390,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
     const int axis_idx = parse_indexed_section(section, "Axis", (int)STC_AXIS_COUNT, 0);
     if (axis_idx >= 0) {
       bool recognized = true;
-      if (strcmp(key, "node_id") == 0) {
+      if (strcmp(key, "enabled") == 0) {
+        if (parse_bool(value, &cfg->axis_enabled[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "driver") == 0) {
+        if (parse_axis_driver(value, &cfg->axis_driver[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "node_id") == 0) {
         if (parse_int(value, &cfg->axis_node_id[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "counts_per_rev") == 0) {
         if (parse_double(value, &cfg->axis_counts_per_rev[axis_idx]) != 0) goto parse_error;
@@ -353,6 +408,32 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_double(value, &cfg->axis_max_speed_deg_s[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "storage_deg") == 0) {
         if (parse_double(value, &cfg->axis_storage_deg[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "command_sign") == 0) {
+        if (parse_double(value, &cfg->axis_command_sign[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "telemetry_sign") == 0) {
+        if (parse_double(value, &cfg->axis_telemetry_sign[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "zero_physical_deg") == 0) {
+        if (parse_double(value, &cfg->axis_zero_physical_deg[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "zero_raw_deg") == 0) {
+        if (parse_double(value, &cfg->axis_zero_raw_deg[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "zero_on_start") == 0) {
+        if (parse_bool(value, &cfg->axis_zero_on_start[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "vel_scale") == 0) {
+        if (parse_double(value, &cfg->axis_vel_scale[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "vel_raw_mode") == 0) {
+        if (parse_int(value, &cfg->axis_vel_raw_mode[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "brake_release_timeout_ms") == 0) {
+        if (parse_int(value, &cfg->axis_brake_release_timeout_ms[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "brake_poll_ms") == 0) {
+        if (parse_int(value, &cfg->axis_brake_poll_ms[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "active_status2_enable") == 0) {
+        if (parse_bool(value, &cfg->axis_active_status2_enable[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "active_status2_interval_ms") == 0) {
+        if (parse_int(value, &cfg->axis_active_status2_interval_ms[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "feedback_timeout_ms") == 0) {
+        if (parse_int(value, &cfg->axis_feedback_timeout_ms[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "name") == 0 || strcmp(key, "role") == 0) {
+        /* accepted metadata */
       } else if (strcmp(key, "pp_profile_vel") == 0) {
         if (parse_u16(value, &cfg->axis_pp_profile_vel[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "diag_cat") == 0) {
@@ -481,6 +562,18 @@ bool load_config(const char* path, stc_config_t* cfg) {
   for (int i = 0; i < cfg->num_axes; i++) {
     if (!seen_diag_cat[i] || !seen_diag_subcat[i]) {
       STC_LOG_ERROR("%s: missing diagnostic category/subcategory for axis %d", path, i);
+      return false;
+    }
+    if (cfg->axis_node_id[i] <= 0) {
+      STC_LOG_ERROR("%s: axis %d has invalid node_id (%d)", path, i, cfg->axis_node_id[i]);
+      return false;
+    }
+    if (cfg->axis_min_deg[i] > cfg->axis_max_deg[i]) {
+      STC_LOG_ERROR("%s: axis %d has min_deg > max_deg", path, i);
+      return false;
+    }
+    if (cfg->axis_active_status2_enable[i] && cfg->axis_active_status2_interval_ms[i] <= 0) {
+      STC_LOG_ERROR("%s: axis %d has invalid active_status2_interval_ms", path, i);
       return false;
     }
   }
