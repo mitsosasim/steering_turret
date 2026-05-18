@@ -183,6 +183,7 @@ typedef struct {
     bool set_positive_limit_deg_valid;
     bool set_negative_limit_deg_valid;
     bool selftest_pack;
+    bool server_equivalent_pack;
     bool trace_frames;
     bool verbose_samples;
     bool verbose_brake;
@@ -504,6 +505,7 @@ static int parse_cli(int argc, char** argv, test_opts_t* o) {
         FLAG("--write-pid-ram", write_pid_ram)
         FLAG("--write-pid-rom", write_pid_rom)
         FLAG("--selftest-pack", selftest_pack)
+        FLAG("--server-equivalent-pack", server_equivalent_pack)
         FLAG("--trace-frames", trace_frames)
         FLAG("--verbose-samples", verbose_samples)
         FLAG("--verbose-brake", verbose_brake)
@@ -828,6 +830,9 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_final_cleanup_diag(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
 static int run_selftest_pack(void);
+static int run_server_equivalent_pack(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1);
+static int run_a8_delta_observed(myact_ctx_t* c, const char* tag, double delta_deg, double speed_dps, unsigned wait_ms,
+                                 double pass_tolerance_deg, double* out_before, double* out_after, double* out_delta);
 static int run_raw_a1_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a1_smoke(c, o); }
 static int run_raw_a2_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a2_smoke(c, o); }
 static int run_raw_a4_smoke_step(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) { (void)s1; return run_raw_a4_smoke(c, o); }
@@ -982,6 +987,64 @@ static int run_final_cleanup_diag(myact_ctx_t* c, const test_opts_t* o, myact_st
     if (runmode != 0) return MYACT_ESTATE;
     if (s1->error_flags != 0) return MYACT_ESTATE;
     if (!o->allow_final_brake_released && s1->brake_release_command_state) return MYACT_EBRAKE;
+    return MYACT_OK;
+}
+
+static int run_server_equivalent_pack(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
+    int rc;
+    int32_t a = 0;
+    myact_status2_t s2;
+
+    printf("[SERVER_EQ] read model/version/runtime/status/angle\n");
+    rc = read_full_diagnostics(c, s1, &a);
+    if (rc < 0) return rc;
+
+    printf("[SERVER_EQ] optional B6 enable 9C\n");
+    rc = myact_active_reply_config(c, MYACT_CMD_STATUS3, true, 5u); /* 50 ms */
+    if (rc < 0) {
+        printf("[SERVER_EQ] optional B6 enable skipped rc=%d (%s)\n", rc, myact_strerror(rc));
+    }
+
+    printf("[SERVER_EQ] prepare brake\n");
+    rc = axis_enable_for_motion(c, o, s1, "server-equivalent-pack");
+    if (rc < 0) return rc;
+
+    printf("[SERVER_EQ] A8 +5 deg, wait and verify\n");
+    rc = run_a8_delta_observed(c, "server-equivalent-pack:a8+5", 5.0, o->inc_speed_dps,
+                               o->inc_wait_ms, fmax(1.0, 0.20 * 5.0), NULL, NULL, NULL);
+    if (rc < 0) return rc;
+
+    printf("[SERVER_EQ] A8 -5 deg, wait and verify\n");
+    rc = run_a8_delta_observed(c, "server-equivalent-pack:a8-5", -5.0, o->inc_speed_dps,
+                               o->inc_wait_ms, fmax(1.0, 0.20 * 5.0), NULL, NULL, NULL);
+    if (rc < 0) return rc;
+
+    printf("[SERVER_EQ] A2 +5 deg/s for 1 s\n");
+    rc = myact_speed_dps_send(c, 5.0);
+    if (rc < 0) return rc;
+    msleep(1000);
+
+    printf("[SERVER_EQ] A2 0\n");
+    rc = myact_speed_dps_send(c, 0.0);
+    if (rc < 0) return rc;
+
+    printf("[SERVER_EQ] 81 stop\n");
+    rc = myact_stop_send(c);
+    if (rc < 0) return rc;
+    msleep(100);
+
+    printf("[SERVER_EQ] 80 shutdown\n");
+    rc = myact_shutdown_send(c);
+    if (rc < 0) return rc;
+    msleep(300);
+
+    rc = myact_read_status1(c, s1);
+    if (rc < 0) return rc;
+    rc = myact_read_status2(c, &s2);
+    if (rc < 0) return rc;
+    printf("[SERVER_EQ] final 9A/9C: error_flags=0x%04X iq_A=%.2f speed_dps=%d angle_deg=%d\n",
+           s1->error_flags, s2.iq_0p01a / 100.0, s2.speed_dps, s2.angle_deg);
+    if (s1->error_flags != 0) return MYACT_ESTATE;
     return MYACT_OK;
 }
 
@@ -2358,7 +2421,7 @@ int main(int argc, char** argv) {
         bool any_test_requested = o.raw_motion_smoke || o.raw_motion_smoke_sendonly || o.raw_a1_smoke || o.raw_a2_smoke || o.raw_a4_smoke || o.raw_a8_smoke || o.raw_smoke_all || o.enable_hold ||
                                   o.brake_latency_test || o.brake_persistence_test || o.rt_inc_burst ||
                                   o.speed_step_test || o.speed_stream_test || o.torque_step_test || o.torque_sweep_test || o.native_a4_abs_test ||
-                                  o.mit_mode_test || o.active_telemetry_rt_test || o.production_qual || o.independent_qual || o.experimental_all;
+                                  o.mit_mode_test || o.active_telemetry_rt_test || o.production_qual || o.independent_qual || o.experimental_all || o.server_equivalent_pack;
         bool any_dispatched = false;
 
         if (!any_test_requested) {
@@ -2367,7 +2430,13 @@ int main(int argc, char** argv) {
         goto done;
         }
 
-        if (o.independent_qual) {
+        if (o.server_equivalent_pack) {
+            any_dispatched = true;
+            tests_run++;
+            if (bench_result("server-equivalent-pack", run_server_equivalent_pack(&ctx, &o, &s1), &warnings) != RET_OK) failures++;
+            else passed++;
+            rc = failures ? RET_COMMS_FAIL : RET_OK;
+        } else if (o.independent_qual) {
             any_dispatched = true;
             if (run_independent_qual(&ctx, &o, &s1, &summary) != RET_OK) {
                 rc = RET_COMMS_FAIL;
