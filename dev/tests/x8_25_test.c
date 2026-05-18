@@ -107,6 +107,7 @@ gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
 
 #include "x8_25.h"
 #include "x8_25_commissioning.h"
+#include "myact_socketcan.h"
 
 #include <errno.h>
 #include <math.h>
@@ -134,10 +135,7 @@ enum {
     RET_BAD_CLI = 2
 };
 
-typedef struct {
-    int s;
-    char ifname[IFNAMSIZ];
-} sockcan_bus_t;
+typedef myact_socketcan_t sockcan_bus_t;
 
 typedef struct {
     bool no_motion_countdown;
@@ -318,74 +316,6 @@ static void print_motion_commissioning_snapshot(const char* tag,
     }
 }
 
-
-static int sockcan_send_cb(const myact_can_frame_t* fr, void* user) {
-    sockcan_bus_t* b = (sockcan_bus_t*)user;
-    struct can_frame c = {0};
-
-    if (!fr || !b || fr->dlc > 8) return MYACT_EINVAL;
-
-    c.can_id = fr->id & CAN_SFF_MASK;
-    c.can_dlc = fr->dlc;
-    memcpy(c.data, fr->data, 8);
-    if (g_trace.enabled || g_verbose_samples) {
-        g_trace.expected_reply_opcode = (fr->dlc > 0) ? expected_reply_opcode_for_tx(fr->data[0]) : 0;
-        trace_frame_line("TX", fr, g_trace.expected_reply_opcode);
-    }
-    return write(b->s, &c, sizeof(c)) == (ssize_t)sizeof(c) ? MYACT_OK : MYACT_EIO;
-}
-
-static int sockcan_recv_cb(myact_can_frame_t* out, uint32_t to_ms, void* user) {
-    sockcan_bus_t* b = (sockcan_bus_t*)user;
-    struct pollfd p = {.fd = b->s, .events = POLLIN};
-    struct can_frame c;
-    int r;
-    ssize_t n;
-
-    if (!out || !b) return MYACT_EINVAL;
-
-    r = poll(&p, 1, (int)to_ms);
-    if (r == 0) return MYACT_ETIMEDOUT;
-    if (r < 0) return MYACT_EIO;
-
-    n = read(b->s, &c, sizeof(c));
-    if (n != (ssize_t)sizeof(c)) return MYACT_EIO;
-
-    out->id = c.can_id & CAN_SFF_MASK;
-    out->dlc = (uint8_t)c.can_dlc;
-    memcpy(out->data, c.data, 8);
-    trace_frame_line("RX", out, g_trace.expected_reply_opcode);
-    g_trace.expected_reply_opcode = 0;
-    return MYACT_OK;
-}
-
-static int sockcan_open(sockcan_bus_t* bus, const char* ifname) {
-    struct ifreq ifr;
-    struct sockaddr_can addr;
-    int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-
-    if (s < 0) return -errno;
-
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) {
-        int e = -errno;
-        close(s);
-        return e;
-    }
-
-    memset(&addr, 0, sizeof(addr));
-    addr.can_family = AF_CAN;
-    addr.can_ifindex = ifr.ifr_ifindex;
-    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        int e = -errno;
-        close(s);
-        return e;
-    }
-
-    bus->s = s;
-    return 0;
-}
 
 static int prepare_sync(myact_ctx_t* ctx) {
     int rc = myact_active_reply_disable_all(ctx);
@@ -2392,17 +2322,14 @@ int main(int argc, char** argv) {
 
     if (o.selftest_pack) return run_selftest_pack();
 
-    rc = sockcan_open(&bus, argv[1]);
+    rc = myact_socketcan_open(&bus, argv[1], (uint8_t)atoi(argv[2]));
     if (rc < 0) return RET_COMMS_FAIL;
 
-    io.send = sockcan_send_cb;
-    io.recv = sockcan_recv_cb;
-    io.time_ms = now_ms;
-    io.user = &bus;
+    io = bus.io;
 
     rc = myact_init(&ctx, (uint8_t)atoi(argv[2]), &io);
     if (rc < 0) {
-        close(bus.s);
+        myact_socketcan_close(&bus);
         return 1;
     }
 
@@ -2619,6 +2546,6 @@ done:
         test_axis_disable(&ctx, true);
     }
 
-    close(bus.s);
+    myact_socketcan_close(&bus);
     return rc < 0 ? RET_COMMS_FAIL : rc;
 }

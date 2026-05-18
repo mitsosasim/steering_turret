@@ -124,6 +124,25 @@ add_executable(test_icd_codec
 target_include_directories(test_icd_codec PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(test_icd_codec PRIVATE -Wall -Wextra)
 
+add_executable(test_myact_socketcan_ids
+  dev/tests/test_myact_socketcan_ids.c
+  dev/src/x8_25.c
+)
+target_include_directories(test_myact_socketcan_ids PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_myact_socketcan_ids PRIVATE -Wall -Wextra)
+target_compile_definitions(test_myact_socketcan_ids PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(test_myact_socketcan_ids PRIVATE m)
+
+add_executable(x8_25_test_can
+  dev/tests/x8_25_test.c
+  dev/src/x8_25.c
+  dev/src/myact_socketcan.c
+)
+target_include_directories(x8_25_test_can PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(x8_25_test_can PRIVATE -Wall -Wextra)
+target_compile_definitions(x8_25_test_can PRIVATE _DEFAULT_SOURCE)
+target_link_libraries(x8_25_test_can PRIVATE m)
+
 target_include_directories(stc_diag_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_diag_test PRIVATE -Wall -Wextra)
 target_link_libraries(stc_diag_test PRIVATE m)
