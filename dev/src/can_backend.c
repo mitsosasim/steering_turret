@@ -6,6 +6,7 @@
 #include "x8_25.h"
 #include "myact_socketcan.h"
 #include "stc_log.h"
+#include "stc_diag.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -560,7 +561,11 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
       }
     }
     b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
-    b->snap.fault_active[axis] = (b->snap.status_word[axis] & 0x0008u) ? 1u : 0u;
+    if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
+      b->snap.fault_active[axis] = (stc_diag_myact_error_severity((uint16_t)b->snap.status_word[axis]) == STC_DIAG_MYACT_SEV_CRITICAL) ? 1u : 0u;
+    } else {
+      b->snap.fault_active[axis] = (b->snap.status_word[axis] & 0x0008u) ? 1u : 0u;
+    }
     b->snap.command_age_ms[axis] = (b->axis[axis].last_cmd_ms > 0 && now >= b->axis[axis].last_cmd_ms) ? (uint32_t)(now - b->axis[axis].last_cmd_ms) : 0u;
     const int32_t abs_err = b->snap.pos_raw[axis] - b->axis_last_cmd_pos_raw[axis];
     const int pos_still_far = (abs_err > 20 || abs_err < -20);

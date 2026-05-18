@@ -1644,12 +1644,6 @@ static void* tlml_tx_thread(void* arg) {
     memset(m.laser_status, 0, sizeof(m.laser_status));
     memcpy(m.laser_status, laser_status_snapshot, sizeof(m.laser_status));
 
-    enum {
-      STC_DIAG_ERR_AXIS_FAULT = 0x0001,
-      STC_DIAG_ERR_AXIS_STALE = 0x0002,
-      STC_DIAG_WARN_AXIS_SAT = 0x0100,
-    };
-
     m.error_count = 0;
     for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
       const int expected = axis_expected[i] ? 1 : 0;
@@ -1661,6 +1655,13 @@ static void* tlml_tx_thread(void* arg) {
       }
       if (stale && m.error_count < STC_ICD_MAX_ERRORS) {
         m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_STALE);
+      }
+      if (m.error_count < STC_ICD_MAX_ERRORS) {
+        const uint16_t myact_flags = (uint16_t)(a->sh->d.telem[i].status_word & 0xFFFFu);
+        const uint16_t myact_code = stc_diag_myact_primary_error_code(myact_flags);
+        if (myact_code != 0u) {
+          m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], myact_code);
+        }
       }
     }
 
