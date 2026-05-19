@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Binary ICD wire codec implementation for CMD/RSP/TLMH/TLML frames.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   This is the only module that should know concrete byte offsets/order used on
+ *   the wire. All parse/pack logic uses manual little-endian accessors and avoids
+ *   direct struct casting so compiler packing/alignment cannot alter protocol ABI.
  */
 
 #include "stc_icd.h"
@@ -101,6 +103,7 @@ stc_icd_cfg_t stc_icd_parse_cfg_default(void) {
 
 /* ----------------------------- CMD parse/pack ----------------------------- */
 
+/** Decode known CMD payload variants from raw bytes after header validation. */
 static stc_icd_rc_t decode_cmd_payload(stc_icd_cmd_t* out) {
   out->payload_decoded = 0;
 
@@ -188,13 +191,14 @@ static stc_icd_rc_t decode_cmd_payload(stc_icd_cmd_t* out) {
   }
 }
 
+/** Parse TCP CMD frame: validate framing first, then decode known payload forms. */
 stc_icd_rc_t stc_icd_cmd_parse(const stc_icd_cfg_t* cfg,
                                const uint8_t* buf, size_t len,
                                stc_icd_cmd_t* out) {
   if (!cfg || !buf || !out) return STC_ICD_EINVAL;
 
   /* header size = 20 */
-  if (len < 20) return STC_ICD_EPROTO;
+  if (len < 20) return STC_ICD_EPROTO; /* short frame cannot hold CMD header */
 
   memset(out, 0, sizeof(*out));
 
@@ -206,15 +210,15 @@ stc_icd_rc_t stc_icd_cmd_parse(const stc_icd_cfg_t* cfg,
   out->timestamp_ms = rd_u64_le(&buf[10]);
   out->payload_size = rd_u16_le(&buf[18]);
 
-  if (cfg->strict_magic && !magic_eq4(out->magic, cfg->cmd_magic)) {
+  if (cfg->strict_magic && !magic_eq4(out->magic, cfg->cmd_magic)) { /* wire magic gate */
     return STC_ICD_EPROTO;
   }
-  if (cfg->strict_version && out->version != cfg->protocol_version_default) {
+  if (cfg->strict_version && out->version != cfg->protocol_version_default) { /* protocol rev gate */
     return STC_ICD_EPROTO;
   }
 
   const size_t total = 20u + (size_t)out->payload_size;
-  if (total != len) return STC_ICD_EPROTO;
+  if (total != len) return STC_ICD_EPROTO; /* payload size must match frame length exactly */
 
   if (out->payload_size > STC_ICD_MAX_PAYLOAD) return STC_ICD_EBUFS;
 
@@ -226,6 +230,7 @@ stc_icd_rc_t stc_icd_cmd_parse(const stc_icd_cfg_t* cfg,
   return decode_cmd_payload(out);
 }
 
+/** Encode command-specific payload bytes used by stc_icd_cmd_pack(). */
 static stc_icd_rc_t encode_cmd_payload(const stc_icd_cmd_t* cmd,
                                       uint8_t* payload_out,
                                       uint16_t* payload_len_out) {
@@ -325,6 +330,7 @@ static stc_icd_rc_t encode_cmd_payload(const stc_icd_cmd_t* cmd,
   }
 }
 
+/** Pack TCP CMD frame using canonical ICD field order and little-endian encoding. */
 stc_icd_rc_t stc_icd_cmd_pack(const stc_icd_cfg_t* cfg,
                               const stc_icd_cmd_t* cmd,
                               uint8_t* out_buf, size_t out_cap,
@@ -360,6 +366,7 @@ stc_icd_rc_t stc_icd_cmd_pack(const stc_icd_cfg_t* cfg,
 
 /* ----------------------------- RSP parse/pack ----------------------------- */
 
+/** Parse TCP RSP frame (ACK/NACK + optional payload) from server response stream. */
 stc_icd_rc_t stc_icd_rsp_parse(const stc_icd_cfg_t* cfg,
                                const uint8_t* buf, size_t len,
                                stc_icd_rsp_t* out) {
@@ -393,6 +400,7 @@ stc_icd_rc_t stc_icd_rsp_parse(const stc_icd_cfg_t* cfg,
   return STC_ICD_OK;
 }
 
+/** Pack TCP RSP frame in strict ICD order for compatibility with existing CUs. */
 stc_icd_rc_t stc_icd_rsp_pack(const stc_icd_cfg_t* cfg,
                               const stc_icd_rsp_t* rsp,
                               uint8_t* out_buf, size_t out_cap,
@@ -421,6 +429,7 @@ stc_icd_rc_t stc_icd_rsp_pack(const stc_icd_cfg_t* cfg,
 
 /* ----------------------------- TLMH parse/pack ----------------------------- */
 
+/** Parse fixed-size TLMH frame used for high-rate axis kinematic telemetry. */
 stc_icd_rc_t stc_icd_tlmh_parse(const stc_icd_cfg_t* cfg,
                                 const uint8_t* buf, size_t len,
                                 stc_tlmh_t* out) {
@@ -455,6 +464,7 @@ stc_icd_rc_t stc_icd_tlmh_parse(const stc_icd_cfg_t* cfg,
   return STC_ICD_OK;
 }
 
+/** Pack fixed-size TLMH frame for high-rate UDP telemetry emission. */
 stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
                                const stc_tlmh_t* tlm,
                                uint8_t* out_buf, size_t out_cap,
@@ -488,6 +498,7 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
 
 /* ----------------------------- TLML parse/pack ----------------------------- */
 
+/** Parse TLML frame with variable-length diagnostics trailer (errors[] list). */
 stc_icd_rc_t stc_icd_tlml_parse(const stc_icd_cfg_t* cfg,
                                 const uint8_t* buf, size_t len,
                                 stc_tlml_t* out) {
@@ -531,7 +542,7 @@ stc_icd_rc_t stc_icd_tlml_parse(const stc_icd_cfg_t* cfg,
   uint16_t use_n = declared;
 
   if (use_n > STC_ICD_MAX_ERRORS) use_n = STC_ICD_MAX_ERRORS;
-  out->error_count = (uint8_t)use_n;
+  out->error_count = (uint8_t)use_n; /* preserve parsed diagnostic-list length */
 
   for (uint16_t i = 0; i < use_n; i++) {
     out->errors[i] = rd_u32_le(&buf[off]); off += 4;
@@ -541,6 +552,7 @@ stc_icd_rc_t stc_icd_tlml_parse(const stc_icd_cfg_t* cfg,
   return STC_ICD_OK;
 }
 
+/** Pack TLML frame, appending error_count * 4-byte diagnostic codes after base body. */
 stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
                                const stc_tlml_t* tlm,
                                uint8_t* out_buf, size_t out_cap,
