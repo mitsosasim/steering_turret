@@ -786,7 +786,7 @@ static int enforce_rt_startup_policy(runtime_sched_t* sched_cfg,
                                      const char* binary_hint) {
   if (!sched_cfg) return 0;
   if (!sched_cfg->rt_enabled) {
-    STC_LOG_INFO("RT scheduling disabled by config/CLI");
+    STC_LOG_INFO("RT scheduling disabled by config.");
     return 0;
   }
   if (sched_cfg->sched_policy == SCHED_OTHER) {
@@ -2310,6 +2310,12 @@ int main(int argc, char** argv) {
     STC_LOG_ERROR("no supported motion backend for enabled axis drivers");
     exit_code = 1;
     goto cleanup;
+  }
+  STC_LOG_INFO("backend_selected=%s", backend_name);
+  if (parsed_cfg.num_axes > 0 && parsed_cfg.axis_enabled[0]) {
+    STC_LOG_INFO("axis0 driver=%s node=%d",
+                 axis_driver_to_string(parsed_cfg.axis_driver[0]),
+                 parsed_cfg.axis_node_id[0]);
   }
 
   // CAN worker thread
