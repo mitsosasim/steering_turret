@@ -10,6 +10,8 @@
  * Design notes:
  *   Decodes multicast telemetry by default and also supports direct unicast bind
  *   modes used during bench testing, using the same ICD parse logic as runtime.
+ *   Supports raw hexdump mode for wire-level troubleshooting and periodic
+ *   packet-rate style output for runtime stream observability.
  */
 
 // tlm_rx_udp.c
@@ -67,6 +69,7 @@ static void hexdump_line(const uint8_t* b, size_t n) {
 }
 
 static int open_mcast_rx(const char* group_or_ip, int port, const char* ifname) {
+  /* Socket setup supports both multicast group join and direct unicast bind. */
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) return -1;
 
@@ -218,7 +221,7 @@ int main(int argc, char** argv) {
       break;
     }
     if (pr == 0) {
-      // periodic rate print
+      // periodic timeout tick (currently used as lightweight liveness cadence)
       double t = monotonic_sec();
       if (last_h > 0.0 && t - last_h > 1.0) {
         // no packets recently
@@ -237,7 +240,7 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      if (print_raw) { /* Optional raw-wire hex dump before decode. */
+      if (print_raw) { /* Optional raw-wire hex dump before ICD parsing. */
         printf("RX %s %zd bytes:\n", (k==0 ? "TLMH" : "TLML"), n);
         hexdump_line(buf, (size_t)n);
       }
