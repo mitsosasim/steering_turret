@@ -374,6 +374,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
         recognized = false;
       }
       if (!recognized) {
+        if (strcmp(key, "startup_feedback_grace_ms") == 0) {
+          STC_LOG_ERROR("%s:%d: startup_feedback_grace_ms belongs in [Runtime]", path, line_no);
+          fclose(f);
+          return false;
+        }
         parse_error_reason = "unknown key";
         goto parse_error;
       }
