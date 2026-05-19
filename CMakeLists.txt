@@ -31,6 +31,7 @@ add_executable(stc_server
   dev/src/stc_icd.c
   dev/src/stc_model.c
   dev/src/stc_config.c
+  dev/src/stc_axis_cfg_map.c
   dev/src/pd4c.c
   dev/src/stc_actions.c
   dev/src/stc_limits.c
@@ -178,6 +179,15 @@ if(USE_SIMULATOR)
   target_link_libraries(test_diag_state_integration PRIVATE simulator)
 endif()
 
+
+
+add_executable(test_axis_cfg_map
+  dev/tests/test_axis_cfg_map.c
+  dev/src/stc_axis_cfg_map.c
+)
+
+target_include_directories(test_axis_cfg_map PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_axis_cfg_map PRIVATE -Wall -Wextra)
 
 add_executable(stc_config_test
   dev/tests/stc_config_test.c
