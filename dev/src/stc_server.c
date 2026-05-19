@@ -1873,6 +1873,26 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.strict_stale_policy = cfg->strict_stale_policy ? 1 : 0;
 }
 
+static int config_has_enabled_driver(const stc_config_t* cfg, stc_axis_driver_t driver) {
+  if (!cfg) return 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!cfg->axis_enabled[axis]) continue;
+    if (cfg->axis_driver[axis] == driver) return 1;
+  }
+  return 0;
+}
+
+static const char* select_backend_name(const stc_config_t* cfg, int simulator_requested) {
+  if (config_has_enabled_driver(cfg, STC_AXIS_DRIVER_MYACT_X8_25)) return "myactuator";
+  if (config_has_enabled_driver(cfg, STC_AXIS_DRIVER_PD4C)) return "pd4c";
+#ifdef SIMULATION
+  if (simulator_requested) return "simulator";
+#else
+  (void)simulator_requested;
+#endif
+  return NULL;
+}
+
 int main(int argc, char** argv) {
   int exit_code = 0;
   int threads_started = 0;
@@ -2225,8 +2245,16 @@ int main(int argc, char** argv) {
   actionq_t q;
   actionq_init(&q);
 
+  const int simulator_requested = (strcmp(parsed_cfg.backend, "simulator") == 0);
+  const char* backend_name = select_backend_name(&parsed_cfg, simulator_requested);
+  if (!backend_name) {
+    STC_LOG_ERROR("no supported motion backend for enabled axis drivers");
+    exit_code = 1;
+    goto cleanup;
+  }
+
   // CAN worker thread
-  can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .backend_name = parsed_cfg.backend, .primary_node_id = parsed_cfg.primary_node_id, .primary_tx_id = parsed_cfg.primary_tx_id, .primary_rx_id = parsed_cfg.primary_rx_id, .primary_motion_tx_id = parsed_cfg.primary_motion_tx_id, .primary_motion_rx_id = parsed_cfg.primary_motion_rx_id, .travel_min_deg = parsed_cfg.travel_min_deg, .travel_max_deg = parsed_cfg.travel_max_deg, .profile_max_speed_deg_s = parsed_cfg.profile_max_speed_deg_s, .profile_max_accel_deg_s2 = parsed_cfg.profile_max_accel_deg_s2, .telemetry_interval_ms = parsed_cfg.telemetry_interval_ms, .experimental_native_speed_mode = parsed_cfg.experimental_native_speed_mode, .sh = &sh, .q = &q };
+  can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .backend_name = backend_name, .primary_node_id = parsed_cfg.primary_node_id, .primary_tx_id = parsed_cfg.primary_tx_id, .primary_rx_id = parsed_cfg.primary_rx_id, .primary_motion_tx_id = parsed_cfg.primary_motion_tx_id, .primary_motion_rx_id = parsed_cfg.primary_motion_rx_id, .travel_min_deg = parsed_cfg.travel_min_deg, .travel_max_deg = parsed_cfg.travel_max_deg, .profile_max_speed_deg_s = parsed_cfg.profile_max_speed_deg_s, .profile_max_accel_deg_s2 = parsed_cfg.profile_max_accel_deg_s2, .telemetry_interval_ms = parsed_cfg.telemetry_interval_ms, .experimental_native_speed_mode = parsed_cfg.experimental_native_speed_mode, .sh = &sh, .q = &q };
   if (create_thread_with_sched(&th_can,
                                "can_worker_thread",
                                can_worker_thread,

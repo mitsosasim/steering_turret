@@ -56,14 +56,13 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   STC_LOG_INFO("backend_selected=%s can_if=%s node_id=%u tx=0x%03x rx=0x%03x watchdog_ms=%d telem_interval_ms=%d native_speed_mode=%d",
     g_backend.type,cfg->can_if?cfg->can_if:"",cfg->primary_node_id,cfg->primary_tx_id,cfg->primary_rx_id,cfg->speed_watchdog_ms,cfg->telemetry_interval_ms,cfg->experimental_native_speed_mode);
   int rc;
-  if (strcmp(g_backend.type,"myactuator")==0) {
+  if (strcmp(g_backend.type,"myactuator")==0 || strcmp(g_backend.type,"pd4c")==0) {
     rc = myact_motion_backend_start(cfg,&g_backend.impl);
   } else if (use_sim()) {
     rc = sim_motion_backend_start(cfg,&g_backend.impl);
   } else {
-    STC_LOG_WARN("simulator backend requested but not built; falling back to myactuator backend");
-    g_backend.type = "myactuator";
-    rc = myact_motion_backend_start(cfg,&g_backend.impl);
+    STC_LOG_ERROR("unsupported backend requested: %s", g_backend.type ? g_backend.type : "(null)");
+    return -1;
   }
   if(rc==0) *out_backend=g_backend.impl;
   return rc;
