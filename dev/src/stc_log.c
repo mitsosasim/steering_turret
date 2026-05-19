@@ -22,23 +22,31 @@ static const char* level_tag(stc_log_level_t level) {
 }
 
 static void format_timestamp(char* out, size_t out_sz) {
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
+  if (!out || out_sz == 0) {
+    return;
+  }
+
+  struct timespec ts_now;
+  clock_gettime(CLOCK_REALTIME, &ts_now);
 
   struct tm tm_now;
-  localtime_r(&ts.tv_sec, &tm_now);
+  localtime_r(&ts_now.tv_sec, &tm_now);
 
-  const long millis = ts.tv_nsec / 1000000L;
-  snprintf(out,
-           out_sz,
-           "%04d-%02d-%02d %02d:%02d:%02d.%03ld",
-           tm_now.tm_year + 1900,
-           tm_now.tm_mon + 1,
-           tm_now.tm_mday,
-           tm_now.tm_hour,
-           tm_now.tm_min,
-           tm_now.tm_sec,
-           millis);
+  char base[32];
+  if (strftime(base, sizeof(base), "%Y-%m-%d %H:%M:%S", &tm_now) == 0) {
+    snprintf(out, out_sz, "0000-00-00 00:00:00.000");
+    return;
+  }
+
+  long millis = ts_now.tv_nsec / 1000000L;
+  if (millis < 0) {
+    millis = 0;
+  }
+  if (millis > 999) {
+    millis = 999;
+  }
+
+  snprintf(out, out_sz, "%s.%03ld", base, millis);
 }
 
 void stc_log_init(const char* filename, stc_log_level_t level) {
@@ -79,7 +87,7 @@ void stc_log_set_level(stc_log_level_t level) {
 }
 
 void stc_vlog(stc_log_level_t level, const char* fmt, va_list ap) {
-  char ts[32];
+  char ts[64];
   format_timestamp(ts, sizeof(ts));
 
   char message[1024];
