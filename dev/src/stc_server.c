@@ -2821,7 +2821,10 @@ int main(int argc, char** argv) {
         rsp.payload_size = (uint16_t)sizeof(uptime);
       } else if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_HW_INFO) {
         char hw_info[96];
-        snprintf(hw_info, sizeof(hw_info), "Steering Turret Controller v%s", STC_SW_VERSION);
+        snprintf(hw_info,
+                 sizeof(hw_info),
+                 "STC v%s; axis0 driver=myact_x8_25 node=1 model=X8-PRO- can=can0",
+                 STC_SW_VERSION);
         size_t n = strnlen(hw_info, sizeof(hw_info) - 1);
         memcpy(rsp.payload, hw_info, n + 1);
         rsp.payload_size = (uint16_t)(n + 1);
