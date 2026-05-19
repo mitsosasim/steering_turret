@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Wire-compatibility regression tests for the STC ICD codec.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   These tests protect binary compatibility of CMD/RSP/TLMH/TLML layouts by
+ *   checking exact frame sizes, magic/version behavior, endianness, and variable
+ *   diagnostics handling so future refactors cannot silently break CU/STC interop.
  */
 
 #include "stc_icd.h"
@@ -40,6 +42,7 @@ static void assert_mem(const uint8_t* a, const uint8_t* b, size_t n, const char*
 }
 
 static void test_cmd_turret_pack_parse(void) {
+  /* Protects canonical TURRET CMD encoding + parse round-trip semantics. */
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
   cfg.strict_version = 1;
 
@@ -89,6 +92,7 @@ static void test_cmd_turret_pack_parse(void) {
 }
 
 static void test_rsp_pack_parse(void) {
+  /* Protects ACK RSP framing and payload transport for software version query. */
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
   cfg.strict_version = 1;
 
@@ -121,6 +125,7 @@ static void test_rsp_pack_parse(void) {
 }
 
 static void test_tlmh_pack_parse(void) {
+  /* Protects fixed-size high-rate telemetry frame ordering and float vectors. */
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
 
   stc_tlmh_t tlm;
@@ -152,6 +157,7 @@ static void test_tlmh_pack_parse(void) {
 }
 
 static void test_tlml_pack_parse(void) {
+  /* Protects TLML base layout plus variable-length diagnostic list encoding. */
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
   cfg.strict_version = 1;
 
@@ -226,6 +232,7 @@ static void test_tlml_pack_parse(void) {
 }
 
 static void test_cmd_mirror_id(void) {
+  /* Protects project decision: MIRROR command ID stays wired as 0x0007 (LE). */
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
 
   stc_icd_cmd_t cmd;

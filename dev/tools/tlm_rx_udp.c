@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   UDP telemetry receiver/decoder for STC ICD TLMH/TLML streams.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Decodes multicast telemetry by default and also supports direct unicast bind
+ *   modes used during bench testing, using the same ICD parse logic as runtime.
  */
 
 // tlm_rx_udp.c
@@ -88,6 +89,7 @@ static int open_mcast_rx(const char* group_or_ip, int port, const char* ifname) 
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
+  /* Multicast: bind INADDR_ANY + join group; Unicast: bind directly to given IP. */
   addr.sin_addr.s_addr = is_multicast ? htonl(INADDR_ANY) : parsed_addr.s_addr;
   addr.sin_port = htons((uint16_t)port);
 
@@ -101,7 +103,7 @@ static int open_mcast_rx(const char* group_or_ip, int port, const char* ifname) 
     memset(&mreq, 0, sizeof(mreq));
     mreq.imr_multiaddr = parsed_addr;
 
-    // default: kernel chooses interface for multicast
+    // Multicast default: kernel chooses interface unless --ifname overrides.
     mreq.imr_address.s_addr = htonl(INADDR_ANY);
 
     if (ifname && ifname[0]) {
@@ -148,6 +150,7 @@ int main(int argc, char** argv) {
   int tlml_enabled = 1;
 
   if (argc >= 2 && argv[1][0] != '-') {
+    /* Compatibility shorthand: a lone port enables only its matching stream. */
     int port = atoi(argv[1]);
     if (port == 6010) {
       enable_tlmh_only(port, &tlmh_port, &tlml_enabled);
@@ -234,7 +237,7 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      if (print_raw) {
+      if (print_raw) { /* Optional raw-wire hex dump before decode. */
         printf("RX %s %zd bytes:\n", (k==0 ? "TLMH" : "TLML"), n);
         hexdump_line(buf, (size_t)n);
       }

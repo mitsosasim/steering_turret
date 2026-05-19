@@ -8,9 +8,14 @@
  *   Transport-agnostic binary ICD parser/packer for STC command and telemetry frames.
  *
  * Design notes:
- *   Supports CMD/RSP (TCP) and TLMH/TLML (UDP) formats with deterministic wire
- *   layout. Encoding/decoding is manual little-endian byte handling; no struct
- *   casting is permitted to keep ABI/packing behavior explicit and portable.
+ *   This module is the only code that should know exact binary wire layout for
+ *   CMD/RSP (TCP request/response control) and TLMH/TLML (UDP telemetry).
+ *   Encoding/decoding is manual little-endian byte handling; struct casting is
+ *   intentionally avoided to keep ABI/packing behavior explicit and portable.
+ *   Implementation ownership: stc_icd.c in the ICD codec module.
+ *   Real-time sensitivity: bounded codec operations suitable for runtime paths.
+ *   Interface type: transport/protocol-facing, hardware-agnostic binary framing.
+ *   Threading/ownership: caller owns buffers and synchronization.
  */
 
 #ifndef STC_ICD_H
@@ -186,12 +191,12 @@ typedef struct stc_icd_cmd_s {
   uint8_t payload_raw[STC_ICD_MAX_PAYLOAD];
 } stc_icd_cmd_t;
 
-/* Parse CMD frame from buf/len */
+/** Parse one TCP CMD wire frame into host representation plus decoded payload view. */
 stc_icd_rc_t stc_icd_cmd_parse(const stc_icd_cfg_t* cfg,
                                const uint8_t* buf, size_t len,
                                stc_icd_cmd_t* out);
 
-/* Pack CMD frame (useful for CU simulator + tests) */
+/** Pack one TCP CMD frame using canonical little-endian wire encoding. */
 stc_icd_rc_t stc_icd_cmd_pack(const stc_icd_cfg_t* cfg,
                               const stc_icd_cmd_t* cmd,
                               uint8_t* out_buf, size_t out_cap,
@@ -244,10 +249,12 @@ typedef struct stc_icd_rsp_s {
 } stc_icd_rsp_t;
 
 
+/** Parse one TCP RSP wire frame (ACK/NACK path) from STC server to controller. */
 stc_icd_rc_t stc_icd_rsp_parse(const stc_icd_cfg_t* cfg,
                                const uint8_t* buf, size_t len,
                                stc_icd_rsp_t* out);
 
+/** Pack one TCP RSP frame preserving strict ICD field order and endianness. */
 stc_icd_rc_t stc_icd_rsp_pack(const stc_icd_cfg_t* cfg,
                               const stc_icd_rsp_t* rsp,
                               uint8_t* out_buf, size_t out_cap,
@@ -280,10 +287,12 @@ typedef struct stc_tlmh_s {
   float acceleration[STC_ICD_AXES_COUNT];
 } stc_tlmh_t;
 
+/** Parse high-rate TLMH telemetry frame (fixed-size kinematic stream). */
 stc_icd_rc_t stc_icd_tlmh_parse(const stc_icd_cfg_t* cfg,
                                 const uint8_t* buf, size_t len,
                                 stc_tlmh_t* out);
 
+/** Pack high-rate TLMH telemetry frame in canonical binary order. */
 stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
                                const stc_tlmh_t* tlm,
                                uint8_t* out_buf, size_t out_cap,
@@ -358,10 +367,12 @@ typedef struct stc_tlml_s {
   uint32_t errors[STC_ICD_MAX_ERRORS];
 } stc_tlml_t;
 
+/** Parse low-rate TLML telemetry including variable-length diagnostic list. */
 stc_icd_rc_t stc_icd_tlml_parse(const stc_icd_cfg_t* cfg,
                                 const uint8_t* buf, size_t len,
                                 stc_tlml_t* out);
 
+/** Pack low-rate TLML telemetry and trailing diagnostics array. */
 stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
                                const stc_tlml_t* tlm,
                                uint8_t* out_buf, size_t out_cap,

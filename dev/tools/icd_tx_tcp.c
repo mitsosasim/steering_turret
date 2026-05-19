@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Manual TCP command injector for STC ICD CMD/RSP exchanges.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Crafts CU-like command frames, sends them to stc_server, then reads/parses
+ *   RSP frames to validate live protocol behavior during integration debugging.
  */
 
 // icd_tx_tcp.c
@@ -100,6 +101,7 @@ static int tcp_connect(const char* host, const char* port) {
 }
 
 static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg) {
+  /* Read fixed RSP header first, then read payload according to payload_size field. */
   // RSP header is 14 bytes after our ICD-aligned fix
   uint8_t hdr[14];
   int rr = recv_exact(fd, hdr, sizeof(hdr));
@@ -232,6 +234,7 @@ static int send_cmd(int fd, stc_icd_cfg_t* cfg, stc_icd_cmd_t* cmd, int print_he
 }
 
 int main(int argc, char** argv) {
+  /* Command-line parsing: endpoint + command selector + command-specific args. */
   if (argc < 4) { usage(argv[0]); return 2; }
 
   const char* host = argv[1];
@@ -249,9 +252,9 @@ int main(int argc, char** argv) {
   const char* e = getenv("STC_CTRL_ID");
   if (e && *e) ctrl_id = (uint8_t)atoi(e);
 
-  uint16_t seq = 1;
+  uint16_t seq = 1; /* Monotonic sequence generator for this interactive session. */
 
-  // Helper macro to init command
+  // Helper macro to initialize common CMD header fields before payload filling.
   #define INIT_CMD(CMDID) do { \
     memset(&c, 0, sizeof(c)); \
     c.version = 0x01; \
@@ -262,7 +265,7 @@ int main(int argc, char** argv) {
     c.payload_decoded = 1; \
   } while (0)
 
-  stc_icd_cmd_t c;
+  stc_icd_cmd_t c; /* Packed by stc_icd_cmd_pack(), then sent as raw TCP bytes. */
 
   // ---- suite: send multiple good and a few bad
   if (!strcmp(cmdn, "suite")) {
