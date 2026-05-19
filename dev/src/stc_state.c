@@ -2,9 +2,15 @@
 
 int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next) {
   if (!next) return -1;
+  *next = current;
 
   if (evt == EVT_FAULT_CRITICAL) {
     *next = STC_STATE_FAIL;
+    return 0;
+  }
+
+  if ((evt == EVT_ENTER_SAFE && current == STC_STATE_SAFE) ||
+      (evt == EVT_ENTER_OPER && current == STC_STATE_OPER)) {
     return 0;
   }
 
