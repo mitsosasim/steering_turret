@@ -1092,6 +1092,7 @@ static void* can_worker_thread(void* arg) {
     int critical_axis_stale = 0;
     int critical_hb = 0;
     int critical_emcy = 0;
+    int any_expected_pd4 = 0;
     const uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
     const uint32_t startup_feedback_grace_ms = a->sh->d.startup_feedback_grace_ms;
     const int in_startup_grace = stc_is_within_startup_grace(now, a->sh->d.server_start_ms, startup_feedback_grace_ms);
@@ -1099,8 +1100,17 @@ static void* can_worker_thread(void* arg) {
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       const int expected = a->sh->d.axis_expected[axis] ? 1 : 0;
       const int connected = a->sh->d.axis_available[axis] ? 1 : 0;
-      const int axis_fault = stc_detect_ds402_fault(a->sh->d.telem[axis].status_word) ? 1 : 0;
+      const stc_axis_driver_t driver = a->sh->d.cfg[axis].driver;
+      int axis_fault = 0;
       int stale = 0;
+
+      if (expected && driver == STC_AXIS_DRIVER_PD4C) {
+        any_expected_pd4 = 1;
+        axis_fault = stc_detect_ds402_fault(a->sh->d.telem[axis].status_word) ? 1 : 0;
+      } else if (expected && driver == STC_AXIS_DRIVER_MYACT_X8_25) {
+        /* MYACT status_word is populated from 0x9A error_flags in backend. */
+        axis_fault = (a->sh->d.telem[axis].status_word != 0u) ? 1 : 0;
+      }
       if (!in_startup_grace && can_timeout_ms > 0) {
         const int timed_out = elapsed_ms_nonnegative(now, a->sh->d.last_rx_ms[axis]) > can_timeout_ms;
         stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
@@ -1117,7 +1127,7 @@ static void* can_worker_thread(void* arg) {
         critical_hb = 1;
       }
     }
-    if (a->sh->d.have_emcy && a->sh->d.emcy_code != 0) critical_emcy = 1;
+    if (any_expected_pd4 && a->sh->d.have_emcy && a->sh->d.emcy_code != 0) critical_emcy = 1;
     /*
      * Heartbeat is currently treated as diagnostic-only (non-fatal).
      *
