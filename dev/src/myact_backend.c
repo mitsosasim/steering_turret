@@ -22,6 +22,12 @@ enum {
   MYACT_CMD_POS_ABS = 0xA4,
   MYACT_CMD_POS_INC = 0xA8,
   MYACT_CMD_BRAKE_RELEASE = 0x77,
+  MYACT_CMD_READ_MODEL = 0xB5,
+  MYACT_CMD_READ_VERSION = 0xB2,
+  MYACT_CMD_READ_RUNTIME = 0xB1,
+  MYACT_CMD_READ_STATUS1 = 0x9A,
+  MYACT_CMD_READ_ANGLE = 0x92,
+  MYACT_CMD_READ_STATUS2 = 0x9C,
   MYACT_CAN_BASE = 0x140,
   TELEMETRY_PERIOD_NS = 20 * 1000 * 1000,
 };
@@ -128,6 +134,8 @@ static double local_axis_counts_to_deg(const axis_cfg_t* cfg, int32_t counts) {
   return ((double)counts) / (gr * cpd);
 }
 
+static void normalize_snapshot_from_feedback(struct motion_backend* b, size_t axis, int16_t iq_0p01a, int16_t speed_dps, int16_t angle_deg, uint64_t t_ms);
+
 static double clamp_range(double v, double lo, double hi) {
   if (v < lo) return lo;
   if (v > hi) return hi;
@@ -135,6 +143,80 @@ static double clamp_range(double v, double lo, double hi) {
 }
 
 
+
+
+static int send_myact_read(struct motion_backend* b, uint8_t node_id, uint8_t cmd) {
+  return send_myact_cmd(b, node_id, cmd, 0, 0);
+}
+
+static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t expected_cmd, struct can_frame* out, int timeout_ms) {
+  if (!b || !out) return -1;
+  const uint64_t deadline = now_ms() + (uint64_t)((timeout_ms > 0) ? timeout_ms : 50);
+  while (now_ms() <= deadline) {
+    struct can_frame f;
+    const ssize_t r = read(b->can_socket, &f, sizeof(f));
+    if (r == (ssize_t)sizeof(f)) {
+      if (f.can_dlc < 1 || f.can_id != (MYACT_CAN_BASE + node_id)) continue;
+      if (f.data[0] != expected_cmd) continue;
+      *out = f;
+      return 0;
+    }
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      struct timespec ts = {.tv_sec = 0, .tv_nsec = 1 * 1000 * 1000};
+      nanosleep(&ts, NULL);
+      continue;
+    }
+    return -1;
+  }
+  return -1;
+}
+
+static int init_axis_feedback(struct motion_backend* b, size_t axis) {
+  const uint8_t node_id = b->cfg.axis_node_id[axis];
+  if (!node_id) return 0;
+
+  struct can_frame fr;
+  int got_status1 = 0;
+  int got_angle = 0;
+  int16_t status_iq_0p01a = 0;
+  int16_t status_speed_dps = 0;
+  int16_t status_angle_deg = 0;
+  uint16_t status_err_flags = 0;
+  int16_t angle_deg = 0;
+
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_MODEL) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_MODEL, &fr, 50);
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_VERSION) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_VERSION, &fr, 50);
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_RUNTIME) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_RUNTIME, &fr, 50);
+
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_STATUS1) == 0 && recv_myact_reply(b, node_id, MYACT_CMD_READ_STATUS1, &fr, 80) == 0 && fr.can_dlc >= 8) {
+    got_status1 = 1;
+    status_iq_0p01a = (int16_t)((uint16_t)fr.data[2] | ((uint16_t)fr.data[3] << 8));
+    status_speed_dps = (int16_t)((uint16_t)fr.data[4] | ((uint16_t)fr.data[5] << 8));
+    status_angle_deg = (int16_t)((uint16_t)fr.data[6] | ((uint16_t)fr.data[7] << 8));
+    status_err_flags = (uint16_t)status_iq_0p01a;
+  }
+
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_ANGLE) == 0 && recv_myact_reply(b, node_id, MYACT_CMD_READ_ANGLE, &fr, 80) == 0 && fr.can_dlc >= 8) {
+    got_angle = 1;
+    angle_deg = (int16_t)((uint16_t)fr.data[6] | ((uint16_t)fr.data[7] << 8));
+  }
+
+  if (b->cfg.experimental_native_speed_mode) {
+    if (send_myact_read(b, node_id, MYACT_CMD_READ_STATUS2) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_STATUS2, &fr, 50);
+  }
+
+  if (!got_status1 && !got_angle) return -1;
+
+  const uint64_t t_ms = now_ms();
+  const int16_t use_angle = got_angle ? angle_deg : status_angle_deg;
+  normalize_snapshot_from_feedback(b, axis, status_iq_0p01a, status_speed_dps, use_angle, t_ms);
+  b->snap.vel_raw[axis] = 0;
+  b->snap.status_word[axis] = status_err_flags;
+  b->snap.mode_display[axis] = 0;
+  b->snap.diag_ext[axis] = (uint32_t)(got_status1 ? ((status_err_flags & 0xFFFFu) | ((uint32_t)(fr.data[1] & 0x1u) << 16)) : 0u);
+  b->snap.last_rx_ms[axis] = t_ms;
+  return 0;
+}
 static int prepare_for_motion_locked(struct motion_backend* b, size_t axis, uint64_t now) {
   (void)now;
   const uint8_t node_id = b->cfg.axis_node_id[axis];
@@ -340,6 +422,11 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
   b->snap.capabilities.supports_native_absolute_position = 0;
   b->snap.backend_mode = 1;
   b->snap.transport_status = 1;
+
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!cfg->axis_node_id[axis]) continue;
+    (void)init_axis_feedback(b, axis);
+  }
 
   b->running = 1;
   if (pthread_create(&b->worker, NULL, backend_loop, b) != 0) {
