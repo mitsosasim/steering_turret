@@ -573,6 +573,21 @@ static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
   sh->saturated[axis] = true;
 }
 
+
+static void log_axis_abs_saturation_if_needed(int axis,
+                                              double requested_abs,
+                                              double clamped_abs,
+                                              const axis_cfg_t* cfg,
+                                              int was_limited) {
+  if (!was_limited || !cfg) return;
+  STC_LOG_WARN("axis%d command saturated: requested_abs=%.3f clamped_abs=%.3f min=%.3f max=%.3f",
+               axis,
+               requested_abs,
+               clamped_abs,
+               cfg->az_min_deg,
+               cfg->az_max_deg);
+}
+
 static int axis_in_runtime_range(const shared_data_t* sh, int axis) {
   if (!sh) return 0;
   if (axis < 0 || axis >= (int)STC_AXIS_COUNT) return 0;
@@ -2748,8 +2763,10 @@ int main(int argc, char** argv) {
                     if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
                       targets[az] += axis_counts_to_deg(&sh.d.cfg[az], sh.d.telem[az].pos_raw);
                     }
+                    const double requested_abs = targets[az];
                     bool target_limited = false, speed_limited = false;
                     stc_clamp_axis_cmd(&sh.d.cfg[az], &targets[az], NULL, &target_limited, &speed_limited);
+                    log_axis_abs_saturation_if_needed(az, requested_abs, targets[az], &sh.d.cfg[az], target_limited);
                     mark_axis_saturated(&sh.d, az, target_limited);
                   }
                   if (el >= 0 && el < (int)STC_AXIS_COUNT) {
@@ -2757,8 +2774,10 @@ int main(int argc, char** argv) {
                     if (cmd.u.turret.motion_type == STC_MOTION_RELATIVE) {
                       targets[el] += axis_counts_to_deg(&sh.d.cfg[el], sh.d.telem[el].pos_raw);
                     }
+                    const double requested_abs = targets[el];
                     bool target_limited = false, speed_limited = false;
                     stc_clamp_axis_cmd(&sh.d.cfg[el], &targets[el], NULL, &target_limited, &speed_limited);
+                    log_axis_abs_saturation_if_needed(el, requested_abs, targets[el], &sh.d.cfg[el], target_limited);
                     mark_axis_saturated(&sh.d, el, target_limited);
                   }
                 }
@@ -2788,8 +2807,10 @@ int main(int argc, char** argv) {
                       if (cmd.u.sut.motion_type == STC_MOTION_RELATIVE) {
                         targets[az] += axis_counts_to_deg(&sh.d.cfg[az], sh.d.telem[az].pos_raw);
                       }
+                      const double requested_abs = targets[az];
                       bool target_limited = false, speed_limited = false;
                       stc_clamp_axis_cmd(&sh.d.cfg[az], &targets[az], NULL, &target_limited, &speed_limited);
+                      log_axis_abs_saturation_if_needed(az, requested_abs, targets[az], &sh.d.cfg[az], target_limited);
                       mark_axis_saturated(&sh.d, az, target_limited);
                     }
                   }
@@ -2805,8 +2826,10 @@ int main(int argc, char** argv) {
                       if (cmd.u.sut.motion_type == STC_MOTION_RELATIVE) {
                         targets[el] += axis_counts_to_deg(&sh.d.cfg[el], sh.d.telem[el].pos_raw);
                       }
+                      const double requested_abs = targets[el];
                       bool target_limited = false, speed_limited = false;
                       stc_clamp_axis_cmd(&sh.d.cfg[el], &targets[el], NULL, &target_limited, &speed_limited);
+                      log_axis_abs_saturation_if_needed(el, requested_abs, targets[el], &sh.d.cfg[el], target_limited);
                       mark_axis_saturated(&sh.d, el, target_limited);
                     }
                   }
@@ -2831,8 +2854,10 @@ int main(int argc, char** argv) {
                     if (cmd.u.mirror.motion_type == STC_MOTION_RELATIVE) {
                       targets[axis] += axis_counts_to_deg(&sh.d.cfg[axis], sh.d.telem[axis].pos_raw);
                     }
+                    const double requested_abs = targets[axis];
                     bool target_limited = false, speed_limited = false;
                     stc_clamp_axis_cmd(&sh.d.cfg[axis], &targets[axis], NULL, &target_limited, &speed_limited);
+                    log_axis_abs_saturation_if_needed(axis, requested_abs, targets[axis], &sh.d.cfg[axis], target_limited);
                     mark_axis_saturated(&sh.d, axis, target_limited);
                   }
                 }
