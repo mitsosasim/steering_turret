@@ -382,6 +382,7 @@ static void cmd_timing_update(cmd_timing_stats_t* stats,
 
 static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms);
 static int sut_index_from_laser_id(const shared_data_t* sh, uint8_t laser_id);
+static int command_targets_unmapped_axis(const shared_data_t* sh, const stc_icd_cmd_t* cmd);
 
 /* ----------------------------- signal handling ----------------------------- */
 
@@ -471,6 +472,14 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
   if (c->cmd_id == STC_CMD_MIRROR) {
     if (c->u.mirror.motion_type > STC_MOTION_SPEED) return STC_ERR_VALUE_OUT_OF_RANGE;
     if (c->u.mirror.mirror_id != 0xFF && c->u.mirror.mirror_id < 1) return STC_ERR_VALUE_OUT_OF_RANGE;
+  }
+
+  /* Resolve target mapping before state gating so unmapped bench targets NACK
+   * as NOT_CONFIGURED regardless of SAFE/OPER state. */
+  if (c->payload_decoded &&
+      (c->cmd_id == STC_CMD_TURRET || c->cmd_id == STC_CMD_SUT || c->cmd_id == STC_CMD_MIRROR) &&
+      command_targets_unmapped_axis(sh, c)) {
+    return STC_ERR_NOT_CONFIGURED;
   }
   if (c->cmd_id == STC_CMD_LASER) {
     if (sut_index_from_laser_id(sh, c->u.laser.id) < 0) return STC_ERR_VALUE_OUT_OF_RANGE;
@@ -2831,7 +2840,7 @@ int main(int argc, char** argv) {
 
               if (command_targets_unmapped_axis(&sh.d, &cmd)) {
                 STC_LOG_WARN("requested motion target is not configured");
-                v = STC_ERR_VALUE_OUT_OF_RANGE;
+                v = STC_ERR_NOT_CONFIGURED;
               } else if (axes_mask == 0) {
                 v = STC_ERR_VALUE_OUT_OF_RANGE;
               } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {

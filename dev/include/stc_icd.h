@@ -210,6 +210,7 @@ typedef enum stc_nack_err_e {
   STC_ERR_INSUFFICIENT_RES            = 0x0006,
   STC_ERR_TIMEOUT                     = 0x0007,
   STC_ERR_COMMAND_NOT_IMPLEMENTED     = 0x0008,
+  STC_ERR_NOT_CONFIGURED              = 0x0009,
   STC_ERR_GENERIC                     = 0x00FF
 } stc_nack_err_t;
 
