@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Internal module implementation for STC runtime support services.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Comment-only documentation refactor; runtime behavior is unchanged.
  */
 
 #include "stc_model.h"
@@ -16,6 +16,10 @@
 #include <limits.h>
 #include <math.h>
 
+/* Centralized conversion helpers keep all modules aligned on mechanical scaling
+ * (counts_per_rev, gear_ratio, vel_scale) so command generation, telemetry, and
+ * diagnostics use identical math and avoid drift across duplicated formulas.
+ */
 static double safe_cpr(const axis_cfg_t* cfg) {
   return (cfg && cfg->counts_per_rev > 0.0) ? cfg->counts_per_rev : 1.0;
 }
@@ -38,12 +42,14 @@ const char* axis_driver_to_string(stc_axis_driver_t driver) {
   }
 }
 
+/** Convert encoder counts (motor-domain units) into physical axis degrees. */
 double axis_counts_to_deg(const axis_cfg_t* cfg, int32_t counts) {
   const double cpr = safe_cpr(cfg);
   const double gr = safe_gr(cfg);
   return ((double)counts) * 360.0 / (cpr * gr);
 }
 
+/** Convert physical axis degrees into encoder counts for command objects. */
 int32_t axis_deg_to_counts(const axis_cfg_t* cfg, double deg) {
   const double cpr = safe_cpr(cfg);
   const double gr = safe_gr(cfg);
@@ -53,6 +59,7 @@ int32_t axis_deg_to_counts(const axis_cfg_t* cfg, double deg) {
   return (int32_t)llround(counts);
 }
 
+/** Convert backend raw velocity units into physical axis deg/s telemetry. */
 double axis_vel_to_deg_s(const axis_cfg_t* cfg, int32_t vel_raw) {
   const double gr = safe_gr(cfg);
   const double vel_scale = safe_vel_scale(cfg);
@@ -60,6 +67,7 @@ double axis_vel_to_deg_s(const axis_cfg_t* cfg, int32_t vel_raw) {
   return motor_deg_s / gr;
 }
 
+/** Convert commanded axis deg/s into backend target velocity units with clipping. */
 int32_t axis_deg_s_to_target_vel_units(const axis_cfg_t* cfg, double axis_deg_s, int* clipped) {
   if (clipped) *clipped = 0;
 
@@ -92,6 +100,7 @@ int32_t axis_deg_s_to_target_vel_units(const axis_cfg_t* cfg, double axis_deg_s,
   return (int32_t)llround(raw);
 }
 
+/** Update one axis telemetry sample and derive acceleration from bounded dt. */
 void axis_telem_update(axis_telem_t* telem,
                        const axis_cfg_t* cfg,
                        int32_t pos_raw,

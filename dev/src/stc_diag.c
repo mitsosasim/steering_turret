@@ -5,16 +5,20 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Internal module implementation for STC runtime support services.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Comment-only documentation refactor; runtime behavior is unchanged.
  */
 
 #include "stc_diag.h"
 
 #include <stddef.h>
 
+/* Diagnostic word layout:
+ *   [31:24]=category, [23:16]=subcategory, [15:0]=error code.
+ * Keeping this encoding centralized avoids inconsistent telemetry packing.
+ */
 uint32_t stc_diag_encode(uint8_t category,
                          uint8_t subcategory,
                          uint16_t error_code) {
@@ -31,6 +35,9 @@ typedef struct {
   bool critical;
 } cbit_slot_t;
 
+/* Testability hooks: unit/integration tests can force PBIT/IBIT outcomes and
+ * inject CBIT critical state through per-shared-data slots without device IO.
+ */
 static cbit_slot_t g_cbit_slots[8];
 
 static cbit_slot_t* cbit_find_slot(shared_data_t* shared, bool create) {
@@ -48,10 +55,12 @@ static cbit_slot_t* cbit_find_slot(shared_data_t* shared, bool create) {
   return free_slot;
 }
 
+/** PBIT models startup readiness gate before entering operational states. */
 bool run_pbit_startup(void) {
   return g_pbit_pass;
 }
 
+/** CBIT escalates to critical when any registered runtime source flags it. */
 stc_diag_health_t run_cbit_cycle(shared_data_t* shared) {
   cbit_slot_t* slot = cbit_find_slot(shared, false);
   if (!slot) return STC_DIAG_HEALTH_OK;

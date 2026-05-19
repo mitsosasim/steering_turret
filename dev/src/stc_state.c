@@ -5,14 +5,22 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Internal module implementation for STC runtime support services.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Comment-only documentation refactor; runtime behavior is unchanged.
  */
 
 #include "stc_state.h"
 
+/* STC operational state machine:
+ * - SAFE: movement/streaming inhibited while control and diagnostics remain active.
+ * - OPER: nominal motion-enabled state for accepted command execution.
+ * - FAIL: critical-fault containment state requiring explicit recovery path.
+ * Invalid transitions return failure so callers never silently change state.
+ */
+
+/** Resolve one event-driven transition; returns -1 on invalid transition. */
 int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next) {
   if (!next) return -1;
   *next = current;
@@ -131,10 +139,12 @@ int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next
   return -1;
 }
 
+/** Motion commands are permitted only in OPER state. */
 int stc_state_can_move(stc_state_t state) {
   return state == STC_STATE_OPER;
 }
 
+/** Streamed-speed control is permitted only in OPER state. */
 int stc_state_can_stream(stc_state_t state) {
   return state == STC_STATE_OPER;
 }
