@@ -1,4 +1,17 @@
 /*
+ * ALMA SISTEMI SRL - Steering Turret Control (STC)
+ *
+ * Property of ALMA SISTEMI SRL.
+ * This source file is part of the STC development codebase.
+ *
+ * File purpose:
+ *   Implementation/declarations for the STC development codebase.
+ *
+ * Design notes:
+ *   Documentation/comment ownership header only; no runtime behavior changes.
+ */
+
+/*
 # Build
 gcc -O2 -Wall -Wextra -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
   dev/src/x8_25.c dev/tests/x8_25_test.c \

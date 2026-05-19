@@ -1,4 +1,17 @@
 /*
+ * ALMA SISTEMI SRL - Steering Turret Control (STC)
+ *
+ * Property of ALMA SISTEMI SRL.
+ * This source file is part of the STC development codebase.
+ *
+ * File purpose:
+ *   Implementation/declarations for the STC development codebase.
+ *
+ * Design notes:
+ *   Documentation/comment ownership header only; no runtime behavior changes.
+ */
+
+/*
   pd4c_test.c — PD4-C CANopen test app (SDO + runtime PDO)
 
   Build (from ~/dev/src):
