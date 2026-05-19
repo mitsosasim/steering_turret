@@ -47,8 +47,11 @@
 #include <math.h>
 #include <limits.h>
 #include <stdatomic.h>
+#include <inttypes.h>
 
 #include "motion_backend.h"
+
+#define STC_DIAG_LATCH_MS 2000ULL
 
 /* ----------------------------- time helpers ----------------------------- */
 
@@ -217,6 +220,7 @@ typedef struct shared_data {
   axis_telem_t telem[STC_AXIS_COUNT];
   axis_stream_t stream[STC_AXIS_COUNT];
   bool saturated[STC_AXIS_COUNT];
+  uint64_t saturated_until_ms[STC_AXIS_COUNT];
   double storage_deg[STC_AXIS_COUNT];
   uint8_t diag_cat[STC_AXIS_COUNT];
   uint8_t diag_subcat[STC_AXIS_COUNT];
@@ -575,6 +579,7 @@ static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
   if (!limited) return;
   if (axis < 0 || axis >= (int)STC_AXIS_COUNT) return;
   sh->saturated[axis] = true;
+  sh->saturated_until_ms[axis] = mono_ms() + STC_DIAG_LATCH_MS;
 }
 
 
@@ -590,6 +595,23 @@ static void log_axis_abs_saturation_if_needed(int axis,
                clamped_abs,
                cfg->az_min_deg,
                cfg->az_max_deg);
+}
+
+static void log_axis_final_status(shared_t* sh, int axis) {
+  if (!sh) return;
+  if (axis < 0 || axis >= (int)STC_AXIS_COUNT) return;
+  pthread_mutex_lock(&sh->mtx);
+  const axis_telem_t telem = sh->d.telem[axis];
+  const int stale = (sh->d.can_timeout_ms > 0 &&
+                     elapsed_ms_nonnegative(mono_ms(), sh->d.last_rx_ms[axis]) > sh->d.can_timeout_ms) ? 1 : 0;
+  pthread_mutex_unlock(&sh->mtx);
+  STC_LOG_INFO("axis%d status pos=%.3f deg vel=%.3f deg/s brake=%u err_flags=0x%04X stale=%d",
+               axis,
+               telem.pos_deg,
+               telem.vel_deg_s,
+               0u,
+               (unsigned)(telem.status_word & 0xFFFFu),
+               stale);
 }
 
 static int axis_in_runtime_range(const shared_data_t* sh, int axis) {
@@ -1352,6 +1374,12 @@ static void* can_worker_thread(void* arg) {
         default:
           break;
       }
+      for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+        if (act.axes_mask & (1u << axis)) {
+          STC_LOG_INFO("CAN action complete: axis%zu target reached/processed", axis);
+          log_axis_final_status(a->sh, (int)axis);
+        }
+      }
       if (!actionq_drop_head(a->q)) break;
       memset(&act, 0, sizeof(act));
     }
@@ -1830,7 +1858,7 @@ static void* tlml_tx_thread(void* arg) {
     int8_t motor_map[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
 
     for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
-      saturated[i] = a->sh->d.saturated[i];
+      saturated[i] = a->sh->d.saturated[i] && (nowm <= a->sh->d.saturated_until_ms[i]);
       axis_fault_active[i] = a->sh->d.axis_fault_active[i];
       axis_enabled[i] = a->sh->d.axis_enabled[i];
       axis_available[i] = a->sh->d.axis_available[i];
@@ -1838,7 +1866,9 @@ static void* tlml_tx_thread(void* arg) {
       last_rx_ms[i] = a->sh->d.last_rx_ms[i];
       diag_cat[i] = a->sh->d.diag_cat[i];
       diag_subcat[i] = a->sh->d.diag_subcat[i];
-      a->sh->d.saturated[i] = false;
+      if (!saturated[i]) {
+        a->sh->d.saturated[i] = false;
+      }
     }
     memcpy(motor_map, a->sh->d.motor_map, sizeof(motor_map));
     uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
@@ -3105,6 +3135,9 @@ int main(int argc, char** argv) {
       if (send_all(cfd, out, out_len) != 0) {
         STC_LOG_WARN("send rsp error: %s", strerror(errno));
         break;
+      }
+      if (rsp.result == STC_RSP_ACK) {
+        STC_LOG_INFO("TCP ACK sent: command accepted cmd=0x%02X seq=%u", rsp.cmd_id, rsp.seq);
       }
     }
 
