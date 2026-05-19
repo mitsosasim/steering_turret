@@ -92,7 +92,7 @@ QString decodeTlmlDiag(const stc_tlml_t &tlm) {
            .arg(tlm.lat, 0, 'f', 6).arg(tlm.lon, 0, 'f', 6).arg(tlm.alt_m, 0, 'f', 2).arg(tlm.heading_deg, 0, 'f', 2);
   lines << QString("Environment: %1 C, %2 %%, %3 hPa").arg(tlm.temperature_c, 0, 'f', 1).arg(tlm.humidity_pct, 0, 'f', 1).arg(tlm.pressure_hpa, 0, 'f', 1);
   QStringList laser;
-  for (int i = 0; i < 8; ++i) laser << QString("SUT%1=%2").arg(i + 1).arg(tlm.laser_status[i] ? "ON" : "OFF");
+  for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) laser << QString("SUT%1=%2").arg(static_cast<int>(i) + 1).arg(tlm.laser_status[i] ? "ON" : "OFF");
   lines << QString("Lasers: %1").arg(laser.join(", "));
   QStringList errors;
   for (int i = 0; i < static_cast<int>(tlm.error_count); ++i) errors << QString("0x%1").arg(tlm.errors[i], 8, 16, QChar('0'));

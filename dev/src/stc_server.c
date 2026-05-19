@@ -1345,15 +1345,16 @@ static void* can_worker_thread(void* arg) {
         case ACTION_SET_LASER: {
           const uint8_t laser_id = act.u.laser.laser_id;
           const uint8_t on_off = act.u.laser.on_off ? 1u : 0u;
-          const int rc = motion_backend_set_laser(backend, laser_id, on_off);
-          if (rc == 0) {
-            pthread_mutex_lock(&a->sh->mtx);
-            const int sut_idx = sut_index_from_laser_id(&a->sh->d, laser_id);
-            if (sut_idx >= 0) a->sh->d.sut_laser_on[sut_idx] = on_off;
-            pthread_mutex_unlock(&a->sh->mtx);
-          } else {
-            STC_LOG_WARN("laser_stub failed id=%u on_off=%u rc=%d", laser_id, on_off, rc);
+          pthread_mutex_lock(&a->sh->mtx);
+          const int sut_idx = sut_index_from_laser_id(&a->sh->d, laser_id);
+          if (sut_idx >= 0) {
+            a->sh->d.sut_laser_on[sut_idx] = on_off;
           }
+          pthread_mutex_unlock(&a->sh->mtx);
+          STC_LOG_WARN("LASER stub: SUT%u requested %s; hardware backend not present",
+                       (unsigned)laser_id,
+                       on_off ? "ON" : "OFF");
+          (void)backend;
           break;
         }
         case ACTION_ENTER_STORE: {
@@ -1901,8 +1902,10 @@ static void* tlml_tx_thread(void* arg) {
     }
     uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
     uint32_t startup_feedback_grace_ms = a->sh->d.startup_feedback_grace_ms;
-    uint8_t laser_status_snapshot[8];
-    memcpy(laser_status_snapshot, a->sh->d.sut_laser_on, sizeof(laser_status_snapshot));
+    uint8_t laser_status_snapshot[STC_ICD_LASER_COUNT];
+    for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+      laser_status_snapshot[i] = a->sh->d.sut_laser_on[i] ? 1u : 0u;
+    }
     int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
     for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
       stream_enabled[i] = a->sh->d.stream[i].enabled ? 1u : 0u;
@@ -1943,7 +1946,9 @@ static void* tlml_tx_thread(void* arg) {
     }
 
     memset(m.laser_status, 0, sizeof(m.laser_status));
-    memcpy(m.laser_status, laser_status_snapshot, sizeof(m.laser_status));
+    for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+      m.laser_status[i] = laser_status_snapshot[i];
+    }
 
     m.error_count = 0;
     for (size_t i = 0; i < STC_AXIS_COUNT && m.error_count < STC_ICD_MAX_ERRORS; i++) {
