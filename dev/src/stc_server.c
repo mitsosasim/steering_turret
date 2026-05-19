@@ -215,6 +215,7 @@ typedef struct shared_data {
   int ds402_timeout_ms;
   int pp_sdo_diag;              // enable SDO snapshot before PP move
   uint32_t can_timeout_ms;
+  uint32_t startup_feedback_grace_ms;
   int strict_stale_policy;
 
   // --- software state / navigation
@@ -1063,13 +1064,15 @@ static void* can_worker_thread(void* arg) {
     int critical_hb = 0;
     int critical_emcy = 0;
     const uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
+    const uint32_t startup_feedback_grace_ms = a->sh->d.startup_feedback_grace_ms;
+    const int in_startup_grace = stc_is_within_startup_grace(now, a->sh->d.boot_ms, startup_feedback_grace_ms);
     const int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       const int expected = a->sh->d.axis_expected[axis] ? 1 : 0;
       const int connected = a->sh->d.axis_available[axis] ? 1 : 0;
       const int axis_fault = stc_detect_ds402_fault(a->sh->d.telem[axis].status_word) ? 1 : 0;
       int stale = 0;
-      if (can_timeout_ms > 0) {
+      if (!in_startup_grace && can_timeout_ms > 0) {
         const int timed_out = elapsed_ms_nonnegative(now, a->sh->d.last_rx_ms[axis]) > can_timeout_ms;
         stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
       }
@@ -1086,7 +1089,6 @@ static void* can_worker_thread(void* arg) {
       }
     }
     if (a->sh->d.have_emcy && a->sh->d.emcy_code != 0) critical_emcy = 1;
-
     /*
      * Heartbeat is currently treated as diagnostic-only (non-fatal).
      *
@@ -1627,9 +1629,11 @@ static void* tlml_tx_thread(void* arg) {
     }
     memcpy(motor_map, a->sh->d.motor_map, sizeof(motor_map));
     uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
+    uint32_t startup_feedback_grace_ms = a->sh->d.startup_feedback_grace_ms;
     uint8_t laser_status_snapshot[8];
     memcpy(laser_status_snapshot, a->sh->d.sut_laser_on, sizeof(laser_status_snapshot));
     int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
+    const int in_startup_grace = stc_is_within_startup_grace(nowm, a->sh->d.boot_ms, startup_feedback_grace_ms);
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = noww;
@@ -1652,7 +1656,9 @@ static void* tlml_tx_thread(void* arg) {
       const int expected = axis_expected[ax] ? 1 : 0;
       const int connected = axis_available[ax] ? 1 : 0;
       const int timed_out = elapsed_ms_nonnegative(nowm, last_rx_ms[ax]) > can_timeout_ms;
-      const int stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
+      const int stale = (!in_startup_grace && can_timeout_ms > 0)
+        ? (strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out))
+        : 0;
       if (stale) flags |= (1u << 2);
       if (saturated[ax]) flags |= (1u << 3);
       m.motor_status[j] = flags;
@@ -1666,7 +1672,9 @@ static void* tlml_tx_thread(void* arg) {
       const int expected = axis_expected[i] ? 1 : 0;
       const int connected = axis_available[i] ? 1 : 0;
       const int timed_out = elapsed_ms_nonnegative(nowm, last_rx_ms[i]) > can_timeout_ms;
-      const int stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
+      const int stale = (!in_startup_grace && can_timeout_ms > 0)
+        ? (strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out))
+        : 0;
       if (axis_fault_active[i]) {
         m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_FAULT);
       }
@@ -1870,6 +1878,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   memcpy(sh->d.mirror_axis, cfg->mirror_axis, sizeof(sh->d.mirror_axis));
   memcpy(sh->d.motor_map, cfg->motor_status_map, sizeof(sh->d.motor_map));
   sh->d.controller_id_strict_legacy = cfg->controller_id_strict_legacy ? 1 : 0;
+  sh->d.startup_feedback_grace_ms = (cfg->startup_feedback_grace_ms > 0) ? (uint32_t)cfg->startup_feedback_grace_ms : 0u;
   sh->d.strict_stale_policy = cfg->strict_stale_policy ? 1 : 0;
 }
 
@@ -1969,6 +1978,7 @@ int main(int argc, char** argv) {
   sh.d.ds402_timeout_ms = 2000;
   sh.d.pp_sdo_diag = 0;
   sh.d.can_timeout_ms = 1000;
+  sh.d.startup_feedback_grace_ms = 3000;
   sh.d.strict_stale_policy = 0;
   sh.d.st_state = STC_STATE_INIT;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
