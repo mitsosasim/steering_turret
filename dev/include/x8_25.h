@@ -24,23 +24,35 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-/*
- * MYACTUATOR V3 CAN low-level library.
+/**
+ * MYACTUATOR V3 low-level actuator protocol library (not CANopen/DS402).
  *
- * Design:
- * - single-threaded, no heap allocation, no internal threads
- * - transport-agnostic: application supplies CAN send/recv/time callbacks
- * - real-time safe send-only functions for torque/speed/position/motion mode
- * - bounded request/reply helpers for setup and diagnostics
+ * Abstraction exposed:
+ *   Transport-agnostic command/status API for one motor node, using caller-provided
+ *   send/recv/time callbacks so this header can be reused on SocketCAN or other CAN HALs.
+ *
+ * Implementation ownership:
+ *   Owned by the x8_25 module (x8_25.c) and wrapped by higher-level STC backends.
+ *
+ * Real-time sensitivity:
+ *   A1/A2/A4/A8 and motion-mode pack/send paths are designed as send-only fast paths.
+ *   Setup/diagnostic helpers use bounded request/reply with explicit timeout budgets.
+ *
+ * Interface nature:
+ *   Hardware/protocol-facing for MYACTUATOR X8-25 V3 CAN frames (not PDO/SDO DS402).
+ *
+ * Threading/ownership:
+ *   Context is single-threaded by design; no heap allocation and no internal threads.
+ *   If a context is shared across threads, all API calls must be externally serialized.
  */
 
-#define MYACT_NODE_ID_MIN              1u
-#define MYACT_NODE_ID_MAX             32u
-#define MYACT_DEFAULT_TIMEOUT_MS     100u
+#define MYACT_NODE_ID_MIN              1u  /* MYACTUATOR V3 addressable node-ID lower bound. */
+#define MYACT_NODE_ID_MAX             32u  /* MYACTUATOR V3 addressable node-ID upper bound. */
+#define MYACT_DEFAULT_TIMEOUT_MS     100u  /* Bounded wait for request/reply diagnostics. */
 #define MYACT_ACTIVE_REPLY_DISABLE_SPACING_MS 6u
 #define MYACT_ACTIVE_REPLY_DRAIN_MS          400u
 
-/* X8-25 product constants (output-shaft side) */
+/* X8-25 product constants (output-shaft side units used by tests/tools). */
 #define MYACT_X8_25_GEAR_RATIO              9.0
 #define MYACT_X8_25_RATED_VOLTAGE_V        48.0
 #define MYACT_X8_25_RATED_SPEED_RPM       110.0
@@ -52,7 +64,7 @@ extern "C" {
 #define MYACT_X8_25_ENCODER_BITS          18u
 
 
-/* MIT motion packing ranges (X8-25 firmware format) */
+/* Motion-mode (MIT-style) packing ranges in firmware-native units/ranges. */
 #define MYACT_MOTION_P_MIN_RAD      (-12.5f)
 #define MYACT_MOTION_P_MAX_RAD      (12.5f)
 #define MYACT_MOTION_V_MIN_RAD_S    (-45.0f)
@@ -96,12 +108,12 @@ typedef struct {
     uint8_t  data[8];
 } myact_can_frame_t;
 
-/*
- * Transport callback contract:
- *   send(frame, user) -> 0 on success, negative MYACT_* on failure
- *   recv(frame, timeout_ms, user) -> 0 on success, MYACT_ETIMEDOUT on timeout,
- *                                    or another negative MYACT_* code
- *   time_ms(user) -> monotonic milliseconds
+/**
+ * Transport callback contract.
+ *
+ * The library never opens sockets itself: caller injects CAN transport primitives.
+ * recv() must honor timeout_ms to keep diagnostic/service calls bounded in time.
+ * time_ms() must be monotonic and is used for cache timestamps and timeout control.
  */
 typedef int      (*myact_send_fn)(const myact_can_frame_t* frame, void* user);
 typedef int      (*myact_recv_fn)(myact_can_frame_t* frame, uint32_t timeout_ms, void* user);
