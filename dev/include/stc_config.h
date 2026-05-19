@@ -31,10 +31,14 @@ typedef struct stc_config_s {
   int experimental_native_speed_mode;
 
   char tlm_dest_ip[16];
+  char tlmh_ip[16];
+  char tlml_ip[16];
   int tlmh_port;
   int tlml_port;
   int tlmh_interval_ms;
   int tlml_interval_ms;
+  int can_bitrate;
+  int can_restart_ms;
   int can_scan_max_node;
   int can_timeout_ms;
   int strict_stale_policy;
