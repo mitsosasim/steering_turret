@@ -1662,6 +1662,7 @@ static void* tlmh_tx_thread(void* arg) {
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
   const long period_ns = a->period_ns;
+  uint64_t last_send_error_log_ms = 0;
 
   while (!atomic_load(&g_stop)) {
     const uint64_t expected_wake_ns = (uint64_t)next.tv_sec * 1000000000ULL + (uint64_t)next.tv_nsec;
@@ -1696,6 +1697,11 @@ static void* tlmh_tx_thread(void* arg) {
         a->sh->d.tlmh_timing.no_destination_count++;
       } else {
         a->sh->d.tlmh_timing.send_error_count++;
+        const uint64_t now_ms = mono_ms();
+        if (last_send_error_log_ms == 0 || (now_ms - last_send_error_log_ms) >= 1000ULL) {
+          STC_LOG_WARN("TLMH sendto failed: %s", strerror(errno));
+          last_send_error_log_ms = now_ms;
+        }
       }
       pthread_mutex_unlock(&a->sh->mtx);
     }
@@ -1715,6 +1721,7 @@ static void* tlml_tx_thread(void* arg) {
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
   const long period_ns = a->period_ns;
+  uint64_t last_send_error_log_ms = 0;
 
   while (!atomic_load(&g_stop)) {
     const uint64_t expected_wake_ns = (uint64_t)next.tv_sec * 1000000000ULL + (uint64_t)next.tv_nsec;
@@ -1839,6 +1846,11 @@ static void* tlml_tx_thread(void* arg) {
         a->sh->d.tlml_timing.no_destination_count++;
       } else {
         a->sh->d.tlml_timing.send_error_count++;
+        const uint64_t now_ms = mono_ms();
+        if (last_send_error_log_ms == 0 || (now_ms - last_send_error_log_ms) >= 1000ULL) {
+          STC_LOG_WARN("TLML sendto failed: %s", strerror(errno));
+          last_send_error_log_ms = now_ms;
+        }
       }
       pthread_mutex_unlock(&a->sh->mtx);
     }
