@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 static void die(const char* msg) {
   fprintf(stderr, "FAIL: %s\n", msg);
@@ -16,7 +19,14 @@ static void expect_true(int cond, const char* msg) {
 
 static void write_tmp_config(const char* contents, char out_path[], size_t out_path_size) {
   static unsigned counter = 0;
+#ifdef _WIN32
+  char tmp_dir[MAX_PATH] = {0};
+  DWORD n = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+  if (n == 0 || n >= sizeof(tmp_dir)) die("GetTempPathA failed");
+  snprintf(out_path, out_path_size, "%sstc_cfg_test_%lu_%u.ini", tmp_dir, (unsigned long)GetCurrentProcessId(), counter++);
+#else
   snprintf(out_path, out_path_size, "/tmp/stc_cfg_test_%ld_%u.ini", (long)getpid(), counter++);
+#endif
 
   FILE* f = fopen(out_path, "w");
   if (!f) die("fopen failed");

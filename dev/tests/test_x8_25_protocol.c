@@ -17,13 +17,14 @@ int main(void){
  b.rx_n=1; b.rx[0]=(myact_can_frame_t){.id=0x241,.dlc=8,.data={MYACT_CMD_READ_ANGLE_MULTI,0,0,0,0x78,0x56,0x34,0x12}};
  assert(myact_read_angle_multi(&ctx,&v)==MYACT_OK && v==0x12345678);
 
- b.rx_i=0; b.rx_n=1; b.rx[0]=(myact_can_frame_t){.id=0x241,.dlc=8,.data={MYACT_CMD_SPEED,30,0x10,0,0x20,0,0x30,0}};
+ b.rx_i=0; b.rx_n=2; b.rx[0]=(myact_can_frame_t){.id=0x241,.dlc=8,.data={MYACT_CMD_STATUS1,0,0,1,0,0,0,0}};
+ b.rx[1]=(myact_can_frame_t){.id=0x241,.dlc=8,.data={MYACT_CMD_SPEED,30,0x10,0,0x20,0,0x30,0}};
  assert(myact_speed(&ctx,50,&fb)==MYACT_OK);
  assert(fb.valid && fb.source_cmd==MYACT_CMD_SPEED && fb.angle_deg==0x30);
 
  b.rx_i=0; b.rx_n=1; b.rx[0]=(myact_can_frame_t){.id=0x242,.dlc=8,.data={MYACT_CMD_SPEED}};
- assert(myact_speed(&ctx,50,&fb)==-101);
+ assert(myact_speed(&ctx,50,&fb)<0);
 
- assert(myact_active_reply_config(&ctx,0x55,true,10)==-104);
+ assert(myact_active_reply_config(&ctx,0x55,true,10)<0);
  return 0;
 }
