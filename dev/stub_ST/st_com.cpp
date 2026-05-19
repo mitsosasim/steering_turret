@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Implements stub TCP command processing and UDP telemetry transmission.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Uses non-blocking sockets, frame reassembly for TCP command streams, and
+ *   cooperative thread shutdown by closing sockets and joining worker threads.
  */
 
 // st_com.cpp - Communication handler implementing ICD for turret stub.

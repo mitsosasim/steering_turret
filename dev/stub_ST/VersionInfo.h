@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Single source of truth for ST stub software version strings.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Build-system macros feed semantic version and commit metadata used by
+ *   software-version responses without duplicating literal strings elsewhere.
  */
 
 #pragma once
