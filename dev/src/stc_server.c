@@ -5,22 +5,16 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   STC runtime daemon orchestrator. Bridges TCP ICD commands to backend motion
+ *   actions and publishes high-rate (TLMH) plus low-rate (TLML) UDP telemetry.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Shared runtime state is mutex-protected and snapshotted for producers/consumers.
+ *   Only the CAN worker thread owns and calls the motion backend interface.
+ *   TCP command path validates/parses CMD frames and enqueues internal actions.
+ *   Telemetry threads read shared snapshots and pack/publish TLMH/TLML frames.
+ *   SAFE/OPER/FAIL state gating prevents unsafe motion command execution.
  */
-
-// stc_server.c
-//
-// STC runtime daemon (TCP CMD/RSP <-> CANopen PD4-C) + UDP unicast telemetry.
-//
-// Architecture:
-//  - TCP thread (main): receive CMD, parse/validate, perform fast side-effects (state/manualpos),
-//    and enqueue discrete actions for CAN worker.
-//  - CAN worker thread: owns pd4c_ctx_t, executes queued commands, runs safety watchdog,
-//    polls TPDOs and updates shared telemetry.
-//  - Telemetry threads: publish TLMH @100Hz and TLML @10Hz over UDP unicast.
 //
 /* Build example:
  *   gcc -std=c11 -O2 -Wall -Wextra -pthread \
@@ -469,6 +463,7 @@ static int is_allowed_controller(uint8_t cid, const shared_data_t* sh) {
   return 0;
 }
 
+/** Fast structural/range/state precheck before command-to-action conversion. */
 static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
                                        const shared_data_t* sh,
                                        const stc_icd_cmd_t* c) {
@@ -544,6 +539,7 @@ static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
 }
 
 
+/** Apply one state-machine event while shared mutex is held; arms FAIL quick-stop intent. */
 static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
   const stc_state_t prev = sh->d.st_state;
   stc_state_t next = sh->d.st_state;
@@ -555,6 +551,7 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
                  stc_state_to_string(next));
   }
   if (next == STC_STATE_FAIL && prev != STC_STATE_FAIL) {
+    /* FAIL is latched centrally; CAN worker executes quick-stop on this mask. */
     uint32_t mask = 0;
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       if (sh->d.axis_expected[axis] ||
@@ -581,6 +578,7 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
   return 0;
 }
 
+/** Enter IBIT_RUNNING and schedule deferred IBIT completion evaluation. */
 static int shared_start_ibit_locked(shared_t* sh, uint64_t now_ms) {
   if (shared_transition_locked(sh, EVT_IBIT) != 0) return -1;
   sh->d.ibit_pending = 1;
@@ -588,6 +586,7 @@ static int shared_start_ibit_locked(shared_t* sh, uint64_t now_ms) {
   return 0;
 }
 
+/** Derive IBIT completion event from latest availability/fault health snapshot. */
 static stc_event_t ibit_completion_event_locked(const shared_data_t* d) {
   int expected_axes = 0;
   int available_axes = 0;
@@ -610,12 +609,14 @@ static stc_event_t ibit_completion_event_locked(const shared_data_t* d) {
   return run_ibit_sequence((shared_data_t*)d) ? EVT_IBIT_COMPLETE_OK : EVT_IBIT_COMPLETE_FAIL;
 }
 
+/** Decide SELFLEV completion event from CAN health while lock is held. */
 static stc_event_t selflev_completion_event_locked(const shared_data_t* d) {
   if (!d) return EVT_ENTER_SAFE;
   if (!d->can_ok) return EVT_ENTER_SAFE;
   return EVT_SELF_LEV_DONE;
 }
 
+/** Latch per-axis saturation indicator for TLML diagnostics reporting window. */
 static void mark_axis_saturated(shared_data_t* sh, int axis, int limited) {
   if (!limited) return;
   if (axis < 0 || axis >= (int)STC_AXIS_COUNT) return;
@@ -655,12 +656,14 @@ static void log_axis_final_status(shared_t* sh, int axis) {
                stale);
 }
 
+/** Check axis index against compiled model and configured runtime axis count. */
 static int axis_in_runtime_range(const shared_data_t* sh, int axis) {
   if (!sh) return 0;
   if (axis < 0 || axis >= (int)STC_AXIS_COUNT) return 0;
   return axis < sh->num_axes;
 }
 
+/** Axis is operational only when mapped, expected, connected, and not faulted. */
 static int axis_is_operational(const shared_data_t* sh, int axis) {
   if (!axis_in_runtime_range(sh, axis)) return 0;
   if (!sh->axis_expected[axis]) return 0;
@@ -677,6 +680,7 @@ static int sut_index_from_laser_id(const shared_data_t* sh, uint8_t laser_id) {
   return idx;
 }
 
+/** Build axis mask for turret pair mapping (AZ/EL). */
 static uint32_t turret_axes_mask(const shared_data_t* sh) {
   uint32_t mask = 0;
   if (sh->turret_az_axis >= 0 && sh->turret_az_axis < (int)STC_AXIS_COUNT) mask |= (1u << sh->turret_az_axis);
@@ -684,6 +688,7 @@ static uint32_t turret_axes_mask(const shared_data_t* sh) {
   return mask;
 }
 
+/** Build axis mask for one/all SUT mappings with operational filtering for broadcast. */
 static uint32_t sut_axes_mask(const shared_data_t* sh, uint8_t id) {
   uint32_t mask = 0;
   if (id == 0xFF) {
@@ -703,6 +708,7 @@ static uint32_t sut_axes_mask(const shared_data_t* sh, uint8_t id) {
   return mask;
 }
 
+/** Build axis mask for one/all mirror mappings with operational filtering for broadcast. */
 static uint32_t mirror_axes_mask(const shared_data_t* sh, uint8_t id) {
   uint32_t mask = 0;
   if (id == 0xFF) {
@@ -1088,6 +1094,7 @@ typedef struct {
 _Atomic uint64_t g_can_worker_action_dispatch_iterations = 0;
 #endif
 
+/** CAN worker owns backend lifetime, executes queued actions, and updates shared health/telemetry. */
 static void* can_worker_thread(void* arg) {
   can_worker_arg_t* a = (can_worker_arg_t*)arg;
   const uint64_t maintenance_period_ms = 10;
@@ -1153,6 +1160,7 @@ static void* can_worker_thread(void* arg) {
 
     motion_snapshot_t snap;
     if (motion_backend_get_snapshot(backend, &snap) == 0) {
+      /* Backend snapshot drives shared telemetry plus CAN stale/fault health evaluation. */
       pthread_mutex_lock(&a->sh->mtx);
       a->sh->d.can_ok = snap.can_ok;
       a->sh->d.can_connected_devices = snap.can_connected_devices;
@@ -1593,6 +1601,7 @@ static void format_ipv4_addr(const struct in_addr* addr, char* out, size_t out_s
   }
 }
 
+/** Send telemetry only when CU destination is known; updates per-thread TX stats. */
 static int telemetry_send_if_dest_available(const tlm_tx_arg_t* a,
                                             const uint8_t* buf,
                                             size_t blen) {
@@ -1807,6 +1816,7 @@ static void* diag_server_thread(void* arg) {
   return NULL;
 }
 
+/** High-rate telemetry publisher thread (TLMH) with periodic scheduling and jitter accounting. */
 static void* tlmh_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
@@ -1839,6 +1849,7 @@ static void* tlmh_tx_thread(void* arg) {
     uint8_t buf[512];
     size_t blen = 0;
     if (stc_icd_tlmh_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
+      /* Destination is selected from last CU endpoint observed on TCP command channel. */
       int tx_rc = telemetry_send_if_dest_available(a, buf, blen);
       pthread_mutex_lock(&a->sh->mtx);
       if (tx_rc == 0) {
@@ -1866,6 +1877,7 @@ static void* tlmh_tx_thread(void* arg) {
   return NULL;
 }
 
+/** Low-rate telemetry publisher thread (TLML) carrying health/state/diagnostic summaries. */
 static void* tlml_tx_thread(void* arg) {
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
@@ -2001,6 +2013,7 @@ static void* tlml_tx_thread(void* arg) {
     uint8_t buf[1024];
     size_t blen = 0;
     if (stc_icd_tlml_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
+      /* Destination is selected from last CU endpoint observed on TCP command channel. */
       int tx_rc = telemetry_send_if_dest_available(a, buf, blen);
       pthread_mutex_lock(&a->sh->mtx);
       if (tx_rc == 0) {
@@ -2081,6 +2094,7 @@ typedef struct {
   int has_tlml_hz;
 } cli_override_flags_t;
 
+/** Startup PBIT orchestration; returns state-machine event consumed by main startup path. */
 static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net) {
   if (!sh || !net) {
     STC_LOG_ERROR("PBIT FAIL: invalid startup context");
@@ -2124,6 +2138,7 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
   return EVT_PBIT_FAIL;
 }
 
+/** Administrative reset helper that runs IBIT sequence and maps result to transition event. */
 static stc_event_t run_admin_reset_ibit(const shared_t* sh, const runtime_net_t* net) {
   if (!sh || !net) {
     STC_LOG_ERROR("RESET/IBIT recovery FAIL: invalid context");
@@ -2167,6 +2182,7 @@ static stc_event_t run_admin_reset_ibit(const shared_t* sh, const runtime_net_t*
   return EVT_IBIT_COMPLETE_FAIL;
 }
 
+/** Copy parsed INI model into shared runtime structures once during startup/reload. */
 static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.num_axes = cfg->num_axes;
   memset(sh->d.axis_expected, 0, sizeof(sh->d.axis_expected));
@@ -2259,6 +2275,7 @@ static const char* select_backend_name(const stc_config_t* cfg) {
   return NULL;
 }
 
+/** Process entrypoint: startup/config, thread bring-up, TCP command loop, orderly shutdown. */
 int main(int argc, char** argv) {
   int exit_code = 0;
   int threads_started = 0;
@@ -2944,6 +2961,7 @@ int main(int argc, char** argv) {
             stc_action_make_set_laser(&act, cmd.u.laser.id, cmd.u.laser.on_off);
             has_action = 1;
           } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
+            /* State gating: motion-producing commands are accepted only in move-capable states. */
             if (!stc_state_can_move(sh.d.st_state)) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             } else {
@@ -3082,6 +3100,7 @@ int main(int argc, char** argv) {
               } else if (axes_mask == 0) {
                 v = STC_ERR_VALUE_OUT_OF_RANGE;
               } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
+                /* Command-to-action conversion: speed commands become stream actions, others become bounded moves. */
                 if ((cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_SPEED) ||
                     (cmd.cmd_id == STC_CMD_SUT && cmd.u.sut.motion_type == STC_MOTION_SPEED) ||
                     (cmd.cmd_id == STC_CMD_MIRROR && cmd.u.mirror.motion_type == STC_MOTION_SPEED)) {
@@ -3091,6 +3110,7 @@ int main(int argc, char** argv) {
                     sh.d.stream[axis].last_cmd_ms = now_cmd;
                     sh.d.stream[axis].enabled = 1;
                   }
+                  /* Stream-speed uses keep-latest semantics in action queue coalescing path. */
                   stc_action_make_stream_speed(&act, axes_mask, speeds);
                 } else {
                   stc_axis_motion_kind_t kinds[STC_AXIS_COUNT];
