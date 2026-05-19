@@ -138,8 +138,10 @@ int main(int argc, char** argv) {
     int port = atoi(argv[1]);
     if (port == 6010) {
       enable_tlmh_only(port, &tlmh_port, &tlml_enabled);
+      tlmh_ip = "0.0.0.0";
     } else if (port == 6020) {
       enable_tlml_only(port, &tlml_port, &tlmh_enabled);
+      tlml_ip = "0.0.0.0";
     } else {
       print_usage(stderr, argv[0]);
       return 2;
@@ -169,11 +171,8 @@ int main(int argc, char** argv) {
     if (fd_l < 0) { perror("open_mcast_rx(TLML)"); return 1; }
   }
 
-  printf("Listening multicast:\n");
-  if (tlmh_enabled) printf("  TLMH: %s:%d (expected ~100 Hz)\n", tlmh_ip, tlmh_port);
-  if (tlml_enabled) printf("  TLML: %s:%d (expected ~10 Hz)\n",  tlml_ip, tlml_port);
-  if (ifname) printf("  Interface: %s\n", ifname);
-  printf("\n");
+  if (tlmh_enabled) printf("listening UDP 0.0.0.0:%d stream=TLMH\n", tlmh_port);
+  if (tlml_enabled) printf("listening UDP 0.0.0.0:%d stream=TLML\n", tlml_port);
 
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
   cfg.strict_magic = 1;
