@@ -266,6 +266,7 @@ typedef struct shared_data {
   uint16_t seq_h;
   uint16_t seq_l;
   uint64_t boot_ms;
+  uint64_t server_start_ms;
 
   // --- observability
   tx_timing_stats_t tlmh_timing;
@@ -1093,7 +1094,7 @@ static void* can_worker_thread(void* arg) {
     int critical_emcy = 0;
     const uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
     const uint32_t startup_feedback_grace_ms = a->sh->d.startup_feedback_grace_ms;
-    const int in_startup_grace = stc_is_within_startup_grace(now, a->sh->d.boot_ms, startup_feedback_grace_ms);
+    const int in_startup_grace = stc_is_within_startup_grace(now, a->sh->d.server_start_ms, startup_feedback_grace_ms);
     const int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       const int expected = a->sh->d.axis_expected[axis] ? 1 : 0;
@@ -1661,7 +1662,7 @@ static void* tlml_tx_thread(void* arg) {
     uint8_t laser_status_snapshot[8];
     memcpy(laser_status_snapshot, a->sh->d.sut_laser_on, sizeof(laser_status_snapshot));
     int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
-    const int in_startup_grace = stc_is_within_startup_grace(nowm, a->sh->d.boot_ms, startup_feedback_grace_ms);
+    const int in_startup_grace = stc_is_within_startup_grace(nowm, a->sh->d.server_start_ms, startup_feedback_grace_ms);
     pthread_mutex_unlock(&a->sh->mtx);
 
     m.timestamp_ms = noww;
@@ -1997,6 +1998,7 @@ int main(int argc, char** argv) {
   memset(&sh.d.telem, 0, sizeof(sh.d.telem));
   memset(&sh.d.stream, 0, sizeof(sh.d.stream));
   sh.d.boot_ms = mono_ms();
+  sh.d.server_start_ms = sh.d.boot_ms;
 
   // defaults (axis 0 from CLI; axes 1..17 remain zero/disabled in step3)
   sh.d.cfg[0].counts_per_rev = 4096.0;
