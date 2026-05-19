@@ -38,6 +38,7 @@ add_executable(stc_server
   dev/src/stc_faults.c
   dev/src/stc_diag.c
   dev/src/motion_backend_router.c
+  dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
 
@@ -98,6 +99,7 @@ add_executable(stc_state_test
   dev/src/stc_diag.c
   dev/src/stc_log.c
   dev/src/motion_backend_router.c
+  dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
 
@@ -115,6 +117,7 @@ add_executable(stc_diag_test
   dev/src/stc_diag.c
   dev/src/stc_log.c
   dev/src/motion_backend_router.c
+  dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
 
@@ -125,6 +128,7 @@ add_executable(test_diag_state_integration
   dev/src/stc_diag.c
   dev/src/stc_log.c
   dev/src/motion_backend_router.c
+  dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
 
@@ -201,6 +205,7 @@ add_executable(test_can_worker_concurrency
   dev/src/stc_faults.c
   dev/src/stc_diag.c
   dev/src/motion_backend_router.c
+  dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
 
@@ -228,6 +233,7 @@ add_executable(test_can_worker_concurrency_tsan
   dev/src/stc_faults.c
   dev/src/stc_diag.c
   dev/src/motion_backend_router.c
+  dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
 
