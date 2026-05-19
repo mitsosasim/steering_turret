@@ -157,7 +157,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->num_axes = (int)STC_AXIS_COUNT;
   cfg->turret_az_axis = -1;
   cfg->turret_el_axis = -1;
-  cfg->sut_count = STC_MAX_SUT;
+  cfg->sut_count = 0;
   cfg->mirror_count = 0;
 
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
@@ -481,6 +481,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
       }
 
       if (!recognized) {
+        if (strcmp(key, "startup_feedback_grace_ms") == 0) {
+          STC_LOG_ERROR("%s:%d: startup_feedback_grace_ms belongs in [Runtime], not [AxisN]", path, line_no);
+          fclose(f);
+          return false;
+        }
         parse_error_reason = "unknown key";
         goto parse_error;
       }
