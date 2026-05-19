@@ -233,7 +233,7 @@ static void normalize_snapshot_from_feedback(struct motion_backend* b, size_t ax
   const double axis_angle_deg = ((double)angle_deg) / gr;
   b->snap.vel_raw[axis] = (int32_t)llround(axis_speed_deg_s * cpd);
   b->snap.pos_raw[axis] = (int32_t)llround(axis_angle_deg * cpd);
-  b->snap.status_word[axis] = (uint16_t)iq_0p01a;
+  (void)iq_0p01a;
   b->snap.last_rx_ms[axis] = t_ms;
 }
 
@@ -245,6 +245,12 @@ static void refresh_feedback_locked(struct motion_backend* b, uint64_t t_ms) {
     size_t axis;
     for (axis = 0; axis < STC_AXIS_COUNT; axis++) if (b->cfg.axis_node_id[axis] == node_id) break;
     if (axis >= STC_AXIS_COUNT) continue;
+    if (f.data[0] == MYACT_CMD_READ_STATUS1) {
+      const uint16_t error_flags = (uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8);
+      b->snap.status_word[axis] = error_flags;
+      b->snap.last_rx_ms[axis] = t_ms;
+      continue;
+    }
     if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS || f.data[0] == MYACT_CMD_POS_INC) {
       const int16_t iq_0p01a = (int16_t)((uint16_t)f.data[2] | ((uint16_t)f.data[3] << 8));
       const int16_t speed_dps = (int16_t)((uint16_t)f.data[4] | ((uint16_t)f.data[5] << 8));
@@ -565,7 +571,7 @@ int myact_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot
 
   pthread_mutex_lock(&b->lock);
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    b->snap.fault_active[axis] = (b->snap.status_word[axis] & 0x0008u) ? 1u : 0u;
+    b->snap.fault_active[axis] = (b->snap.status_word[axis] != 0u) ? 1u : 0u;
     const uint64_t cmd_ms = b->last_cmd_ms[axis];
     b->snap.command_age_ms[axis] = (cmd_ms > 0 && now_ms() >= cmd_ms) ? (uint32_t)(now_ms() - cmd_ms) : 0u;
     const int32_t pos_err = b->snap.pos_raw[axis] - b->cmd_pos_raw[axis];
