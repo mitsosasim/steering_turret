@@ -126,6 +126,7 @@ static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg) {
     case STC_ERR_INSUFFICIENT_RES: err_name = "STC_ERR_INSUFFICIENT_RES"; break;
     case STC_ERR_TIMEOUT: err_name = "STC_ERR_TIMEOUT"; break;
     case STC_ERR_COMMAND_NOT_IMPLEMENTED: err_name = "STC_ERR_COMMAND_NOT_IMPLEMENTED"; break;
+    case STC_ERR_NOT_CONFIGURED: err_name = "STC_ERR_NOT_CONFIGURED"; break;
     case STC_ERR_GENERIC: err_name = "STC_ERR_GENERIC"; break;
   }
 
