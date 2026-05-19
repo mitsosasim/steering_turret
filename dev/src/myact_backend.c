@@ -330,7 +330,6 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
     }
     const int speed_rc = send_myact_cmd(b, node_id, MYACT_CMD_SPEED, 0, speed_0p01dps);
     if (speed_rc == 0) {
-      STC_LOG_INFO("axis%zu MYACT A2 speed_deg_s=%.3f rc=OK", axis, clamped);
       b->speed_active[axis] = (speed_0p01dps != 0);
       b->last_speed_raw_0p01dps[axis] = speed_0p01dps;
       b->last_speed_cmd_ms[axis] = m->cmd_ts_ms;

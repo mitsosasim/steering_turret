@@ -1024,6 +1024,7 @@ _Atomic uint64_t g_can_worker_action_dispatch_iterations = 0;
 static void* can_worker_thread(void* arg) {
   can_worker_arg_t* a = (can_worker_arg_t*)arg;
   const uint64_t maintenance_period_ms = 10;
+  const uint64_t speed_stream_period_ms = 50;
   uint64_t next_maintenance_ms = mono_ms();
 
   motion_backend_cfg_t backend_cfg;
@@ -1063,6 +1064,14 @@ static void* can_worker_thread(void* arg) {
   (void)motion_backend_discover(backend);
 
   int axis_enabled[STC_AXIS_COUNT] = {0};
+  uint8_t speed_stream_active[STC_AXIS_COUNT] = {0};
+  double speed_stream_target_deg_s[STC_AXIS_COUNT] = {0.0};
+  uint64_t next_speed_send_ms[STC_AXIS_COUNT] = {0};
+  uint64_t speed_stream_start_ms[STC_AXIS_COUNT] = {0};
+  uint32_t speed_stream_tx_count[STC_AXIS_COUNT] = {0};
+  uint32_t speed_stream_fail_count[STC_AXIS_COUNT] = {0};
+  uint32_t speed_stream_consecutive_failures[STC_AXIS_COUNT] = {0};
+  uint64_t speed_stream_last_fail_log_ms[STC_AXIS_COUNT] = {0};
 
   while (!atomic_load(&g_stop)) {
     uint64_t now = mono_ms();
@@ -1389,17 +1398,71 @@ static void* can_worker_thread(void* arg) {
       last_cmd_ms = a->sh->d.stream[axis].last_cmd_ms;
       pthread_mutex_unlock(&a->sh->mtx);
 
-      if (!speed_on) continue;
+      if (!speed_on) {
+        if (speed_stream_active[axis]) {
+          const uint64_t duration_ms = (now >= speed_stream_start_ms[axis]) ? (now - speed_stream_start_ms[axis]) : 0;
+          STC_LOG_INFO("axis%zu MYACT speed stream summary tx=%u fail=%u duration_ms=%" PRIu64,
+                       axis,
+                       speed_stream_tx_count[axis],
+                       speed_stream_fail_count[axis],
+                       duration_ms);
+          STC_LOG_INFO("axis%zu MYACT speed stream stop", axis);
+          speed_stream_active[axis] = 0;
+        }
+        continue;
+      }
       if (watchdog_ms > 0 && (int)(now - last_cmd_ms) > watchdog_ms) {
         pthread_mutex_lock(&a->sh->mtx);
         a->sh->d.stream[axis].enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
         (void)motion_backend_quick_stop(backend, (1u << axis));
         axis_enabled[axis] = 0;
+        if (speed_stream_active[axis]) {
+          const uint64_t duration_ms = (now >= speed_stream_start_ms[axis]) ? (now - speed_stream_start_ms[axis]) : 0;
+          STC_LOG_INFO("axis%zu MYACT speed stream summary tx=%u fail=%u duration_ms=%" PRIu64,
+                       axis,
+                       speed_stream_tx_count[axis],
+                       speed_stream_fail_count[axis],
+                       duration_ms);
+          STC_LOG_INFO("axis%zu MYACT speed stream stop", axis);
+          speed_stream_active[axis] = 0;
+        }
       } else {
-        double speeds[STC_AXIS_COUNT] = {0};
-        speeds[axis] = desired_deg_s;
-        (void)motion_backend_apply_speed(backend, (1u << axis), speeds);
+        if (!speed_stream_active[axis]) {
+          double speeds[STC_AXIS_COUNT] = {0};
+          int send_rc = 0;
+          speeds[axis] = desired_deg_s;
+          send_rc = motion_backend_apply_speed(backend, (1u << axis), speeds);
+          speed_stream_active[axis] = 1;
+          speed_stream_target_deg_s[axis] = desired_deg_s;
+          next_speed_send_ms[axis] = now + speed_stream_period_ms;
+          speed_stream_start_ms[axis] = now;
+          speed_stream_tx_count[axis] = (send_rc == 0) ? 1u : 0u;
+          speed_stream_fail_count[axis] = (send_rc == 0) ? 0u : 1u;
+          speed_stream_consecutive_failures[axis] = (send_rc == 0) ? 0u : 1u;
+          speed_stream_last_fail_log_ms[axis] = 0;
+          STC_LOG_INFO("axis%zu MYACT speed stream start speed_deg_s=%.3f period_ms=%" PRIu64, axis, desired_deg_s, speed_stream_period_ms);
+          if (send_rc != 0) STC_LOG_WARN("axis%zu MYACT speed stream A2 tx failed rc=%d", axis, send_rc);
+        } else if (now >= next_speed_send_ms[axis]) {
+          double speeds[STC_AXIS_COUNT] = {0};
+          const int target_changed = (desired_deg_s != speed_stream_target_deg_s[axis]);
+          speeds[axis] = desired_deg_s;
+          if (target_changed) speed_stream_target_deg_s[axis] = desired_deg_s;
+          const int send_rc = motion_backend_apply_speed(backend, (1u << axis), speeds);
+          if (send_rc == 0) {
+            speed_stream_tx_count[axis]++;
+            speed_stream_consecutive_failures[axis] = 0;
+          } else {
+            speed_stream_fail_count[axis]++;
+            speed_stream_consecutive_failures[axis]++;
+            if ((now - speed_stream_last_fail_log_ms[axis]) >= 1000 || speed_stream_consecutive_failures[axis] >= 3) {
+              STC_LOG_WARN("axis%zu MYACT speed stream A2 tx failed rc=%d consec=%u", axis, send_rc, speed_stream_consecutive_failures[axis]);
+              speed_stream_last_fail_log_ms[axis] = now;
+            }
+          }
+          next_speed_send_ms[axis] += speed_stream_period_ms;
+          if (next_speed_send_ms[axis] < now) next_speed_send_ms[axis] = now + speed_stream_period_ms;
+        }
         axis_enabled[axis] = 1;
       }
     }
