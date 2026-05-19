@@ -274,6 +274,12 @@ int main(int argc, char** argv) {
                m.state, (unsigned)m.uptime_sec,
                m.lat, m.lon, m.alt_m, m.heading_deg, (unsigned)m.error_count);
 
+        printf(" lasers=");
+        for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+          printf("SUT%zu:%u%s", i + 1u, (unsigned)(m.laser_status[i] ? 1u : 0u),
+                 (i + 1u < STC_ICD_LASER_COUNT) ? "," : "");
+        }
+
         if (dt > 0.0) printf("  (dt=%.1f ms)", dt*1000.0);
         printf("\n");
 
