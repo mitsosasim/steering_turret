@@ -1,10 +1,18 @@
 #include "x8_25.h"
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#ifdef NDEBUG
+#define TEST_ASSERT_OR_ABORT(cond) do { if (!(cond)) { fprintf(stderr, "CHECK failed: %s\n", #cond); abort(); } } while (0)
+#else
+#define TEST_ASSERT_OR_ABORT(cond) assert(cond)
+#endif
 
 static void check_ids(uint8_t node, uint32_t req, uint32_t rep) {
-  assert((uint32_t)(0x140u + (uint32_t)node) == req);
-  assert((uint32_t)(0x240u + (uint32_t)node) == rep);
+  TEST_ASSERT_OR_ABORT((uint32_t)(0x140u + (uint32_t)node) == req);
+  TEST_ASSERT_OR_ABORT((uint32_t)(0x240u + (uint32_t)node) == rep);
 }
 
 int main(void) {

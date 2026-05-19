@@ -15,6 +15,16 @@ static double safe_vel_scale(const axis_cfg_t* cfg) {
   return (cfg && cfg->vel_scale != 0.0) ? cfg->vel_scale : 1.0;
 }
 
+const char* axis_driver_to_string(stc_axis_driver_t driver) {
+  switch (driver) {
+    case STC_AXIS_DRIVER_DISABLED: return "disabled";
+    case STC_AXIS_DRIVER_PD4C: return "pd4c";
+    case STC_AXIS_DRIVER_MYACT_X8_25: return "myact_x8_25";
+    case STC_AXIS_DRIVER_SIM: return "sim";
+    default: return "unknown";
+  }
+}
+
 double axis_counts_to_deg(const axis_cfg_t* cfg, int32_t counts) {
   const double cpr = safe_cpr(cfg);
   const double gr = safe_gr(cfg);

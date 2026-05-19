@@ -5,15 +5,21 @@
 #include <assert.h>
 #include <stdio.h>
 
+#ifdef NDEBUG
+#define TEST_CHECK(cond) do { if (!(cond)) { fprintf(stderr, "CHECK failed: %s\n", #cond); return; } } while (0)
+#else
+#define TEST_CHECK(cond) assert(cond)
+#endif
+
 static void expect_transition(stc_state_t from, stc_event_t evt, stc_state_t to) {
   stc_state_t next;
-  assert(stc_state_transition(from, evt, &next) == 0);
-  assert(next == to);
+  TEST_CHECK(stc_state_transition(from, evt, &next) == 0);
+  TEST_CHECK(next == to);
 }
 
 static void expect_invalid(stc_state_t from, stc_event_t evt) {
   stc_state_t next = STC_STATE_INIT;
-  assert(stc_state_transition(from, evt, &next) != 0);
+  TEST_CHECK(stc_state_transition(from, evt, &next) != 0);
 }
 
 int main(void) {
