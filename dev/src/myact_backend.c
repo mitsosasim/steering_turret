@@ -2,6 +2,7 @@
 
 #include "motion_backend.h"
 #include "stc_log.h"
+#include "stc_limits.h"
 
 #include <errno.h>
 #include <linux/can.h>
@@ -349,10 +350,30 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
     const uint16_t speed_dps = (uint16_t)fmax(1.0, fmin(65535.0, max_speed * gr));
     int cmd_ok = -1;
     if (m->kind == AXIS_CMD_POSITION_REL) {
-      const int32_t delta_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
+      const double current_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
+      double requested_abs = 0.0;
+      double clamped_abs = 0.0;
+      double effective_delta = 0.0;
+      const bool saturated = stc_compute_effective_delta(current_deg,
+                                                         m->value,
+                                                         cfg->az_min_deg,
+                                                         cfg->az_max_deg,
+                                                         &requested_abs,
+                                                         &clamped_abs,
+                                                         &effective_delta);
+      if (saturated) {
+        STC_LOG_WARN("axis%zu command saturated: current=%.3f requested_delta=%.3f requested_abs=%.3f clamped_abs=%.3f effective_delta=%.3f",
+                     axis,
+                     current_deg,
+                     m->value,
+                     requested_abs,
+                     clamped_abs,
+                     effective_delta);
+      }
+      const int32_t delta_0p01deg = (int32_t)llround(effective_delta * gr * 100.0);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
       if (cmd_ok == 0) {
-        STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, target_deg, max_speed);
+        STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, effective_delta, max_speed);
         b->last_abs_via_a8_service[axis] = 1;
       } else log_myact_failure(b, axis, "A8", cmd_ok);
     } else if (b->native_abs_validated[axis]) {
