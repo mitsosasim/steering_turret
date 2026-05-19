@@ -1007,7 +1007,17 @@ static void* can_worker_thread(void* arg) {
       memcpy(a->sh->d.can_discovered_nodes, snap.can_discovered_nodes, sizeof(a->sh->d.can_discovered_nodes));
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
         a->sh->d.axis_available[axis] = snap.axis_available[axis];
-        a->sh->d.last_rx_ms[axis] = snap.last_rx_ms[axis];
+        uint64_t rx_ms = snap.last_rx_ms[axis];
+        if (rx_ms == 0 && a->sh->d.axis_expected[axis]) {
+          /*
+           * During startup some backends can report "connected/available"
+           * before they publish the first feedback timestamp. Treat the
+           * current snapshot time as fresh telemetry so CBIT stale detection
+           * does not force an immediate FAIL right after successful PBIT.
+           */
+          rx_ms = now;
+        }
+        a->sh->d.last_rx_ms[axis] = rx_ms;
         axis_telem_update(&a->sh->d.telem[axis],
                           &a->sh->d.cfg[axis],
                           snap.pos_raw[axis],
