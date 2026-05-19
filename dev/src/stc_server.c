@@ -769,7 +769,11 @@ static rt_probe_result_t probe_rt_privilege(int policy, int requested_priority) 
 
 static int enforce_rt_startup_policy(runtime_sched_t* sched_cfg,
                                      const char* binary_hint) {
-  if (!sched_cfg || !sched_cfg->rt_enabled) return 0;
+  if (!sched_cfg) return 0;
+  if (!sched_cfg->rt_enabled) {
+    STC_LOG_INFO("RT scheduling disabled by config/CLI");
+    return 0;
+  }
   if (sched_cfg->sched_policy == SCHED_OTHER) {
     STC_LOG_INFO("RT startup probe skipped: requested policy=%s", sched_policy_name(sched_cfg->sched_policy));
     return 0;
