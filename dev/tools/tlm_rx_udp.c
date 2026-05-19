@@ -274,14 +274,38 @@ int main(int argc, char** argv) {
                m.state, (unsigned)m.uptime_sec,
                m.lat, m.lon, m.alt_m, m.heading_deg, (unsigned)m.error_count);
 
-        printf(" lasers=");
-        for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) {
-          printf("SUT%zu:%u%s", i + 1u, (unsigned)(m.laser_status[i] ? 1u : 0u),
-                 (i + 1u < STC_ICD_LASER_COUNT) ? "," : "");
+        if (!verbose) {
+          printf(" motors=");
+          for (size_t i = 0; i < STC_ICD_AXES_COUNT; ++i) {
+            printf("%02X%s", m.motor_status[i],
+                   (i + 1u < STC_ICD_AXES_COUNT) ? "," : "");
+          }
+
+          printf(" lasers=");
+          for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+            printf("%02X%s", m.laser_status[i],
+                   (i + 1u < STC_ICD_LASER_COUNT) ? "," : "");
+          }
         }
 
         if (dt > 0.0) printf("  (dt=%.1f ms)", dt*1000.0);
         printf("\n");
+
+        if (verbose) {
+          printf("  motor_status[%u]=", (unsigned)STC_ICD_AXES_COUNT);
+          for (size_t i = 0; i < STC_ICD_AXES_COUNT; ++i) {
+            printf("%02X%s", m.motor_status[i],
+                   (i + 1u < STC_ICD_AXES_COUNT) ? " " : "");
+          }
+          printf("\n");
+
+          printf("  laser_status[%u]=", (unsigned)STC_ICD_LASER_COUNT);
+          for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+            printf("%02X%s", m.laser_status[i],
+                   (i + 1u < STC_ICD_LASER_COUNT) ? " " : "");
+          }
+          printf("\n");
+        }
 
         if (m.error_count > 0) {
           for (unsigned i = 0; i < m.error_count; i++) {
