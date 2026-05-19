@@ -1728,8 +1728,8 @@ static void* tlml_tx_thread(void* arg) {
 
 /* ----------------------------- TCP server loop ----------------------------- */
 
-static void usage(const char* p) {
-  STC_LOG_ERROR("Usage: %s [--tcp-port 7000] [--can can0] [--node 1] [--can-bitrate 1000] [--can-restart-ms 100]\n"
+static void print_usage(FILE* out, const char* p) {
+  fprintf(out, "Usage: %s [--tcp-port 7000] [--can can0] [--node 1] [--can-bitrate 1000] [--can-restart-ms 100]\n"
           "          [--can-scan-max-node 32]\n"
           "          [--config dev/config/stc_default.ini]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
@@ -1742,6 +1742,11 @@ static void usage(const char* p) {
           "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n"
           "          [--diag-port 0|PORT] [--strict-stale-policy 0|1]\n",
           p);
+}
+
+static void usage(const char* p) {
+  STC_LOG_ERROR("Invalid command-line arguments");
+  print_usage(stderr, p);
 }
 
 
@@ -2006,7 +2011,11 @@ int main(int argc, char** argv) {
   sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
 
   for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "--can") && i + 1 < argc) net.can_if = argv[++i];
+    if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+      print_usage(stdout, argv[0]);
+      return 0;
+    }
+    else if (!strcmp(argv[i], "--can") && i + 1 < argc) net.can_if = argv[++i];
     else if (!strcmp(argv[i], "--can-bitrate") && i + 1 < argc) net.can_bitrate = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--can-restart-ms") && i + 1 < argc) net.can_restart_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--can-scan-max-node") && i + 1 < argc) net.can_scan_max_node = atoi(argv[++i]);
