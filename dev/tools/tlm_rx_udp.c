@@ -282,12 +282,13 @@ int main(int argc, char** argv) {
             uint32_t code = m.errors[i];
             uint8_t cat = (uint8_t)((code >> 24) & 0xFFu);
             uint8_t sub = (uint8_t)((code >> 16) & 0xFFu);
-            uint16_t err = (uint16_t)(code & 0xFFFFu);
-            printf("  Diag[%u]: Cat=%u Sub=%u Err=%u (0x%08X)\n",
+            uint16_t err_code = (uint16_t)(code & 0xFFFFu);
+            printf("  diag[%u]=0x%08X category=%u subcat=%u code=%u flags=0x%08X\n",
                    i,
+                   (unsigned)code,
                    (unsigned)cat,
                    (unsigned)sub,
-                   (unsigned)err,
+                   (unsigned)err_code,
                    (unsigned)code);
           }
         }
