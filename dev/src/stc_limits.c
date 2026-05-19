@@ -40,3 +40,22 @@ bool stc_clamp_axis_cmd(const axis_cfg_t* cfg,
 
   return limited;
 }
+
+
+bool stc_compute_effective_delta(double current_deg,
+                                double requested_delta_deg,
+                                double min_deg,
+                                double max_deg,
+                                double* requested_abs_deg,
+                                double* clamped_abs_deg,
+                                double* effective_delta_deg) {
+  const double requested_abs = current_deg + requested_delta_deg;
+  const double clamped_abs = stc_clamp(requested_abs, min_deg, max_deg);
+  const double effective_delta = clamped_abs - current_deg;
+
+  if (requested_abs_deg) *requested_abs_deg = requested_abs;
+  if (clamped_abs_deg) *clamped_abs_deg = clamped_abs;
+  if (effective_delta_deg) *effective_delta_deg = effective_delta;
+
+  return fabs(clamped_abs - requested_abs) > 1e-9;
+}
