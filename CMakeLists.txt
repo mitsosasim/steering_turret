@@ -38,12 +38,16 @@ add_executable(stc_server
   dev/src/stc_faults.c
   dev/src/stc_diag.c
   dev/src/motion_backend_router.c
-  dev/src/pd4c_backend.c
-  dev/src/myact_backend.c
+
+  # Backend families: simulator / pd4c-can / myactuator
+  dev/src/can_backend.c      # pd4c-can shared backend dispatch implementation
+  dev/src/pd4c_backend.c     # pd4c-can backend family
+  dev/src/myact_backend.c    # myactuator backend family
 )
 
 if(NOT USE_SIMULATOR)
   target_sources(stc_server PRIVATE
+    # Transport/runtime dependencies for CAN-backed families.
     dev/src/x8_25.c
     dev/src/myact_socketcan.c
   )
