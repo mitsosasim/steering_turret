@@ -1,3 +1,16 @@
+/*
+ * ALMA SISTEMI SRL - Steering Turret Control (STC)
+ *
+ * Property of ALMA SISTEMI SRL.
+ * This source file is part of the STC development codebase.
+ *
+ * File purpose:
+ *   Implementation/declarations for the STC development codebase.
+ *
+ * Design notes:
+ *   Documentation/comment ownership header only; no runtime behavior changes.
+ */
+
 #ifndef PD4C_H
 #define PD4C_H
 

@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# ALMA SISTEMI SRL - Steering Turret Control (STC)
+#
+# Property of ALMA SISTEMI SRL.
+# This script is part of the STC development codebase.
+# Documentation/comment ownership header only; no runtime behavior changes.
+
 set -euo pipefail
 
 HOST="${1:-127.0.0.1}"

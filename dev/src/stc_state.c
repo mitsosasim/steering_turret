@@ -1,3 +1,16 @@
+/*
+ * ALMA SISTEMI SRL - Steering Turret Control (STC)
+ *
+ * Property of ALMA SISTEMI SRL.
+ * This source file is part of the STC development codebase.
+ *
+ * File purpose:
+ *   Implementation/declarations for the STC development codebase.
+ *
+ * Design notes:
+ *   Documentation/comment ownership header only; no runtime behavior changes.
+ */
+
 #include "stc_state.h"
 
 int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next) {
