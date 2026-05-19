@@ -98,7 +98,57 @@ void motion_backend_stop(motion_backend_t* b){
 
 int motion_backend_discover(motion_backend_t* b){ (void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_discover(g_backend.impl); if (g_backend.family == BACKEND_FAMILY_PD4C) return pd4c_motion_backend_discover(g_backend.impl); if (g_backend.family == BACKEND_FAMILY_MYACTUATOR) return myact_motion_backend_discover(g_backend.impl); STC_LOG_ERROR("motion_backend_discover: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_apply_pp_move(motion_backend_t* b,uint32_t m,const double t[STC_AXIS_COUNT]){ (void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_apply_pp_move(g_backend.impl,m,t); if (g_backend.family == BACKEND_FAMILY_PD4C) return pd4c_motion_backend_apply_pp_move(g_backend.impl,m,t); if (g_backend.family == BACKEND_FAMILY_MYACTUATOR) return myact_motion_backend_apply_pp_move(g_backend.impl,m,t); STC_LOG_ERROR("motion_backend_apply_pp_move: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
-int motion_backend_apply_motion(motion_backend_t* b,uint32_t m,const stc_axis_motion_kind_t k[STC_AXIS_COUNT],const double v[STC_AXIS_COUNT],const double s[STC_AXIS_COUNT]){(void)b; if(g_backend.family==BACKEND_FAMILY_SIMULATOR||g_backend.family==BACKEND_FAMILY_PD4C){double abs_t[STC_AXIS_COUNT]={0}; double sp[STC_AXIS_COUNT]={0}; for(size_t i=0;i<STC_AXIS_COUNT;i++){if(!(m&(1u<<i))) continue; if(k[i]==STC_AXIS_MOTION_SPEED) sp[i]=v[i]; else abs_t[i]=v[i];} int rc=(g_backend.family==BACKEND_FAMILY_SIMULATOR)?sim_motion_backend_apply_speed(g_backend.impl,m,sp):pd4c_motion_backend_apply_speed(g_backend.impl,m,sp); if(rc==0) return (g_backend.family==BACKEND_FAMILY_SIMULATOR)?sim_motion_backend_apply_pp_move(g_backend.impl,m,abs_t):pd4c_motion_backend_apply_pp_move(g_backend.impl,m,abs_t); return -1;} if(g_backend.family==BACKEND_FAMILY_MYACTUATOR) return myact_motion_backend_apply_motion(g_backend.impl,m,k,v,s); STC_LOG_ERROR("motion_backend_apply_motion: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
+int motion_backend_apply_motion(motion_backend_t* b,uint32_t m,const stc_axis_motion_kind_t k[STC_AXIS_COUNT],const double v[STC_AXIS_COUNT],const double s[STC_AXIS_COUNT]){
+  (void)b; (void)s;
+  /*
+   * Motion semantics contract across backends:
+   * - ABS: v[i] is an absolute position target in axis units.
+   * - REL: v[i] is a delta added to the current tracked position.
+   * - SPEED: v[i] is a velocity command and must not alter position targets.
+   *
+   * For simulator/PD4C backends we normalize REL->ABS here so dispatch uses
+   * explicit absolute targets while keeping SPEED commands unnormalized.
+   */
+  if(g_backend.family==BACKEND_FAMILY_SIMULATOR||g_backend.family==BACKEND_FAMILY_PD4C){
+    motion_snapshot_t snap;
+    if(motion_backend_get_snapshot(g_backend.impl, &snap) != 0) return -1;
+    uint32_t speed_mask = 0;
+    uint32_t pos_mask = 0;
+    double abs_t[STC_AXIS_COUNT]={0};
+    double sp[STC_AXIS_COUNT]={0};
+    for(size_t i=0;i<STC_AXIS_COUNT;i++){
+      if(!(m&(1u<<i))) continue;
+      switch(k[i]){
+        case STC_AXIS_MOTION_SPEED:
+          sp[i]=v[i];
+          speed_mask |= (1u<<i);
+          break;
+        case STC_AXIS_MOTION_REL:
+          abs_t[i]=(double)snap.pos_raw[i] + v[i];
+          pos_mask |= (1u<<i);
+          break;
+        case STC_AXIS_MOTION_ABS:
+        default:
+          abs_t[i]=v[i];
+          pos_mask |= (1u<<i);
+          break;
+      }
+    }
+    int rc=0;
+    if(speed_mask){
+      rc=(g_backend.family==BACKEND_FAMILY_SIMULATOR)?sim_motion_backend_apply_speed(g_backend.impl,speed_mask,sp):pd4c_motion_backend_apply_speed(g_backend.impl,speed_mask,sp);
+      if(rc!=0) return -1;
+    }
+    if(pos_mask){
+      rc=(g_backend.family==BACKEND_FAMILY_SIMULATOR)?sim_motion_backend_apply_pp_move(g_backend.impl,pos_mask,abs_t):pd4c_motion_backend_apply_pp_move(g_backend.impl,pos_mask,abs_t);
+      if(rc!=0) return -1;
+    }
+    return 0;
+  }
+  if(g_backend.family==BACKEND_FAMILY_MYACTUATOR) return myact_motion_backend_apply_motion(g_backend.impl,m,k,v,s);
+  STC_LOG_ERROR("motion_backend_apply_motion: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)");
+  return -1;
+}
 int motion_backend_apply_speed(motion_backend_t* b,uint32_t m,const double s[STC_AXIS_COUNT]){(void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_apply_speed(g_backend.impl,m,s); if (g_backend.family == BACKEND_FAMILY_PD4C) return pd4c_motion_backend_apply_speed(g_backend.impl,m,s); if (g_backend.family == BACKEND_FAMILY_MYACTUATOR) return myact_motion_backend_apply_speed(g_backend.impl,m,s); STC_LOG_ERROR("motion_backend_apply_speed: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_quick_stop(motion_backend_t* b,uint32_t m){(void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_quick_stop(g_backend.impl,m); if (g_backend.family == BACKEND_FAMILY_PD4C) return pd4c_motion_backend_quick_stop(g_backend.impl,m); if (g_backend.family == BACKEND_FAMILY_MYACTUATOR) return myact_motion_backend_quick_stop(g_backend.impl,m); STC_LOG_ERROR("motion_backend_quick_stop: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_clear_faults(motion_backend_t* b,uint32_t m){(void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_clear_faults(g_backend.impl,m); if (g_backend.family == BACKEND_FAMILY_PD4C) return pd4c_motion_backend_clear_faults(g_backend.impl,m); if (g_backend.family == BACKEND_FAMILY_MYACTUATOR) return myact_motion_backend_clear_faults(g_backend.impl,m); STC_LOG_ERROR("motion_backend_clear_faults: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
