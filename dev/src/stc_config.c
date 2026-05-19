@@ -353,8 +353,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->can_scan_max_node) != 0) goto parse_error;
       } else if (strcmp(key, "can_timeout_ms") == 0) {
         if (parse_int(value, &cfg->can_timeout_ms) != 0) goto parse_error;
-      } else if (strcmp(key, "startup_feedback_grace_ms") == 0) {
-        if (parse_int(value, &cfg->startup_feedback_grace_ms) != 0) goto parse_error;
       } else if (strcmp(key, "strict_stale_policy") == 0) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else {
@@ -409,6 +407,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->tlml_tx_priority) != 0) goto parse_error;
       } else if (strcmp(key, "controller_id_strict_legacy") == 0) {
         if (parse_int(value, &cfg->controller_id_strict_legacy) != 0) goto parse_error;
+      } else if (strcmp(key, "startup_feedback_grace_ms") == 0) {
+        if (parse_int(value, &cfg->startup_feedback_grace_ms) != 0) goto parse_error;
       } else if (strcmp(key, "strict_stale_policy") == 0) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else {
@@ -626,6 +626,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
       STC_LOG_ERROR("%s: axis %d has invalid active_status2_interval_ms", path, i);
       return false;
     }
+  }
+
+  if (cfg->startup_feedback_grace_ms < 0) {
+    STC_LOG_ERROR("%s: startup_feedback_grace_ms must be >= 0", path);
+    return false;
   }
 
   return true;
