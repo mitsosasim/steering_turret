@@ -35,6 +35,9 @@ typedef struct {
   int can_restart_ms;
   int can_scan_max_node;
   int speed_watchdog_ms;
+  double position_tolerance_deg;
+  int position_timeout_ms;
+  int position_poll_ms;
   int ds402_timeout_ms;
   int pp_sdo_diag;
   uint32_t can_timeout_ms;

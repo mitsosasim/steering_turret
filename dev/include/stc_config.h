@@ -45,6 +45,9 @@ typedef struct stc_config_s {
   int strict_stale_policy;
   int speed_watchdog_ms;
   int speed_stream_period_ms;
+  double position_tolerance_deg;
+  int position_timeout_ms;
+  int position_poll_ms;
 
   int rt_enabled;
   int rt_strict;

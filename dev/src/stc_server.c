@@ -233,6 +233,9 @@ typedef struct shared_data {
 
   int speed_watchdog_ms;
   int speed_stream_period_ms;
+  double position_tolerance_deg;
+  int position_timeout_ms;
+  int position_poll_ms;
   int ds402_timeout_ms;
   int pp_sdo_diag;              // enable SDO snapshot before PP move
   uint32_t can_timeout_ms;
@@ -1049,6 +1052,9 @@ static void* can_worker_thread(void* arg) {
 
   pthread_mutex_lock(&a->sh->mtx);
   backend_cfg.speed_watchdog_ms = a->sh->d.speed_watchdog_ms;
+  backend_cfg.position_tolerance_deg = a->sh->d.position_tolerance_deg;
+  backend_cfg.position_timeout_ms = a->sh->d.position_timeout_ms;
+  backend_cfg.position_poll_ms = a->sh->d.position_poll_ms;
   backend_cfg.ds402_timeout_ms = a->sh->d.ds402_timeout_ms;
   backend_cfg.pp_sdo_diag = a->sh->d.pp_sdo_diag;
   backend_cfg.can_timeout_ms = a->sh->d.can_timeout_ms;
@@ -2107,6 +2113,9 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.startup_feedback_grace_ms = (cfg->startup_feedback_grace_ms > 0) ? (uint32_t)cfg->startup_feedback_grace_ms : 0u;
   sh->d.speed_watchdog_ms = (cfg->speed_watchdog_ms >= 0) ? cfg->speed_watchdog_ms : 0;
   sh->d.speed_stream_period_ms = (cfg->speed_stream_period_ms > 0) ? cfg->speed_stream_period_ms : 50;
+  sh->d.position_tolerance_deg = (cfg->position_tolerance_deg > 0.0) ? cfg->position_tolerance_deg : 1.0;
+  sh->d.position_timeout_ms = (cfg->position_timeout_ms > 0) ? cfg->position_timeout_ms : 5000;
+  sh->d.position_poll_ms = (cfg->position_poll_ms > 0) ? cfg->position_poll_ms : 50;
   sh->d.strict_stale_policy = cfg->strict_stale_policy ? 1 : 0;
 }
 
@@ -2203,6 +2212,9 @@ int main(int argc, char** argv) {
   sh.d.cfg[0].az_max_deg = 180.0;
   sh.d.cfg[0].max_speed_deg_s = 90.0;
   sh.d.speed_watchdog_ms = 250;
+  sh.d.position_tolerance_deg = 1.0;
+  sh.d.position_timeout_ms = 5000;
+  sh.d.position_poll_ms = 50;
   sh.d.cfg[0].pp_profile_vel = 500;       // default profile velocity
   sh.d.ds402_timeout_ms = 2000;
   sh.d.pp_sdo_diag = 0;
