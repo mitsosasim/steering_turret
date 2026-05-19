@@ -155,8 +155,8 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->controller_id_strict_legacy = 0;
 
   cfg->num_axes = (int)STC_AXIS_COUNT;
-  cfg->turret_az_axis = 0;
-  cfg->turret_el_axis = 1;
+  cfg->turret_az_axis = -1;
+  cfg->turret_el_axis = -1;
   cfg->sut_count = STC_MAX_SUT;
   cfg->mirror_count = 0;
 
@@ -206,8 +206,8 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   }
 
   for (size_t i = 0; i < STC_MAX_SUT; i++) {
-    cfg->sut_az_axis[i] = (int)(2 + i);
-    cfg->sut_el_axis[i] = (int)(10 + i);
+    cfg->sut_az_axis[i] = -1;
+    cfg->sut_el_axis[i] = -1;
     cfg->sut_laser_on[i] = 0u;
   }
   for (size_t i = 0; i < STC_MAX_MIRROR; i++) {
