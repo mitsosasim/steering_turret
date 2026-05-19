@@ -180,6 +180,40 @@ static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t e
   return -1;
 }
 
+static int wait_for_position_target_locked(struct motion_backend* b, size_t axis, uint8_t node_id, double target_deg) {
+  const axis_cfg_t* cfg = &b->cfg.axis_cfg[axis];
+  const double tolerance_deg = (b->cfg.position_tolerance_deg > 0.0) ? b->cfg.position_tolerance_deg : 1.0;
+  const int timeout_ms = (b->cfg.position_timeout_ms > 0) ? b->cfg.position_timeout_ms : 5000;
+  const int poll_ms = (b->cfg.position_poll_ms > 0) ? b->cfg.position_poll_ms : 50;
+  const uint64_t deadline = now_ms() + (uint64_t)timeout_ms;
+  double final_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
+  while (now_ms() <= deadline) {
+    struct can_frame fr;
+    if (send_myact_read(b, node_id, MYACT_CMD_READ_ANGLE) == 0 &&
+        recv_myact_reply(b, node_id, MYACT_CMD_READ_ANGLE, &fr, poll_ms) == 0 && fr.can_dlc >= 8) {
+      const int16_t angle_deg = (int16_t)((uint16_t)fr.data[6] | ((uint16_t)fr.data[7] << 8));
+      normalize_snapshot_from_feedback(b, axis, 0, 0, angle_deg, now_ms());
+      final_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
+    }
+    if (send_myact_read(b, node_id, MYACT_CMD_READ_STATUS2) == 0)
+      (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_STATUS2, &fr, poll_ms);
+
+    const double err_deg = fabs(final_deg - target_deg);
+    if (err_deg <= tolerance_deg) {
+      STC_LOG_INFO("axis%zu MYACT target reached target=%.3f final=%.3f err=%.3f", axis, target_deg, final_deg, err_deg);
+      return 0;
+    }
+
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = (long)poll_ms * 1000L * 1000L};
+    nanosleep(&ts, NULL);
+  }
+
+  final_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
+  const double err_deg = fabs(final_deg - target_deg);
+  STC_LOG_ERROR("axis%zu MYACT target timeout target=%.3f final=%.3f err=%.3f", axis, target_deg, final_deg, err_deg);
+  return -1;
+}
+
 static int init_axis_feedback(struct motion_backend* b, size_t axis) {
   const uint8_t node_id = b->cfg.axis_node_id[axis];
   if (!node_id) return 0;
@@ -347,6 +381,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
   } else if (m->kind == AXIS_CMD_POSITION_ABS || m->kind == AXIS_CMD_POSITION_REL) {
     if (prepare_for_motion_locked(b, axis, t_ms) != 0) return;
     const double target_deg = clamp_range(m->value, cfg->az_min_deg, cfg->az_max_deg);
+    double expected_target_deg = target_deg;
     const uint16_t speed_dps = (uint16_t)fmax(1.0, fmin(65535.0, max_speed * gr));
     int cmd_ok = -1;
     if (m->kind == AXIS_CMD_POSITION_REL) {
@@ -371,6 +406,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
                      effective_delta);
       }
       const int32_t delta_0p01deg = (int32_t)llround(effective_delta * gr * 100.0);
+      expected_target_deg = current_deg + effective_delta;
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
       if (cmd_ok == 0) {
         STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, effective_delta, max_speed);
@@ -386,6 +422,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
     } else {
       const double current_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
       const double delta_deg = target_deg - current_deg;
+      expected_target_deg = target_deg;
       const int32_t delta_0p01deg = (int32_t)llround(delta_deg * gr * 100.0);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
       if (cmd_ok == 0) {
@@ -403,6 +440,12 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->last_cmd_ms[axis] = m->cmd_ts_ms;
       b->cmd_pos_raw[axis] = local_axis_deg_to_counts(cfg, target_deg);
       b->cmd_ack_pending[axis] = 1u;
+      if (wait_for_position_target_locked(b, axis, node_id, expected_target_deg) != 0) {
+        b->snap.status_word[axis] |= (uint16_t)(1u << 15);
+        log_myact_failure(b, axis, "target wait", -1);
+      } else {
+        b->snap.status_word[axis] &= (uint16_t)~(1u << 15);
+      }
     }
   } else if (m->kind == AXIS_CMD_STOP) {
     const int stop_rc = axis_stop_locked(b, axis, t_ms, 1);

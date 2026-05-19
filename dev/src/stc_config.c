@@ -148,6 +148,9 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->strict_stale_policy = 0;
   cfg->speed_watchdog_ms = 250;
   cfg->speed_stream_period_ms = 50;
+  cfg->position_tolerance_deg = 1.0;
+  cfg->position_timeout_ms = 5000;
+  cfg->position_poll_ms = 50;
   cfg->rt_enabled = 1;
   cfg->rt_strict = 0;
   cfg->rt_sched_policy = SCHED_FIFO;
@@ -361,6 +364,12 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {
         if (parse_int(value, &cfg->speed_stream_period_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "position_tolerance_deg") == 0) {
+        if (parse_double(value, &cfg->position_tolerance_deg) != 0) goto parse_error;
+      } else if (strcmp(key, "position_timeout_ms") == 0) {
+        if (parse_int(value, &cfg->position_timeout_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "position_poll_ms") == 0) {
+        if (parse_int(value, &cfg->position_poll_ms) != 0) goto parse_error;
       } else {
         recognized = false;
       }
@@ -421,6 +430,12 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {
         if (parse_int(value, &cfg->speed_stream_period_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "position_tolerance_deg") == 0) {
+        if (parse_double(value, &cfg->position_tolerance_deg) != 0) goto parse_error;
+      } else if (strcmp(key, "position_timeout_ms") == 0) {
+        if (parse_int(value, &cfg->position_timeout_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "position_poll_ms") == 0) {
+        if (parse_int(value, &cfg->position_poll_ms) != 0) goto parse_error;
       } else {
         recognized = false;
       }
@@ -649,6 +664,18 @@ bool load_config(const char* path, stc_config_t* cfg) {
   }
   if (cfg->speed_stream_period_ms <= 0) {
     STC_LOG_ERROR("%s: speed_stream_period_ms must be > 0", path);
+    return false;
+  }
+  if (cfg->position_tolerance_deg <= 0.0) {
+    STC_LOG_ERROR("%s: position_tolerance_deg must be > 0", path);
+    return false;
+  }
+  if (cfg->position_timeout_ms <= 0) {
+    STC_LOG_ERROR("%s: position_timeout_ms must be > 0", path);
+    return false;
+  }
+  if (cfg->position_poll_ms <= 0) {
+    STC_LOG_ERROR("%s: position_poll_ms must be > 0", path);
     return false;
   }
 
