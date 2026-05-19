@@ -596,12 +596,24 @@ static int command_targets_unmapped_axis(const shared_data_t* sh, const stc_icd_
   if (cmd->cmd_id == STC_CMD_TURRET) {
     return (sh->turret_az_axis < 0 || sh->turret_el_axis < 0);
   }
-  if (cmd->cmd_id == STC_CMD_SUT && cmd->u.sut.id != 0xFF) {
+  if (cmd->cmd_id == STC_CMD_SUT) {
+    if (cmd->u.sut.id == 0xFF) {
+      for (int i = 0; i < sh->sut_count; i++) {
+        if (sh->sut_az_axis[i] < 0 || sh->sut_el_axis[i] < 0) return 1;
+      }
+      return 0;
+    }
     const int idx = (int)cmd->u.sut.id - 1;
     if (idx < 0 || idx >= sh->sut_count) return 0;
     return (sh->sut_az_axis[idx] < 0 || sh->sut_el_axis[idx] < 0);
   }
-  if (cmd->cmd_id == STC_CMD_MIRROR && cmd->u.mirror.mirror_id != 0xFF) {
+  if (cmd->cmd_id == STC_CMD_MIRROR) {
+    if (cmd->u.mirror.mirror_id == 0xFF) {
+      for (int i = 0; i < sh->mirror_count; i++) {
+        if (sh->mirror_axis[i] < 0) return 1;
+      }
+      return 0;
+    }
     const int idx = (int)cmd->u.mirror.mirror_id - 1;
     if (idx < 0 || idx >= sh->mirror_count) return 0;
     return (sh->mirror_axis[idx] < 0);
@@ -2709,7 +2721,7 @@ int main(int argc, char** argv) {
               }
 
               if (command_targets_unmapped_axis(&sh.d, &cmd)) {
-                STC_LOG_WARN("requested axis is not configured");
+                STC_LOG_WARN("requested motion target is not configured");
                 v = STC_ERR_VALUE_OUT_OF_RANGE;
               } else if (axes_mask == 0) {
                 v = STC_ERR_VALUE_OUT_OF_RANGE;
