@@ -14,7 +14,9 @@
  *       stc_icd.c pd4c.c stc_server.c -o stc_server -lm
  */
 
+#ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
+#endif
 #define _POSIX_C_SOURCE 200809L
 
 #include "stc_icd.h"
