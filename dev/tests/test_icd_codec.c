@@ -157,7 +157,13 @@ static void test_tlml_pack_parse(void) {
   tlm.lon = 24.456;
   tlm.alt_m = 120.0f;
   tlm.heading_deg = 270.0f;
-  for (int i=0;i<8;i++) { tlm.motor_status[i]=(uint8_t)i; tlm.laser_status[i]=(uint8_t)(10+i); }
+  for (int i = 0; i < STC_ICD_AXES_COUNT; ++i) {
+    tlm.motor_status[i] = (uint8_t)i;
+  }
+
+  for (int i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+    tlm.laser_status[i] = (uint8_t)(0xA0u + i);
+  }
   tlm.level_x = 0.1f;
   tlm.level_y = -0.2f;
   tlm.error_count = 3;
@@ -169,6 +175,9 @@ static void test_tlml_pack_parse(void) {
   size_t out_len=0;
   stc_icd_rc_t rc = stc_icd_tlml_pack(&cfg, &tlm, buf, sizeof(buf), &out_len);
   assert_true(rc==STC_ICD_OK, "tlml_pack");
+  assert_true(out_len == STC_ICD_TLML_BASE_SIZE + 4u * tlm.error_count,
+              "tlml packed base size + errors");
+  assert_true(STC_ICD_TLML_BASE_SIZE == 100u, "tlml canonical base size");
 
   stc_tlml_t parsed;
   rc = stc_icd_tlml_parse(&cfg, buf, out_len, &parsed);
@@ -187,8 +196,15 @@ static void test_tlml_pack_parse(void) {
   assert_true(parsed.lon == 24.456, "tlml lon");
   assert_true(parsed.alt_m == 120.0, "tlml alt");
   assert_true(parsed.heading_deg == 270.0, "tlml heading");
-  assert_mem(parsed.motor_status, tlm.motor_status, 8, "tlml motor_status");
-  assert_mem(parsed.laser_status, tlm.laser_status, 8, "tlml laser_status");
+  assert_mem(parsed.motor_status,
+             tlm.motor_status,
+             STC_ICD_AXES_COUNT,
+             "tlml motor_status[18]");
+
+  assert_mem(parsed.laser_status,
+             tlm.laser_status,
+             STC_ICD_LASER_COUNT,
+             "tlml laser_status[8]");
   assert_true(parsed.level_x == 0.1f, "tlml level_x");
   assert_true(parsed.level_y == -0.2f, "tlml level_y");
   assert_eq_u16(parsed.error_count, 3, "tlml error_count");
