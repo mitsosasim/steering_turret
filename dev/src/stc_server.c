@@ -2196,14 +2196,54 @@ static int config_has_enabled_driver(const stc_config_t* cfg, stc_axis_driver_t 
   return 0;
 }
 
-static const char* select_backend_name(const stc_config_t* cfg, int simulator_requested) {
-  if (config_has_enabled_driver(cfg, STC_AXIS_DRIVER_MYACT_X8_25)) return "myactuator";
-  if (config_has_enabled_driver(cfg, STC_AXIS_DRIVER_PD4C)) return "pd4c";
+static void log_enabled_axis_drivers(const stc_config_t* cfg) {
+  if (!cfg) return;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!cfg->axis_enabled[axis]) continue;
+    STC_LOG_ERROR("enabled axis[%zu] driver=%s", axis, axis_driver_to_string(cfg->axis_driver[axis]));
+  }
+}
+
+static const char* select_backend_name(const stc_config_t* cfg) {
+  if (!cfg) return NULL;
+
+  const int has_pd4c = config_has_enabled_driver(cfg, STC_AXIS_DRIVER_PD4C);
+  const int has_myact = config_has_enabled_driver(cfg, STC_AXIS_DRIVER_MYACT_X8_25);
+
+  if (strcmp(cfg->backend, "simulator") == 0) {
 #ifdef SIMULATION
-  if (simulator_requested) return "simulator";
+    return "simulator";
 #else
-  (void)simulator_requested;
+    STC_LOG_ERROR("backend='simulator' requested but binary is not built with SIMULATION");
+    return NULL;
 #endif
+  }
+
+  if (strcmp(cfg->backend, "pd4c") == 0) {
+    if (has_myact) {
+      STC_LOG_ERROR("backend='pd4c' cannot be used with mixed hardware drivers (single-backend runtime)");
+      log_enabled_axis_drivers(cfg);
+      return NULL;
+    }
+    if (!has_pd4c) {
+      STC_LOG_WARN("backend='pd4c' requested but no enabled PD4C axes found");
+    }
+    return "pd4c";
+  }
+
+  if (strcmp(cfg->backend, "myactuator") == 0) {
+    if (has_pd4c) {
+      STC_LOG_ERROR("backend='myactuator' cannot be used with mixed hardware drivers (single-backend runtime)");
+      log_enabled_axis_drivers(cfg);
+      return NULL;
+    }
+    if (!has_myact) {
+      STC_LOG_WARN("backend='myactuator' requested but no enabled myactuator axes found");
+    }
+    return "myactuator";
+  }
+
+  STC_LOG_ERROR("invalid backend='%s' (expected simulator|pd4c|myactuator)", cfg->backend);
   return NULL;
 }
 
@@ -2571,14 +2611,13 @@ int main(int argc, char** argv) {
   actionq_t q;
   actionq_init(&q);
 
-  const int simulator_requested = (strcmp(parsed_cfg.backend, "simulator") == 0);
-  const char* backend_name = select_backend_name(&parsed_cfg, simulator_requested);
+  const char* backend_name = select_backend_name(&parsed_cfg);
   if (!backend_name) {
-    STC_LOG_ERROR("no supported motion backend for enabled axis drivers");
+    STC_LOG_ERROR("failed to select motion backend (requested=%s)", parsed_cfg.backend);
     exit_code = 1;
     goto cleanup;
   }
-  STC_LOG_INFO("backend_selected=%s", backend_name);
+  STC_LOG_INFO("backend_requested=%s backend_effective=%s", parsed_cfg.backend, backend_name);
   if (parsed_cfg.num_axes > 0 && parsed_cfg.axis_enabled[0]) {
     STC_LOG_INFO("axis0 driver=%s node=%d",
                  axis_driver_to_string(parsed_cfg.axis_driver[0]),
