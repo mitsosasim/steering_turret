@@ -217,6 +217,14 @@ Then on the SSH shell (RockPro):
 
 > Note: `ssh -Y` enables trusted X11 forwarding. If needed, `ssh -X` can also be used.
 
+
+### `diag_gui_qt` over SSH quick notes
+
+1. Start **VcXsrv/XLaunch** on Windows before opening SSH.
+2. Connect with trusted X11 forwarding (`ssh -Y <user>@<host>`).
+3. Install required X11/Qt packages on Linux (`xorg-xauth`, `xorg-xclock`, `xcb-util-cursor`, and Qt xcb dependencies).
+4. Verify X forwarding with `xclock` before launching `./build/diag_gui_qt`.
+
 ### VS Code build/run command examples
 
 Simulator-enabled GUI build:
