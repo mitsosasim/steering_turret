@@ -38,10 +38,14 @@ add_executable(stc_server
   dev/src/stc_faults.c
   dev/src/stc_diag.c
   dev/src/motion_backend_router.c
+  # Backend family: pd4c-can (always compiled; transport linked below for hardware builds)
+  dev/src/can_backend.c
+  # Backend family: myactuator
   dev/src/myact_backend.c
 )
 
 if(NOT USE_SIMULATOR)
+  # Transport/runtime files for hardware-backed paths (pd4c-can + myactuator)
   target_sources(stc_server PRIVATE
     dev/src/x8_25.c
     dev/src/myact_socketcan.c
@@ -72,6 +76,7 @@ target_compile_options(tlm_rx_udp PRIVATE -Wall -Wextra)
 target_link_libraries(stc_server PRIVATE pthread m)
 
 if(USE_SIMULATOR)
+  # Backend family: simulator
   target_compile_definitions(stc_server PRIVATE SIMULATION)
   target_link_libraries(stc_server PRIVATE simulator)
 else()
