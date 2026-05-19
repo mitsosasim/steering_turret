@@ -21,6 +21,7 @@
 
 #include "stc_icd.h"
 #include "stc_config.h"
+#include "stc_axis_cfg_map.h"
 #include "stc_diag.h"
 #include "stc_model.h"
 #include "stc_actions.h"
@@ -2152,15 +2153,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   memset(sh->d.axis_expected, 0, sizeof(sh->d.axis_expected));
   for (int i = 0; i < cfg->num_axes && i < (int)STC_AXIS_COUNT; i++) {
     sh->d.axis_node_id[i] = (uint8_t)cfg->axis_node_id[i];
-    sh->d.axis_expected[i] = (cfg->axis_node_id[i] > 0) ? 1u : 0u;
-    sh->d.cfg[i].counts_per_rev = cfg->axis_counts_per_rev[i];
-    sh->d.cfg[i].gear_ratio = cfg->axis_gear_ratio[i];
-    sh->d.cfg[i].vel_raw_units = AXIS_VEL_RAW_DEG_PER_SEC;
-    sh->d.cfg[i].vel_scale = 1.0;
-    sh->d.cfg[i].az_min_deg = cfg->axis_min_deg[i];
-    sh->d.cfg[i].az_max_deg = cfg->axis_max_deg[i];
-    sh->d.cfg[i].max_speed_deg_s = cfg->axis_max_speed_deg_s[i];
-    sh->d.cfg[i].pp_profile_vel = cfg->axis_pp_profile_vel[i];
+    stc_axis_cfg_from_config(cfg, i, &sh->d.cfg[i], &sh->d.axis_expected[i]);
 
     sh->d.storage_deg[i] = cfg->axis_storage_deg[i];
     sh->d.diag_cat[i] = cfg->axis_diag_cat[i];
