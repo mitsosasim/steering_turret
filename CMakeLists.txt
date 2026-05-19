@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(STC C CXX)
 
+include(CTest)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -124,7 +126,30 @@ add_executable(stc_diag_test
   dev/src/motion_backend_router.c
   dev/src/pd4c_backend.c
   dev/src/myact_backend.c
+  dev/src/stc_axis_cfg_map.c
+  dev/src/stc_limits.c
 )
+
+
+add_executable(test_diag_codes
+  dev/tests/test_diag_codes.c
+  dev/src/stc_model.c
+  dev/src/stc_diag.c
+  dev/src/stc_log.c
+  dev/src/motion_backend_router.c
+  dev/src/pd4c_backend.c
+  dev/src/myact_backend.c
+  dev/src/stc_axis_cfg_map.c
+  dev/src/stc_limits.c
+)
+
+target_include_directories(test_diag_codes PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_diag_codes PRIVATE -Wall -Wextra)
+target_link_libraries(test_diag_codes PRIVATE m)
+if(USE_SIMULATOR)
+  target_compile_definitions(test_diag_codes PRIVATE SIMULATION)
+  target_link_libraries(test_diag_codes PRIVATE simulator)
+endif()
 
 add_executable(test_diag_state_integration
   dev/tests/test_diag_state_integration.c
@@ -184,6 +209,7 @@ endif()
 add_executable(test_axis_cfg_map
   dev/tests/test_axis_cfg_map.c
   dev/src/stc_axis_cfg_map.c
+  dev/src/stc_limits.c
 )
 
 target_include_directories(test_axis_cfg_map PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
@@ -304,3 +330,30 @@ endif()
 configure_file(dev/tests/turret_motion_demo.sh ${CMAKE_BINARY_DIR}/turret_motion_demo COPYONLY)
 add_custom_target(turret_motion_demo_script ALL
   DEPENDS ${CMAKE_BINARY_DIR}/turret_motion_demo)
+
+
+add_executable(test_x8_25_protocol
+  dev/tests/test_x8_25_protocol.c
+  dev/src/x8_25.c
+)
+target_include_directories(test_x8_25_protocol PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_definitions(test_x8_25_protocol PRIVATE _DEFAULT_SOURCE)
+target_compile_options(test_x8_25_protocol PRIVATE -Wall -Wextra)
+target_link_libraries(test_x8_25_protocol PRIVATE m)
+
+if(BUILD_TESTING)
+  add_test(NAME test_actions COMMAND test_actions)
+  add_test(NAME stc_state_test COMMAND stc_state_test)
+  add_test(NAME stc_diag_test COMMAND stc_diag_test)
+  add_test(NAME test_diag_codes COMMAND test_diag_codes)
+  add_test(NAME test_diag_state_integration COMMAND test_diag_state_integration)
+  add_test(NAME test_icd_codec COMMAND test_icd_codec)
+  add_test(NAME test_myact_socketcan_ids COMMAND test_myact_socketcan_ids)
+  add_test(NAME x8_25_test_can COMMAND x8_25_test_can)
+  add_test(NAME test_x8_25_protocol COMMAND test_x8_25_protocol)
+  add_test(NAME test_axis_cfg_map COMMAND test_axis_cfg_map)
+  add_test(NAME stc_config_test COMMAND stc_config_test)
+  add_test(NAME test_log_concurrency COMMAND test_log_concurrency)
+  add_test(NAME test_can_worker_concurrency COMMAND test_can_worker_concurrency)
+  add_test(NAME test_motion_backend_router COMMAND test_motion_backend_router)
+endif()
