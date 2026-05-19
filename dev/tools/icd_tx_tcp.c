@@ -26,6 +26,13 @@ static void hexdump(const uint8_t* b, size_t n) {
   }
 }
 
+static uint32_t le32(const uint8_t* p) {
+  return ((uint32_t)p[0]) |
+         ((uint32_t)p[1] << 8) |
+         ((uint32_t)p[2] << 16) |
+         ((uint32_t)p[3] << 24);
+}
+
 static int send_all(int fd, const uint8_t* buf, size_t len) {
   size_t off = 0;
   while (off < len) {
@@ -138,7 +145,10 @@ static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg) {
   printf("%s\n", result_name);
   printf("error_code_name=%s\n", err_name);
 
-  if (rsp.payload_size > 0) {
+  if (rsp.cmd_id == STC_CMD_REQ_WORK_TIME && rsp.payload_size == 4) {
+    uint32_t uptime_sec = le32(rsp.payload);
+    printf("response_payload.uptime_sec=%u\n", uptime_sec);
+  } else if (rsp.payload_size > 0) {
     printf("response_payload=");
     fwrite(rsp.payload, 1, rsp.payload_size, stdout);
     printf("\n");
