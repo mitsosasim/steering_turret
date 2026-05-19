@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Backend-router selection and dispatch regression tests for motion backend abstraction.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Verifies simulator/CAN backends expose consistent behavior behind shared API contracts.
  */
 
 #include "motion_backend.h"

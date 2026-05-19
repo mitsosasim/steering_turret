@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Axis configuration mapping regression tests from INI model into runtime axis_cfg_t.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Prevents mismapped axis ownership, driver kind, and limits from silently changing at startup.
  */
 
 #include "stc_axis_cfg_map.h"

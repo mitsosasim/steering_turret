@@ -3,7 +3,7 @@
 #
 # Property of ALMA SISTEMI SRL.
 # This script is part of the STC development codebase.
-# Documentation/comment ownership header only; no runtime behavior changes.
+# Exercises command sequencing used in field demos while keeping bounded motion/safety-oriented flow.
 
 set -euo pipefail
 

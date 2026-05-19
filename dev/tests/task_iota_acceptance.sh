@@ -3,7 +3,7 @@
 #
 # Property of ALMA SISTEMI SRL.
 # This script is part of the STC development codebase.
-# Documentation/comment ownership header only; no runtime behavior changes.
+# Checks integration-level command responses to catch regressions in control-path interoperability.
 
 set -euo pipefail
 

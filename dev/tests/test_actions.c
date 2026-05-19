@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Action queue FIFO, stream-speed coalescing, and action-builder regression tests.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Protects command-thread to CAN-worker contract: ordering, wakeup signaling, and freshest speed semantics.
  */
 
 #include "stc_actions.h"
@@ -25,6 +25,7 @@ static void assert_true(int cond, const char* msg) {
   }
 }
 
+/* Verifies FIFO ordering so command execution order from TCP thread is preserved by CAN worker. */
 static void test_queue_fifo(void) {
   actionq_t q;
   actionq_init(&q);
@@ -48,6 +49,7 @@ static void test_queue_fifo(void) {
 }
 
 
+/* Verifies stream-speed coalescing and eventfd wakeup to prevent stale speed replay or missed worker wakeups. */
 static void test_stream_speed_coalescing_and_wakeup(void) {
   actionq_t q;
   actionq_init(&q);
@@ -101,6 +103,7 @@ static void test_stream_speed_coalescing_and_wakeup(void) {
   assert_true(poll(&pfd, 1, 0) == 0, "wakeup fd drained");
 }
 
+/* Verifies action builder helpers populate type/mask/payload fields expected by runtime dispatch. */
 static void test_action_builders(void) {
   stc_action_t act;
   double target_deg[STC_AXIS_COUNT] = {0};
