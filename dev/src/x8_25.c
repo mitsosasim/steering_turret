@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Implements low-level MYACTUATOR X8-25 / V3 protocol helpers used by STC.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   This module speaks MYACTUATOR's proprietary CAN frame protocol, not CANopen/DS402.
+ *   Real-time commands are send-only fast paths; setup/diagnostic calls use bounded
+ *   request/reply waits with caller-provided transport callbacks and timeout budgets.
  */
 
 #include "x8_25.h"
@@ -47,6 +49,7 @@ typedef struct {
     myact_basic_feedback_t basic_feedback;
 } myact_state_t;
 
+/* Rebuild all protocol CAN identifiers whenever node_id changes. */
 static void myact_rebuild_ids(myact_ctx_t* ctx) {
     ctx->cmd_id         = MYACT_CMD_ID_BASE + ctx->node_id;
     ctx->reply_id       = MYACT_REPLY_ID_BASE + ctx->node_id;
@@ -87,23 +90,23 @@ static void wr_u32_le(uint8_t* p, uint32_t v) {
 int myact_pack_a1_torque(int16_t iq_0p01a, uint8_t out[8]) {
     if (!out) return MYACT_EINVAL;
     memset(out, 0, 8);
-    out[0] = MYACT_CMD_TORQUE;
-    wr_u16_le(&out[4], (uint16_t)iq_0p01a);
+    out[0] = MYACT_CMD_TORQUE; /* A1 opcode: torque/current command. */
+    wr_u16_le(&out[4], (uint16_t)iq_0p01a); /* Signed 0.01 A, encoded little-endian. */
     return MYACT_OK;
 }
 
 int myact_pack_a2_speed(int32_t speed_0p01dps, uint8_t out[8]) {
     if (!out) return MYACT_EINVAL;
     memset(out, 0, 8);
-    out[0] = MYACT_CMD_SPEED;
-    wr_u32_le(&out[4], (uint32_t)speed_0p01dps);
+    out[0] = MYACT_CMD_SPEED; /* A2 opcode: speed command. */
+    wr_u32_le(&out[4], (uint32_t)speed_0p01dps); /* Signed 0.01 deg/s payload. */
     return MYACT_OK;
 }
 
 int myact_pack_a4_abs(uint16_t speed_dps, int32_t target_0p01deg, uint8_t out[8]) {
     if (!out) return MYACT_EINVAL;
     memset(out, 0, 8);
-    out[0] = MYACT_CMD_POSITION_ABS;
+    out[0] = MYACT_CMD_POSITION_ABS; /* A4 opcode: multi-turn absolute position. */
     wr_u16_le(&out[2], speed_dps);
     wr_u32_le(&out[4], (uint32_t)target_0p01deg);
     return MYACT_OK;
@@ -112,7 +115,7 @@ int myact_pack_a4_abs(uint16_t speed_dps, int32_t target_0p01deg, uint8_t out[8]
 int myact_pack_a8_inc(uint16_t speed_dps, int32_t delta_0p01deg, uint8_t out[8]) {
     if (!out) return MYACT_EINVAL;
     memset(out, 0, 8);
-    out[0] = MYACT_CMD_POSITION_INC;
+    out[0] = MYACT_CMD_POSITION_INC; /* A8 opcode: incremental position. */
     wr_u16_le(&out[2], speed_dps);
     wr_u32_le(&out[4], (uint32_t)delta_0p01deg);
     return MYACT_OK;
@@ -124,6 +127,7 @@ double myact_clamp(double x, double x_min, double x_max) {
     return x;
 }
 
+/* Raw transport send: protocol code prepares a full 8-byte CAN payload and delegates I/O. */
 static int myact_send_frame(myact_ctx_t* ctx, uint32_t id, const uint8_t data[8]) {
     myact_can_frame_t fr;
     if (!ctx || !data) return MYACT_EINVAL;
@@ -134,6 +138,7 @@ static int myact_send_frame(myact_ctx_t* ctx, uint32_t id, const uint8_t data[8]
     return ctx->io.send(&fr, ctx->io.user);
 }
 
+/* Raw transport receive with bounded timeout used by request/reply diagnostics. */
 static int myact_recv_frame(myact_ctx_t* ctx, uint32_t timeout_ms, myact_can_frame_t* out) {
     if (!ctx || !out) return MYACT_EINVAL;
     return ctx->io.recv(out, timeout_ms, ctx->io.user);
@@ -206,13 +211,14 @@ const myact_cache_t* myact_cache(const myact_ctx_t* ctx) {
     return ctx ? &ctx->cache : NULL;
 }
 
+/* Parse 0x9A status frame and normalize raw protocol units into cache fields. */
 static int parse_status1(const myact_can_frame_t* fr, uint64_t ts_ms, myact_status1_t* out) {
     int rc = proto_expect(fr, MYACT_CMD_STATUS1, 8);
     if (!out) return MYACT_EINVAL;
     if (rc < 0) return rc;
     out->valid = true;
     out->ts_ms = ts_ms;
-    out->motor_temp_c = (int8_t)fr->data[1];
+    out->motor_temp_c = (int8_t)fr->data[1]; /* Signed Celsius from protocol byte. */
     out->brake_release_command_state = (fr->data[3] != 0u);
     out->voltage_0p1v = rd_u16_le(&fr->data[4]);
     out->error_flags = rd_u16_le(&fr->data[6]);
@@ -306,6 +312,7 @@ static float uint_to_float(uint32_t x, float x_min, float x_max, unsigned bits) 
     return ((float)x) * span / max_int + x_min;
 }
 
+/* Pack motion-mode command (0x400+node) using firmware bitfields, no struct casting. */
 int myact_motion_pack(float p_rad, float v_rad_s, float kp, float kd, float t_ff_nm, uint8_t out_data[8]) {
     uint16_t p_int;
     uint16_t v_int;

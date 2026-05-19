@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Integration/safety-oriented exerciser for MYACTUATOR X8-25 V3 protocol paths.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Test flow favors safe staged bring-up: identity/status first, then progressively
+ *   more active commands (torque/speed/position/motion mode) with bounded timing.
  */
 
 /*
@@ -1079,6 +1080,7 @@ static int run_a8_delta_observed(myact_ctx_t* c,
                                  double* out_after,
                                  double* out_delta);
 
+/* Stage: active reply + A2 speed command behavior under bounded hold windows. */
 static int run_speed_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     double angle_before = 0.0;
     double angle_after = 0.0;
@@ -1339,6 +1341,7 @@ static int run_speed_stream_test(myact_ctx_t* c, const test_opts_t* o, myact_sta
     return MYACT_OK;
 }
 
+/* Stage: torque command validation with current/angle observability safeguards. */
 static int run_torque_step_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
     int ret = MYACT_OK;
@@ -1492,6 +1495,7 @@ cleanup:
     return MYACT_ENOMOTION;
 }
 
+/* Stage: native absolute position (A4) request/reply path and tolerance checks. */
 static int run_native_a4_abs_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     double before_abs = 0.0;
     double target_abs = 0.0;
@@ -1583,6 +1587,7 @@ out:
 }
 
 
+/* Stage: identity/status precheck and brake release timing characterization. */
 static int run_brake_latency_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
 
@@ -1781,6 +1786,7 @@ static int run_brake_persistence_test(myact_ctx_t* c, const test_opts_t* o, myac
     return MYACT_ESTATE;
 }
 
+/* Stage: incremental position bursts (A8) to verify repeated relative moves. */
 static int run_rt_inc_burst(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     int rc;
 
@@ -2036,6 +2042,7 @@ static int run_active_telemetry_rt_test(myact_ctx_t* c, const test_opts_t* o, my
     return MYACT_OK;
 }
 
+/* Stage: motion-mode (MIT-style) command/feedback path, distinct from A1/A2/A4/A8. */
 static int run_mit_mode_test(myact_ctx_t* c, const test_opts_t* o, myact_status1_t* s1) {
     uint8_t packed[8] = {0};
     int rc;
