@@ -57,8 +57,7 @@ static void test_reject_typoed_network_key(void) {
       "\n"
       "[diagnostics]\n"
       "axis[0].category = 0x06\n"
-      "axis[0].subcategory = 0x3F\n"
-      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+      "axis[0].subcategory = 0x3F\n";
 
   char path[64];
   stc_config_t cfg;
@@ -90,8 +89,7 @@ static void test_reject_typoed_section_name(void) {
       "\n"
       "[diagnostics]\n"
       "axis[0].category = 0x06\n"
-      "axis[0].subcategory = 0x3F\n"
-      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+      "axis[0].subcategory = 0x3F\n";
 
   char path[64];
   stc_config_t cfg;
@@ -129,8 +127,7 @@ static void test_accept_deprecated_multicast_network_keys(void) {
       "\n"
       "[diagnostics]\n"
       "axis[0].category = 0x06\n"
-      "axis[0].subcategory = 0x3F\n"
-      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+      "axis[0].subcategory = 0x3F\n";
 
   char path[64];
   stc_config_t cfg;
@@ -171,8 +168,7 @@ static void test_accept_valid_config(void) {
       "\n"
       "[diagnostics]\n"
       "axis[0].category = 0x06\n"
-      "axis[0].subcategory = 0x3F\n"
-      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+      "axis[0].subcategory = 0x3F\n";
 
   char path[64];
   stc_config_t cfg;
@@ -218,8 +214,7 @@ static void test_accept_sparse_sut_and_mirror_sections(void) {
       "\n"
       "[diagnostics]\n"
       "axis[0].category = 0x06\n"
-      "axis[0].subcategory = 0x3F\n"
-      "motor_status_map = 0,-1,-1,-1,-1,-1,-1,-1\n";
+      "axis[0].subcategory = 0x3F\n";
 
   char path[64];
   stc_config_t cfg;
