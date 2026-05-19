@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Implements a lightweight simulated axis plant used by STC backend emulation.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Mirrors backend-facing motion semantics (position/velocity/stop/reset) with
+ *   deterministic development behavior and no CAN dependency; not intended as a
+ *   real hardware timing or bus-contention model.
  */
 
 #include "sim_api.h"
@@ -111,6 +113,7 @@ void sim_shutdown(void) {
 }
 
 void sim_update(double /*dt_s*/) {
+  /* Integrator tick: advance all axes and publish a fresh rx timestamp heartbeat. */
   std::lock_guard<std::mutex> lock(g_sim.mtx);
   if (!g_sim.initialized) return;
   const uint64_t now = now_ms_steady();
@@ -121,6 +124,7 @@ void sim_update(double /*dt_s*/) {
 }
 
 void sim_set_position_target(size_t axis, double target_deg) {
+  /* Profile-position mode: target position is tracked by motor model over time. */
   std::lock_guard<std::mutex> lock(g_sim.mtx);
   if (!g_sim.initialized || !axis_valid(axis)) return;
   g_sim.axes[axis].mode = SIM_MODE_PP;
@@ -128,6 +132,7 @@ void sim_set_position_target(size_t axis, double target_deg) {
 }
 
 void sim_set_velocity_target(size_t axis, double speed_deg_s) {
+  /* Velocity mode: command persistent speed target until quick-stop/reset/override. */
   std::lock_guard<std::mutex> lock(g_sim.mtx);
   if (!g_sim.initialized || !axis_valid(axis)) return;
   g_sim.axes[axis].mode = SIM_MODE_PV;
@@ -135,6 +140,7 @@ void sim_set_velocity_target(size_t axis, double speed_deg_s) {
 }
 
 void sim_quick_stop(size_t axis) {
+  /* Quick-stop emulation: preserve position, force instantaneous zero velocity. */
   std::lock_guard<std::mutex> lock(g_sim.mtx);
   if (!g_sim.initialized || !axis_valid(axis)) return;
   auto st = g_sim.axes[axis].model.state();
@@ -143,6 +149,7 @@ void sim_quick_stop(size_t axis) {
 }
 
 void sim_reset_axis(size_t axis) {
+  /* Reset emulation: return axis model to origin and clear active mode. */
   std::lock_guard<std::mutex> lock(g_sim.mtx);
   if (!g_sim.initialized || !axis_valid(axis)) return;
   g_sim.axes[axis].model.reset(0.0, 0.0);

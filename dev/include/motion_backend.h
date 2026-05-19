@@ -27,7 +27,7 @@ extern "C" {
 /** Opaque backend handle implemented by the motion backend module. */
 typedef struct motion_backend motion_backend_t;
 
-/** Backend feature flags used to gate optional command paths. */
+/** Backend feature flags advertised in snapshots to gate optional command paths. */
 typedef struct {
   uint8_t supports_native_a2_speed;
   uint8_t supports_native_absolute_position;
@@ -36,6 +36,15 @@ typedef struct {
 /**
  * Static backend configuration copied from parsed INI config into runtime.
  * Ownership: caller-owned during start; backend copies required values.
+ */
+/**
+ * Runtime backend configuration consumed by motion_backend_start().
+ *
+ * Exposes transport details (CAN iface/IDs), motion limits, DS402/watchdog timing,
+ * and per-axis mapping copied from parsed configuration.
+ *
+ * Ownership/threading: stc_server builds this once, then the CAN worker thread
+ * passes it to motion_backend_start() and remains the sole caller of backend APIs.
  */
 typedef struct {
   const char* can_if;
@@ -65,6 +74,10 @@ typedef struct {
   uint8_t axis_node_id[STC_AXIS_COUNT];
 } motion_backend_cfg_t;
 
+/**
+ * Snapshot view of backend connectivity, diagnostics, and last known axis telemetry.
+ * Filled by motion_backend_get_snapshot() for state-machine/telemetry publishing.
+ */
 typedef struct {
   uint8_t backend_mode;      /* diagnostic only */
   uint8_t transport_status;  /* diagnostic only */
@@ -98,15 +111,25 @@ typedef struct {
 } motion_snapshot_t;
 
 /** Create and initialize backend instance. Called by CAN worker at startup. */
+/** Create backend instance from cfg; called once by CAN worker during startup. */
 int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend);
+/** Stop backend activity and release resources; called by CAN worker during shutdown. */
 void motion_backend_stop(motion_backend_t* backend);
+/** Probe transport/device availability and refresh discovered/connected diagnostics. */
 int motion_backend_discover(motion_backend_t* backend);
+/** Apply profile-position targets (degrees) on axes selected by axes_mask. */
 int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]);
+/** Apply mixed per-axis motion kinds via one API used by action execution path. */
 int motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]);
+/** Apply profile-velocity/stream speed targets (deg/s) on selected axes. */
 int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]);
+/** Request DS402 quick-stop (or simulator equivalent) on selected axes. */
 int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask);
+/** Attempt per-axis fault reset/clear sequence on selected axes. */
 int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask);
+/** Forward laser command for backend implementations that expose laser control. */
 int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off);
+/** Copy latest backend snapshot for telemetry/diagnostics consumption by server. */
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot);
 
 #ifdef __cplusplus
