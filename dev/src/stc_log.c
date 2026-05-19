@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Internal module implementation for STC runtime support services.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Comment-only documentation refactor; runtime behavior is unchanged.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -22,6 +22,7 @@
 
 static FILE* g_log_file = NULL;
 static stc_log_level_t g_log_level = STC_LOG_LEVEL_INFO;
+/* Single mutex serializes log-level updates and sink writes across threads. */
 static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static const char* level_tag(stc_log_level_t level) {
@@ -34,6 +35,9 @@ static const char* level_tag(stc_log_level_t level) {
   }
 }
 
+/* Local time + millisecond formatting keeps logs operator-readable while still
+ * allowing relative ordering during multi-thread incident investigation.
+ */
 static void format_timestamp(char* out, size_t out_sz) {
   if (!out || out_sz == 0) {
     return;
@@ -93,6 +97,7 @@ void stc_log_close(void) {
   pthread_mutex_unlock(&g_log_mutex);
 }
 
+/* Runtime level changes let field tools increase verbosity without restart. */
 void stc_log_set_level(stc_log_level_t level) {
   pthread_mutex_lock(&g_log_mutex);
   g_log_level = level;

@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Internal module implementation for STC runtime support services.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Comment-only documentation refactor; runtime behavior is unchanged.
  */
 
 #include "stc_config.h"
@@ -33,6 +33,7 @@ static void trim_inplace(char* s) {
   if (start > 0) memmove(s, s + start, strlen(s + start) + 1);
 }
 
+/** Parse sections like "Axis3"/"Mirror2" into bounded zero-based indices. */
 static int parse_indexed_section(const char* section, const char* prefix, int max_count, int base_one) {
   const size_t prefix_len = strlen(prefix);
   if (strncmp(section, prefix, prefix_len) != 0) return -1;
@@ -112,6 +113,7 @@ static int parse_axis_driver(const char* value, stc_axis_driver_t* out) {
   else return -1;
   return 0;
 }
+/** Initialize deterministic baseline defaults before user INI overrides. */
 void stc_config_set_defaults(stc_config_t* cfg) {
   if (!cfg) return;
   memset(cfg, 0, sizeof(*cfg));
@@ -329,6 +331,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
       } else if (strcmp(key, "tlml_port") == 0) {
         if (parse_int(value, &cfg->tlml_port) != 0) goto parse_error;
       } else if (strcmp(key, "mcast_ip") == 0) {
+        /* Backward-compatibility alias: retained for legacy deployments. */
         if (strlen(value) >= sizeof(cfg->tlm_dest_ip)) goto parse_error;
         strcpy(cfg->tlm_dest_ip, value);
         STC_LOG_WARN("%s:%d: [Network].mcast_ip is deprecated; use tlm_dest_ip", path, line_no);
@@ -680,8 +683,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
 parse_error:
   if (strcmp(parse_error_reason, "unknown section") == 0) {
+    /* Strict schema: unknown sections are rejected to surface config drift. */
     STC_LOG_ERROR("%s:%d: unknown section [%s]", path, line_no, section);
   } else if (strcmp(parse_error_reason, "unknown key") == 0) {
+    /* Strict schema: unknown keys are rejected to prevent typo fallthrough. */
     STC_LOG_ERROR("%s:%d: unknown key '%s' in section [%s]", path, line_no, parse_key, section);
   } else {
     STC_LOG_ERROR("%s:%d: invalid value for %s", path, line_no, parse_key);
