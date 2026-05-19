@@ -263,6 +263,16 @@ if(USE_SIMULATOR)
   target_link_libraries(test_can_worker_concurrency_tsan PRIVATE simulator)
 endif()
 
+
+add_executable(test_motion_backend_router
+  dev/tests/test_motion_backend_router.c
+  dev/src/motion_backend_router.c
+  dev/src/stc_log.c
+)
+target_include_directories(test_motion_backend_router PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_definitions(test_motion_backend_router PRIVATE SIMULATION)
+target_compile_options(test_motion_backend_router PRIVATE -Wall -Wextra)
+
 if(BUILD_DIAG_GUI)
   find_package(Qt6 COMPONENTS Core Gui Widgets Network QUIET)
   if(Qt6_FOUND)
