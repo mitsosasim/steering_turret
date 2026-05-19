@@ -24,7 +24,9 @@ extern "C" {
 
 #define STC_ICD_MAX_PAYLOAD       512u
 #define STC_ICD_AXES_COUNT        18u
-#define STC_ICD_MAX_ERRORS        64u  /* for TLML variable error list */
+#define STC_ICD_LASER_COUNT       8u
+#define STC_ICD_TLML_BASE_SIZE    100u
+#define STC_ICD_MAX_ERRORS        64u
 
 /* ----------------------------- Status codes ----------------------------- */
 
@@ -273,7 +275,7 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
                                size_t* out_len);
 
 /*
- * TLML (variable errors list):
+ * TLML (variable diagnostics list):
  *   magic[4] = "TLML"
  *   version u8
  *   controller_id u8
@@ -288,14 +290,28 @@ stc_icd_rc_t stc_icd_tlmh_pack(const stc_icd_cfg_t* cfg,
  *   lon double
  *   alt_m double
  *   heading_deg double
- *   motor_status[8] u8
- *   laser_status[8] u8   (SUT laser on/off: index i => SUT(i+1), 0=OFF, 1=ON)
+ *   motor_status[18] u8
+ *     Canonical axis order:
+ *       0  ST az
+ *       1  ST el
+ *       2  SUT1 az
+ *       3  SUT1 el
+ *       ...
+ *       16 SUT8 az
+ *       17 SUT8 el
+ *   laser_status[8] u8
+ *     SUT laser status:
+ *       index 0 = SUT1 laser
+ *       ...
+ *       index 7 = SUT8 laser
+ *       value 0 = OFF / unavailable
+ *       value 1 = ON
  *   level_x float
  *   level_y float
  *   error_count u8
  *   errors[error_count] u32
  *
- * Base size (without errors) = 83 bytes, then +4*error_count.
+ * Base size without errors = 100 bytes.
  */
 
 typedef struct stc_tlml_s {
@@ -317,8 +333,8 @@ typedef struct stc_tlml_s {
   double alt_m;
   double heading_deg;
 
-  uint8_t motor_status[8];
-  uint8_t laser_status[8];
+  uint8_t motor_status[STC_ICD_AXES_COUNT];
+  uint8_t laser_status[STC_ICD_LASER_COUNT];
 
   float level_x;
   float level_y;
