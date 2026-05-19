@@ -180,6 +180,31 @@ static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t e
   return -1;
 }
 
+
+static int poll_axis_feedback_once(struct motion_backend* b, size_t axis, uint8_t node_id, uint8_t cmd, int timeout_ms) {
+  struct can_frame fr;
+  if (send_myact_read(b, node_id, cmd) != 0) return -1;
+  if (recv_myact_reply(b, node_id, cmd, &fr, timeout_ms) != 0 || fr.can_dlc < 8) return -1;
+
+  const uint64_t t_ms = now_ms();
+  if (cmd == MYACT_CMD_READ_ANGLE) {
+    const int16_t angle_deg = (int16_t)((uint16_t)fr.data[6] | ((uint16_t)fr.data[7] << 8));
+    normalize_snapshot_from_feedback(b, axis, 0, 0, angle_deg, t_ms);
+    return 0;
+  }
+
+  if (cmd == MYACT_CMD_READ_STATUS1 || cmd == MYACT_CMD_READ_STATUS2) {
+    const int16_t iq_0p01a = (int16_t)((uint16_t)fr.data[2] | ((uint16_t)fr.data[3] << 8));
+    const int16_t speed_dps = (int16_t)((uint16_t)fr.data[4] | ((uint16_t)fr.data[5] << 8));
+    const int16_t angle_deg = (int16_t)((uint16_t)fr.data[6] | ((uint16_t)fr.data[7] << 8));
+    normalize_snapshot_from_feedback(b, axis, iq_0p01a, speed_dps, angle_deg, t_ms);
+    if (cmd == MYACT_CMD_READ_STATUS1) b->snap.status_word[axis] = (uint16_t)iq_0p01a;
+    return 0;
+  }
+
+  return -1;
+}
+
 static int wait_for_position_target_locked(struct motion_backend* b, size_t axis, uint8_t node_id, double target_deg) {
   const axis_cfg_t* cfg = &b->cfg.axis_cfg[axis];
   const double tolerance_deg = (b->cfg.position_tolerance_deg > 0.0) ? b->cfg.position_tolerance_deg : 1.0;
@@ -188,15 +213,10 @@ static int wait_for_position_target_locked(struct motion_backend* b, size_t axis
   const uint64_t deadline = now_ms() + (uint64_t)timeout_ms;
   double final_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
   while (now_ms() <= deadline) {
-    struct can_frame fr;
-    if (send_myact_read(b, node_id, MYACT_CMD_READ_ANGLE) == 0 &&
-        recv_myact_reply(b, node_id, MYACT_CMD_READ_ANGLE, &fr, poll_ms) == 0 && fr.can_dlc >= 8) {
-      const int16_t angle_deg = (int16_t)((uint16_t)fr.data[6] | ((uint16_t)fr.data[7] << 8));
-      normalize_snapshot_from_feedback(b, axis, 0, 0, angle_deg, now_ms());
+    if (poll_axis_feedback_once(b, axis, node_id, MYACT_CMD_READ_ANGLE, poll_ms) == 0 ||
+        poll_axis_feedback_once(b, axis, node_id, MYACT_CMD_READ_STATUS2, poll_ms) == 0) {
       final_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
     }
-    if (send_myact_read(b, node_id, MYACT_CMD_READ_STATUS2) == 0)
-      (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_STATUS2, &fr, poll_ms);
 
     const double err_deg = fabs(final_deg - target_deg);
     if (err_deg <= tolerance_deg) {
@@ -375,6 +395,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->last_cmd_ms[axis] = m->cmd_ts_ms;
       b->cmd_vel_raw[axis] = local_axis_deg_to_counts(cfg, clamped);
       b->cmd_ack_pending[axis] = 1u;
+      (void)poll_axis_feedback_once(b, axis, node_id, MYACT_CMD_READ_STATUS2, 20);
     } else {
       log_myact_failure(b, axis, "A2", speed_rc);
     }
@@ -440,6 +461,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->last_cmd_ms[axis] = m->cmd_ts_ms;
       b->cmd_pos_raw[axis] = local_axis_deg_to_counts(cfg, target_deg);
       b->cmd_ack_pending[axis] = 1u;
+      (void)poll_axis_feedback_once(b, axis, node_id, MYACT_CMD_READ_STATUS2, 20);
       if (wait_for_position_target_locked(b, axis, node_id, expected_target_deg) != 0) {
         b->snap.status_word[axis] |= (uint16_t)(1u << 15);
         log_myact_failure(b, axis, "target wait", -1);
@@ -449,8 +471,13 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
     }
   } else if (m->kind == AXIS_CMD_STOP) {
     const int stop_rc = axis_stop_locked(b, axis, t_ms, 1);
-    if (stop_rc == 0) STC_LOG_INFO("axis%zu MYACT stop rc=OK", axis);
-    else log_myact_failure(b, axis, "stop", stop_rc);
+    if (stop_rc == 0) {
+      STC_LOG_INFO("axis%zu MYACT stop rc=OK", axis);
+      (void)poll_axis_feedback_once(b, axis, node_id, MYACT_CMD_READ_STATUS1, 30);
+      (void)poll_axis_feedback_once(b, axis, node_id, MYACT_CMD_READ_STATUS2, 30);
+      (void)poll_axis_feedback_once(b, axis, node_id, MYACT_CMD_READ_ANGLE, 30);
+      b->snap.vel_raw[axis] = 0;
+    } else log_myact_failure(b, axis, "stop", stop_rc);
   }
 
   b->applied_seq[axis] = m->seq;
