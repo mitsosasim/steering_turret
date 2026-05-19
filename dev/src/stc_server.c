@@ -589,6 +589,23 @@ static uint32_t mirror_axes_mask(const shared_data_t* sh, uint8_t id) {
   return mask;
 }
 
+static int command_targets_unmapped_axis(const shared_data_t* sh, const stc_icd_cmd_t* cmd) {
+  if (cmd->cmd_id == STC_CMD_TURRET) {
+    return (sh->turret_az_axis < 0 || sh->turret_el_axis < 0);
+  }
+  if (cmd->cmd_id == STC_CMD_SUT && cmd->u.sut.id != 0xFF) {
+    const int idx = (int)cmd->u.sut.id - 1;
+    if (idx < 0 || idx >= sh->sut_count) return 0;
+    return (sh->sut_az_axis[idx] < 0 || sh->sut_el_axis[idx] < 0);
+  }
+  if (cmd->cmd_id == STC_CMD_MIRROR && cmd->u.mirror.mirror_id != 0xFF) {
+    const int idx = (int)cmd->u.mirror.mirror_id - 1;
+    if (idx < 0 || idx >= sh->mirror_count) return 0;
+    return (sh->mirror_axis[idx] < 0);
+  }
+  return 0;
+}
+
 static void print_cmd(const stc_icd_cmd_t* c) {
   STC_LOG_DEBUG("CMD: ver=%u ctrl=%u cmd_id=0x%04X seq=%u ts=%llu payload=%u",
          c->version, c->controller_id, c->cmd_id, c->seq,
@@ -2628,7 +2645,10 @@ int main(int argc, char** argv) {
                 }
               }
 
-              if (axes_mask == 0) {
+              if (command_targets_unmapped_axis(&sh.d, &cmd)) {
+                STC_LOG_WARN("requested axis is not configured");
+                v = STC_ERR_VALUE_OUT_OF_RANGE;
+              } else if (axes_mask == 0) {
                 v = STC_ERR_VALUE_OUT_OF_RANGE;
               } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
                 if ((cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_SPEED) ||
