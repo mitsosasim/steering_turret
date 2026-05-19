@@ -1300,8 +1300,14 @@ static void* can_worker_thread(void* arg) {
       }
       switch (act.type) {
         case ACTION_PP_MOVE:
+          (void)motion_backend_apply_pp_move(backend, act.axes_mask, act.u.target_deg);
+          for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+            if (act.axes_mask & (1u << axis)) axis_enabled[axis] = 1;
+          }
+          break;
+        case ACTION_MOTION:
           if (motion_backend_apply_motion(backend, act.axes_mask, act.u.motion.kind, act.u.motion.value_deg_or_dps, act.u.motion.speed_limit_deg_s) != 0) {
-            (void)motion_backend_apply_pp_move(backend, act.axes_mask, act.u.target_deg);
+            STC_LOG_WARN("motion_backend_apply_motion failed; command dropped without PP fallback");
           }
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if (act.axes_mask & (1u << axis)) axis_enabled[axis] = 1;
