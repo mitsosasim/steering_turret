@@ -272,8 +272,10 @@ typedef struct {
 
 static trace_state_t g_trace = {false, 0};
 static bool g_verbose_samples = false;
+#ifdef STC_ENABLE_TRACE_FRAMES
 static uint8_t expected_reply_opcode_for_tx(uint8_t op);
 static void trace_frame_line(const char* dir, const myact_can_frame_t* fr, uint8_t expected_reply);
+#endif
 
 static uint64_t now_ms(void* user) {
     struct timespec ts;
@@ -340,6 +342,7 @@ static void test_axis_disable(myact_ctx_t* ctx, bool shutdown) {
 
 static void print_usage(const char* p) { fprintf(stderr, "usage: %s <can_if> <node_id> [flags...]\n", p); }
 
+#ifdef STC_ENABLE_TRACE_FRAMES
 static const char* opcode_name(uint8_t op) {
     switch (op) {
         case 0x19: return "shutdown";
@@ -362,6 +365,8 @@ static const char* opcode_name(uint8_t op) {
     }
 }
 
+#endif
+
 static void print_cmd_summary(const char* test_name,
                               const uint8_t frame[8],
                               const char* target_desc,
@@ -380,6 +385,7 @@ static void print_cmd_summary(const char* test_name,
            reason ? reason : "n/a");
 }
 
+#ifdef STC_ENABLE_TRACE_FRAMES
 static uint8_t expected_reply_opcode_for_tx(uint8_t op) {
     switch (op) {
         case 0x19: case 0x76: case 0x77:
@@ -407,6 +413,8 @@ static void trace_frame_line(const char* dir, const myact_can_frame_t* fr, uint8
     printf("\n");
 }
 
+
+#endif
 
 static bool commissioning_set_requested(const test_opts_t* o) {
     return o->set_speed_accel_valid || o->set_speed_decel_valid ||
