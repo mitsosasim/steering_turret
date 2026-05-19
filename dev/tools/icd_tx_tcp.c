@@ -5,7 +5,7 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Manual TCP command injector for STC ICD CMD/RSP exchanges.
+ *   CLI TCP command injector for deterministic STC ICD CMD/RSP protocol tests.
  *
  * Design notes:
  *   Crafts CU-like command frames, sends them to stc_server, then reads/parses
@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
 
   stc_icd_cmd_t c; /* Packed by stc_icd_cmd_pack(), then sent as raw TCP bytes. */
 
-  // ---- suite: send multiple good and a few bad
+  // ---- suite: deterministic positive-path command sequence + selected negatives
   if (!strcmp(cmdn, "suite")) {
     printf("Running suite...\n");
 
@@ -374,7 +374,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // ---- special bad packet: magic wrong (we patch after packing)
+  // ---- negative test: bad magic (patch magic bytes after normal packing)
   if (!strcmp(cmdn, "bad_magic")) {
     INIT_CMD(STC_CMD_CU_STATE);
     c.u.cu_state.state = 2;
@@ -390,7 +390,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // ---- special bad packet: unknown cmd_id
+  // ---- negative test: unknown command ID dispatch behavior
   if (!strcmp(cmdn, "unknown_cmd")) {
     INIT_CMD(0x9999);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
@@ -399,7 +399,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // ---- special bad packet: bad_version
+  // ---- negative test: protocol version mismatch behavior
   if (!strcmp(cmdn, "bad_version")) {
     INIT_CMD(STC_CMD_CU_STATE);
     c.version = 2;
@@ -410,7 +410,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // ---- special bad packet: bad_payload
+  // ---- negative test: malformed payload content/length behavior
   if (!strcmp(cmdn, "bad_payload")) {
     INIT_CMD(STC_CMD_TURRET);
     c.payload_decoded = 0;
@@ -423,7 +423,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // ---- single command modes
+  // ---- single command modes: argv parsing drives command-family payload generation
   if (!strcmp(cmdn, "cu_state")) {
     if (argc < 5) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_CU_STATE);

@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Development/operator diagnostic GUI for commanding and observing STC over ICD.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   This application is a bench/integration tool and is not a hard real-time
+ *   controller. It visualizes telemetry, emits ICD test commands, and helps
+ *   operators verify controller behavior while runtime control remains in STC.
  */
 
 #include <QtWidgets/QApplication>
@@ -191,14 +193,19 @@ class DiagnosticsWindow : public QMainWindow {
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
+    // Main operator layout:
+    //  - top panel: connection controls, command/state panels, telemetry widgets
+    //  - bottom panel: status + log stream for protocol/debug visibility
     root->addWidget(buildTopPanel(), 3);
     root->addWidget(buildLogPanel(), 1);
     setCentralWidget(central);
 
     initAxisTable();
 
+    // TCP command send path (CMD frame packing -> socket write).
     connect(sendButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendCommand);
     connect(commandBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, &DiagnosticsWindow::onCommandSelectionChanged);
+    // UDP telemetry receive path (TLMH/TLML decode -> UI update).
     connect(udpHigh_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processHighTelemetry);
     connect(udpLow_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processLowTelemetry);
     connect(simModeBox_, &QCheckBox::toggled, this, &DiagnosticsWindow::onSimModeChanged);
@@ -232,9 +239,14 @@ class DiagnosticsWindow : public QMainWindow {
     });
     connect(tcpSocket_, &QTcpSocket::connected, this, &DiagnosticsWindow::onTcpConnected);
     connect(tcpSocket_, &QTcpSocket::disconnected, this, &DiagnosticsWindow::onTcpDisconnected);
+    // TCP response path (RSP parse -> ACK/NACK/status panels/logs).
     connect(tcpSocket_, &QTcpSocket::readyRead, this, &DiagnosticsWindow::onTcpReadyRead);
     connect(tcpSocket_, &QTcpSocket::errorOccurred, this, &DiagnosticsWindow::onTcpError);
 
+    // Periodic UI/runtime timers:
+    //  - connectTimer_: auto-reconnect command channel
+    //  - diagPollTimer_: periodic backend diagnostic query/update
+    //  - simTimer_: local simulation tick for GUI-only simulation mode
     connectTimer_ = new QTimer(this);
     connectTimer_->setInterval(1000);
     connect(connectTimer_, &QTimer::timeout, this, &DiagnosticsWindow::ensureTcpConnected);
@@ -280,31 +292,37 @@ class DiagnosticsWindow : public QMainWindow {
 
     switch (currentUiCommand()) {
       case UiCommand::CuState:
+        // UI "CU_STATE" -> ICD cmd_id STC_CMD_CU_STATE
         cmd->cmd_id = STC_CMD_CU_STATE;
         cmd->u.cu_state.state = static_cast<uint8_t>(cuStateBox_->currentData().toInt());
         cmd->payload_size = 1;
         return true;
       case UiCommand::SelfLev:
+        // UI "SELFLEV" -> ICD cmd_id STC_CMD_SELFLEV
         cmd->cmd_id = STC_CMD_SELFLEV;
         cmd->u.selflev.v = static_cast<uint8_t>(selfLevActionBox_->currentData().toInt());
         cmd->payload_size = 1;
         return true;
       case UiCommand::Ibit:
+        // UI "IBIT" -> ICD cmd_id STC_CMD_IBIT
         cmd->cmd_id = STC_CMD_IBIT;
         cmd->u.ibit.v = static_cast<uint8_t>(ibitActionBox_->currentData().toInt());
         cmd->payload_size = 1;
         return true;
       case UiCommand::Storage:
+        // UI "STORAGE" -> ICD cmd_id STC_CMD_STORAGE
         cmd->cmd_id = STC_CMD_STORAGE;
         cmd->payload_size = 0;
         return true;
       case UiCommand::Laser:
+        // UI "LASER" -> ICD cmd_id STC_CMD_LASER
         cmd->cmd_id = STC_CMD_LASER;
         cmd->u.laser.id = static_cast<uint8_t>(laserIdSpin_->value());
         cmd->u.laser.on_off = static_cast<uint8_t>(laserActionBox_->currentData().toInt());
         cmd->payload_size = 2;
         return true;
       case UiCommand::Turret:
+        // UI "TURRET" -> ICD cmd_id STC_CMD_TURRET
         cmd->cmd_id = STC_CMD_TURRET;
         cmd->u.turret.motion_type = static_cast<uint8_t>(turretTypeBox_->currentData().toInt());
         cmd->u.turret.az = static_cast<float>(turretAzSpin_->value());
@@ -312,6 +330,7 @@ class DiagnosticsWindow : public QMainWindow {
         cmd->payload_size = 9;
         return true;
       case UiCommand::Mirror:
+        // UI "MIRROR" -> ICD cmd_id STC_CMD_MIRROR
         cmd->cmd_id = STC_CMD_MIRROR;
         cmd->u.mirror.mirror_id = static_cast<uint8_t>(mirrorIdBox_->currentData().toInt());
         cmd->u.mirror.motion_type = static_cast<uint8_t>(mirrorTypeBox_->currentData().toInt());
@@ -319,6 +338,7 @@ class DiagnosticsWindow : public QMainWindow {
         cmd->payload_size = 6;
         return true;
       case UiCommand::Sut:
+        // UI "SUT" -> ICD cmd_id STC_CMD_SUT
         cmd->cmd_id = STC_CMD_SUT;
         cmd->u.sut.id = static_cast<uint8_t>(sutIdBox_->currentData().toInt());
         cmd->u.sut.motion_type = static_cast<uint8_t>(sutTypeBox_->currentData().toInt());
@@ -327,31 +347,38 @@ class DiagnosticsWindow : public QMainWindow {
         cmd->payload_size = 10;
         return true;
       case UiCommand::Reset:
+        // UI "RESET" -> ICD cmd_id STC_CMD_RESET
         cmd->cmd_id = STC_CMD_RESET;
         cmd->payload_size = 0;
         return true;
       case UiCommand::DelLog:
+        // UI "DELLOG" -> ICD cmd_id STC_CMD_DELLOG
         cmd->cmd_id = STC_CMD_DELLOG;
         cmd->payload_size = 0;
         return true;
       case UiCommand::Factory:
+        // UI "FACTORY" -> ICD cmd_id STC_CMD_FACTORY
         cmd->cmd_id = STC_CMD_FACTORY;
         cmd->payload_size = 0;
         return true;
       case UiCommand::SelfTest:
+        // UI "SELFTEST" -> ICD cmd_id STC_CMD_SELFTEST
         cmd->cmd_id = STC_CMD_SELFTEST;
         cmd->payload_size = 0;
         return true;
       case UiCommand::Shutdown:
+        // UI "SHUTDOWN" -> ICD cmd_id STC_CMD_SHUTDOWN
         cmd->cmd_id = STC_CMD_SHUTDOWN;
         cmd->payload_size = 0;
         return true;
       case UiCommand::Config:
+        // UI "CONFIG" (reserved) -> ICD cmd_id STC_CMD_CONFIG
         cmd->cmd_id = STC_CMD_CONFIG;
         cmd->payload_decoded = 0;
         cmd->payload_size = 0;
         return true;
       case UiCommand::ManualPos:
+        // UI "MANUALPOS" -> ICD cmd_id STC_CMD_MANUALPOS
         cmd->cmd_id = STC_CMD_MANUALPOS;
         cmd->u.manualpos.lat = manualLatSpin_->value();
         cmd->u.manualpos.lon = manualLonSpin_->value();
@@ -361,19 +388,23 @@ class DiagnosticsWindow : public QMainWindow {
         cmd->payload_size = 32;
         return true;
       case UiCommand::PosMode:
+        // UI "POSMODE" -> ICD cmd_id STC_CMD_POSMODE
         cmd->cmd_id = STC_CMD_POSMODE;
         cmd->u.posmode.v = static_cast<uint8_t>(posModeBox_->currentData().toInt());
         cmd->payload_size = 1;
         return true;
       case UiCommand::ReqSwVersion:
+        // UI "REQ_SW_VERSION" -> ICD cmd_id STC_CMD_REQ_SW_VERSION
         cmd->cmd_id = STC_CMD_REQ_SW_VERSION;
         cmd->payload_size = 0;
         return true;
       case UiCommand::ReqHwInfo:
+        // UI "REQ_HW_INFO" -> ICD cmd_id STC_CMD_REQ_HW_INFO
         cmd->cmd_id = STC_CMD_REQ_HW_INFO;
         cmd->payload_size = 0;
         return true;
       case UiCommand::ReqWorkTime:
+        // UI "REQ_WORK_TIME" -> ICD cmd_id STC_CMD_REQ_WORK_TIME
         cmd->cmd_id = STC_CMD_REQ_WORK_TIME;
         cmd->payload_size = 0;
         return true;
@@ -437,6 +468,8 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void onTcpReadyRead() {
+    // Stream parser for TCP responses:
+    // accumulate bytes, frame by frame using fixed header + payload_size.
     rspBuffer_.append(tcpSocket_->readAll());
     while (rspBuffer_.size() >= kRspHeaderSize) {
       const uint16_t payloadSize = static_cast<uint16_t>(static_cast<uint8_t>(rspBuffer_[12])) |
