@@ -5,11 +5,13 @@
 # Documentation/comment ownership header only; no runtime behavior changes.
 
 [Unit]
+# systemd unit for persistent STC runtime startup after network is online.
 Description=STC Server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Service runs from /opt/stc so relative logs/configs resolve consistently.
 Type=simple
 User=stc
 Group=stc
@@ -19,11 +21,15 @@ Restart=on-failure
 RestartSec=2
 
 # Required for real-time scheduling without running as root.
+# CAP_SYS_NICE allows FIFO priority setup requested by --rt-* options.
 AmbientCapabilities=CAP_SYS_NICE
 CapabilityBoundingSet=CAP_SYS_NICE
 LimitRTPRIO=80
 LimitRTTIME=infinity
 NoNewPrivileges=true
+
+# Note: raw CAN access (PF_CAN/SOCK_RAW) may require additional deployment
+# permissions/groups (for example, CAN device ACLs) outside this unit file.
 
 [Install]
 WantedBy=multi-user.target

@@ -29,6 +29,7 @@ extern "C" {
 
 /** Parsed configuration container populated from INI and consumed at startup. */
 typedef struct stc_config_s {
+  /** TCP command socket bind port for CMD/RSP control traffic. */
   int tcp_port;
   char backend[32];
   char can_if[16];
@@ -45,6 +46,7 @@ typedef struct stc_config_s {
   int telemetry_interval_ms;
   int experimental_native_speed_mode;
 
+  /** UDP fallback destination when per-stream address is not separately configured. */
   char tlm_dest_ip[16];
   char tlmh_ip[16];
   char tlml_ip[16];
@@ -73,6 +75,7 @@ typedef struct stc_config_s {
   // 0 (default): allow compatibility controller_id 0x01 + legacy ICD IDs; 1: legacy IDs only.
   int controller_id_strict_legacy;
 
+  /** Number of declared logical axes in use (<= STC_AXIS_COUNT). */
   int num_axes;
   int axis_enabled[STC_AXIS_COUNT];
   stc_axis_driver_t axis_driver[STC_AXIS_COUNT];
@@ -98,19 +101,24 @@ typedef struct stc_config_s {
   uint16_t axis_pp_profile_vel[STC_AXIS_COUNT];
   uint8_t axis_diag_cat[STC_AXIS_COUNT];
   uint8_t axis_diag_subcat[STC_AXIS_COUNT];
+  /** Turret logical mapping: azimuth/elevation axis indexes. */
   int turret_az_axis;
   int turret_el_axis;
 
+  /** SUT logical-to-axis map and associated laser output IDs. */
   int sut_count;
   int sut_az_axis[STC_MAX_SUT];
   int sut_el_axis[STC_MAX_SUT];
   uint8_t sut_laser_on[STC_MAX_SUT];
 
+  /** Mirror logical-to-axis map. */
   int mirror_count;
   int mirror_axis[STC_MAX_MIRROR];
 } stc_config_t;
 
+/** Populate cfg with deterministic defaults before applying INI overrides. */
 void stc_config_set_defaults(stc_config_t* cfg);
+/** Parse INI file into cfg. Called once at startup; cfg is copied into runtime state. */
 bool load_config(const char* path, stc_config_t* cfg);
 
 #ifdef __cplusplus
