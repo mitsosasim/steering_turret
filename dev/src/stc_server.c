@@ -116,6 +116,34 @@ static inline uint8_t stc_state_to_wire(stc_state_t s) {
   return (s == STC_STATE_FAIL) ? 0xFFu : (uint8_t)s;
 }
 
+/* TLML motor status byte (per canonical axis order):
+ * bit 0: axis configured/enabled
+ * bit 1: axis available/connected
+ * bit 2: axis fault
+ * bit 3: axis stale
+ * bit 4: command saturated recently
+ * bit 5: moving or speed-streaming
+ * bit 6: degraded/warning
+ * bit 7: reserved
+ */
+static uint8_t build_axis_health_byte(int enabled,
+                                      int available,
+                                      int fault,
+                                      int stale,
+                                      int saturated,
+                                      int moving_or_streaming,
+                                      int degraded) {
+  uint8_t flags = 0;
+  if (enabled) flags |= (1u << 0);
+  if (available) flags |= (1u << 1);
+  if (fault) flags |= (1u << 2);
+  if (stale) flags |= (1u << 3);
+  if (saturated) flags |= (1u << 4);
+  if (moving_or_streaming) flags |= (1u << 5);
+  if (degraded) flags |= (1u << 6);
+  return flags;
+}
+
 static const char* stc_state_to_string(stc_state_t state) {
   switch (state) {
     case STC_STATE_INIT: return "INIT";
@@ -1855,7 +1883,8 @@ static void* tlml_tx_thread(void* arg) {
     uint64_t last_rx_ms[STC_AXIS_COUNT] = {0};
     uint8_t diag_cat[STC_AXIS_COUNT] = {0};
     uint8_t diag_subcat[STC_AXIS_COUNT] = {0};
-    int8_t motor_map[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+    uint8_t stream_enabled[STC_AXIS_COUNT] = {0};
+    double axis_speed_deg_s[STC_AXIS_COUNT] = {0.0};
 
     for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
       saturated[i] = a->sh->d.saturated[i] && (nowm <= a->sh->d.saturated_until_ms[i]);
@@ -1870,12 +1899,15 @@ static void* tlml_tx_thread(void* arg) {
         a->sh->d.saturated[i] = false;
       }
     }
-    memcpy(motor_map, a->sh->d.motor_map, sizeof(motor_map));
     uint32_t can_timeout_ms = a->sh->d.can_timeout_ms;
     uint32_t startup_feedback_grace_ms = a->sh->d.startup_feedback_grace_ms;
     uint8_t laser_status_snapshot[8];
     memcpy(laser_status_snapshot, a->sh->d.sut_laser_on, sizeof(laser_status_snapshot));
     int strict_stale_policy = a->sh->d.strict_stale_policy ? 1 : 0;
+    for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
+      stream_enabled[i] = a->sh->d.stream[i].enabled ? 1u : 0u;
+      axis_speed_deg_s[i] = a->sh->d.telem[i].vel_deg_s;
+    }
     const int in_startup_grace = stc_is_within_startup_grace(nowm, a->sh->d.server_start_ms, startup_feedback_grace_ms);
     pthread_mutex_unlock(&a->sh->mtx);
 
@@ -1886,25 +1918,28 @@ static void* tlml_tx_thread(void* arg) {
     m.level_x = 0.0f;
     m.level_y = 0.0f;
 
-    for (int j = 0; j < 8; j++) {
-      int ax = motor_map[j];
-      if (ax < 0 || ax >= (int)STC_AXIS_COUNT) {
-        m.motor_status[j] = 0;
+    for (size_t axis = 0; axis < STC_ICD_AXES_COUNT; axis++) {
+      const int enabled = axis_enabled[axis] ? 1 : 0;
+      if (!enabled) {
+        m.motor_status[axis] = 0x00;
         continue;
       }
 
-      uint8_t flags = 0;
-      if (axis_enabled[ax]) flags |= (1u << 0);
-      if (axis_fault_active[ax]) flags |= (1u << 1);
-      const int expected = axis_expected[ax] ? 1 : 0;
-      const int connected = axis_available[ax] ? 1 : 0;
-      const int timed_out = elapsed_ms_nonnegative(nowm, last_rx_ms[ax]) > can_timeout_ms;
+      const int expected = axis_expected[axis] ? 1 : 0;
+      const int connected = axis_available[axis] ? 1 : 0;
+      const int timed_out = elapsed_ms_nonnegative(nowm, last_rx_ms[axis]) > can_timeout_ms;
       const int stale = (!in_startup_grace && can_timeout_ms > 0)
         ? (strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out))
         : 0;
-      if (stale) flags |= (1u << 2);
-      if (saturated[ax]) flags |= (1u << 3);
-      m.motor_status[j] = flags;
+      const int moving_or_streaming = (fabs(axis_speed_deg_s[axis]) > 0.01) || stream_enabled[axis];
+      const int degraded = stale;
+      m.motor_status[axis] = build_axis_health_byte(enabled,
+                                                    connected,
+                                                    axis_fault_active[axis] ? 1 : 0,
+                                                    stale,
+                                                    saturated[axis] ? 1 : 0,
+                                                    moving_or_streaming,
+                                                    degraded);
     }
 
     memset(m.laser_status, 0, sizeof(m.laser_status));
