@@ -113,6 +113,20 @@ static inline uint8_t stc_state_to_wire(stc_state_t s) {
   return (s == STC_STATE_FAIL) ? 0xFFu : (uint8_t)s;
 }
 
+static const char* stc_state_to_string(stc_state_t state) {
+  switch (state) {
+    case STC_STATE_INIT: return "INIT";
+    case STC_STATE_INIT_DONE: return "INIT_DONE";
+    case STC_STATE_SAFE: return "SAFE";
+    case STC_STATE_OPER: return "OPER";
+    case STC_STATE_SELF_LEVELLING: return "SELF_LEVELLING";
+    case STC_STATE_STORE: return "STORE";
+    case STC_STATE_IBIT_RUNNING: return "IBIT_RUNNING";
+    case STC_STATE_FAIL: return "FAIL";
+    default: return "UNKNOWN";
+  }
+}
+
 /* ----------------------------- networking helpers ----------------------------- */
 
 static int send_all(int fd, const uint8_t* buf, size_t len) {
@@ -477,6 +491,11 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
   stc_state_t next = sh->d.st_state;
   if (stc_state_transition(sh->d.st_state, evt, &next) != 0) return -1;
   sh->d.st_state = next;
+  if (prev != next) {
+    STC_LOG_INFO("state transition: %s -> %s",
+                 stc_state_to_string(prev),
+                 stc_state_to_string(next));
+  }
   if (next == STC_STATE_FAIL && prev != STC_STATE_FAIL) {
     uint32_t mask = 0;
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -2353,6 +2372,9 @@ int main(int argc, char** argv) {
   }
   if (sh.d.st_state != STC_STATE_FAIL &&
       stc_state_transition(sh.d.st_state, EVT_ENTER_SAFE, &next_state) == 0) {
+    STC_LOG_INFO("state transition: %s -> %s",
+                 stc_state_to_string(sh.d.st_state),
+                 stc_state_to_string(next_state));
     sh.d.st_state = next_state;
   }
 
@@ -2629,15 +2651,19 @@ int main(int argc, char** argv) {
         pthread_mutex_lock(&sh.mtx);
         if (cmd.payload_decoded) {
           if (cmd.cmd_id == STC_CMD_CU_STATE) {
-            stc_event_t evt;
-            if (cmd.u.cu_state.state == STC_STATE_SAFE) evt = EVT_ENTER_SAFE;
-            else if (cmd.u.cu_state.state == STC_STATE_OPER) evt = EVT_ENTER_OPER;
-            else {
-              v = STC_ERR_NOT_ALLOWED_STATE;
-              evt = EVT_ENTER_SAFE;
-            }
-            if (v == STC_ERR_NO_ERROR && shared_transition_locked(&sh, evt) != 0) {
-              v = STC_ERR_NOT_ALLOWED_STATE;
+            if (cmd.u.cu_state.state == sh.d.st_state) {
+              v = STC_ERR_NO_ERROR;
+            } else {
+              stc_event_t evt;
+              if (cmd.u.cu_state.state == STC_STATE_SAFE) evt = EVT_ENTER_SAFE;
+              else if (cmd.u.cu_state.state == STC_STATE_OPER) evt = EVT_ENTER_OPER;
+              else {
+                v = STC_ERR_NOT_ALLOWED_STATE;
+                evt = EVT_ENTER_SAFE;
+              }
+              if (v == STC_ERR_NO_ERROR && shared_transition_locked(&sh, evt) != 0) {
+                v = STC_ERR_NOT_ALLOWED_STATE;
+              }
             }
           } else if (cmd.cmd_id == STC_CMD_SELFLEV) {
             if (cmd.u.selflev.v == 0) {
