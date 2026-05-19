@@ -51,6 +51,17 @@ constexpr uint16_t kDefaultTlmHighPort = 6010;
 constexpr uint16_t kDefaultTlmLowPort = 6020;
 constexpr int kRspHeaderSize = 14;
 constexpr int kAxisCount = static_cast<int>(STC_ICD_AXES_COUNT);
+constexpr const char* kAxisLabels[STC_ICD_AXES_COUNT] = {
+  "ST AZ", "ST EL",
+  "SUT1 AZ", "SUT1 EL",
+  "SUT2 AZ", "SUT2 EL",
+  "SUT3 AZ", "SUT3 EL",
+  "SUT4 AZ", "SUT4 EL",
+  "SUT5 AZ", "SUT5 EL",
+  "SUT6 AZ", "SUT6 EL",
+  "SUT7 AZ", "SUT7 EL",
+  "SUT8 AZ", "SUT8 EL",
+};
 constexpr const char* kDevRawPanelEnv = "STC_DIAG_DEV_RAW_PANEL";
 
 QString stateToString(uint8_t state) {
@@ -724,13 +735,14 @@ class DiagnosticsWindow : public QMainWindow {
 
       QStringList laserStates;
       int laserOnCount = 0;
-      for (int i = 0; i < 8; ++i) {
+      for (int i = 0; i < STC_ICD_LASER_COUNT; ++i) {
         const bool on = tlm.laser_status[i] != 0;
         if (on) ++laserOnCount;
-        laserStates << QString("SUT%1:%2").arg(i + 1).arg(on ? "ON" : "OFF");
+        laserStates << QString("SUT%1 laser:%2").arg(i + 1).arg(on ? "ON" : "OFF");
       }
-      connectionLabel_->setText(QString("Laser status (%1/8 ON) | %2")
+      connectionLabel_->setText(QString("Laser status (%1/%2 ON) | %3")
                                   .arg(laserOnCount)
+                                  .arg(STC_ICD_LASER_COUNT)
                                   .arg(laserStates.join(", ")));
 
       updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
@@ -1435,7 +1447,7 @@ class DiagnosticsWindow : public QMainWindow {
   void initAxisTable() {
     axisTable_->setRowCount(kAxisCount);
     for (int i = 0; i < kAxisCount; ++i) {
-      axisTable_->setItem(i, 0, new QTableWidgetItem(QString("Axis %1").arg(i)));
+      axisTable_->setItem(i, 0, new QTableWidgetItem(QString::fromLatin1(kAxisLabels[i])));
       axisTable_->setItem(i, 1, new QTableWidgetItem("0.000"));
       axisTable_->setItem(i, 2, new QTableWidgetItem("0.000"));
       axisTable_->setItem(i, 3, new QTableWidgetItem("0.000"));
