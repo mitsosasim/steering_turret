@@ -29,6 +29,21 @@ static void usage(const char* p) {
     p, p, p, p);
 }
 
+static void print_usage(FILE* stream, const char* prog) {
+  (void)stream;
+  usage(prog);
+}
+
+static void enable_tlmh_only(int port, int* tlmh_port, int* tlml_enabled) {
+  *tlmh_port = port;
+  *tlml_enabled = 0;
+}
+
+static void enable_tlml_only(int port, int* tlml_port, int* tlmh_enabled) {
+  *tlml_port = port;
+  *tlmh_enabled = 0;
+}
+
 static void hexdump_line(const uint8_t* b, size_t n) {
   for (size_t i = 0; i < n; i++) {
     printf("%02X", b[i]);
@@ -116,8 +131,22 @@ int main(int argc, char** argv) {
 
   int print_raw = 0;
   int verbose = 0;
+  int tlmh_enabled = 1;
+  int tlml_enabled = 1;
 
-  for (int i = 1; i < argc; i++) {
+  if (argc >= 2 && argv[1][0] != '-') {
+    int port = atoi(argv[1]);
+    if (port == 6010) {
+      enable_tlmh_only(port, &tlmh_port, &tlml_enabled);
+    } else if (port == 6020) {
+      enable_tlml_only(port, &tlml_port, &tlmh_enabled);
+    } else {
+      print_usage(stderr, argv[0]);
+      return 2;
+    }
+  }
+
+  for (int i = (argc >= 2 && argv[1][0] != '-') ? 2 : 1; i < argc; i++) {
     if (!strcmp(argv[i], "--ifname") && i + 1 < argc) ifname = argv[++i];
     else if (!strcmp(argv[i], "--tlmh-ip") && i + 1 < argc) tlmh_ip = argv[++i];
     else if (!strcmp(argv[i], "--tlmh-port") && i + 1 < argc) tlmh_port = atoi(argv[++i]);
@@ -128,15 +157,21 @@ int main(int argc, char** argv) {
     else { usage(argv[0]); return 2; }
   }
 
-  int fd_h = open_mcast_rx(tlmh_ip, tlmh_port, ifname);
-  if (fd_h < 0) { perror("open_mcast_rx(TLMH)"); return 1; }
+  int fd_h = -1;
+  if (tlmh_enabled) {
+    fd_h = open_mcast_rx(tlmh_ip, tlmh_port, ifname);
+    if (fd_h < 0) { perror("open_mcast_rx(TLMH)"); return 1; }
+  }
 
-  int fd_l = open_mcast_rx(tlml_ip, tlml_port, ifname);
-  if (fd_l < 0) { perror("open_mcast_rx(TLML)"); return 1; }
+  int fd_l = -1;
+  if (tlml_enabled) {
+    fd_l = open_mcast_rx(tlml_ip, tlml_port, ifname);
+    if (fd_l < 0) { perror("open_mcast_rx(TLML)"); return 1; }
+  }
 
   printf("Listening multicast:\n");
-  printf("  TLMH: %s:%d (expected ~100 Hz)\n", tlmh_ip, tlmh_port);
-  printf("  TLML: %s:%d (expected ~10 Hz)\n",  tlml_ip, tlml_port);
+  if (tlmh_enabled) printf("  TLMH: %s:%d (expected ~100 Hz)\n", tlmh_ip, tlmh_port);
+  if (tlml_enabled) printf("  TLML: %s:%d (expected ~10 Hz)\n",  tlml_ip, tlml_port);
   if (ifname) printf("  Interface: %s\n", ifname);
   printf("\n");
 
@@ -148,11 +183,20 @@ int main(int argc, char** argv) {
   unsigned long cnt_h = 0, cnt_l = 0;
 
   struct pollfd pfds[2];
-  pfds[0].fd = fd_h; pfds[0].events = POLLIN;
-  pfds[1].fd = fd_l; pfds[1].events = POLLIN;
+  int nfds = 0;
+  if (tlmh_enabled) {
+    pfds[nfds].fd = fd_h;
+    pfds[nfds].events = POLLIN;
+    nfds++;
+  }
+  if (tlml_enabled) {
+    pfds[nfds].fd = fd_l;
+    pfds[nfds].events = POLLIN;
+    nfds++;
+  }
 
   for (;;) {
-    int pr = poll(pfds, 2, 1000);
+    int pr = poll(pfds, (nfds_t)nfds, 1000);
     if (pr < 0) {
       if (errno == EINTR) continue;
       perror("poll");
@@ -167,7 +211,7 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    for (int k = 0; k < 2; k++) {
+    for (int k = 0; k < nfds; k++) {
       if (!(pfds[k].revents & POLLIN)) continue;
 
       uint8_t buf[2048];
@@ -183,7 +227,7 @@ int main(int argc, char** argv) {
         hexdump_line(buf, (size_t)n);
       }
 
-      if (k == 0) {
+      if (pfds[k].fd == fd_h) {
         // TLMH
         stc_tlmh_t m;
         stc_icd_rc_t rc = stc_icd_tlmh_parse(&cfg, buf, (size_t)n, &m);
@@ -252,7 +296,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  close(fd_h);
-  close(fd_l);
+  if (fd_h >= 0) close(fd_h);
+  if (fd_l >= 0) close(fd_l);
   return 0;
 }
