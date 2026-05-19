@@ -6,7 +6,7 @@
 #include <stdio.h>
 
 static void expect_transition(stc_state_t from, stc_event_t evt, stc_state_t to) {
-  stc_state_t next = STC_STATE_INIT;
+  stc_state_t next;
   assert(stc_state_transition(from, evt, &next) == 0);
   assert(next == to);
 }
