@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "motion_backend.h"
+#include "stc_log.h"
 
 #include <errno.h>
 #include <linux/can.h>
@@ -183,10 +184,24 @@ static int init_axis_feedback(struct motion_backend* b, size_t axis) {
   int16_t status_angle_deg = 0;
   uint16_t status_err_flags = 0;
   int16_t angle_deg = 0;
+  char model[8] = {0};
+  uint16_t sw_version = 0;
+  uint32_t runtime_ms = 0;
 
-  if (send_myact_read(b, node_id, MYACT_CMD_READ_MODEL) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_MODEL, &fr, 50);
-  if (send_myact_read(b, node_id, MYACT_CMD_READ_VERSION) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_VERSION, &fr, 50);
-  if (send_myact_read(b, node_id, MYACT_CMD_READ_RUNTIME) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_RUNTIME, &fr, 50);
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_MODEL) == 0 &&
+      recv_myact_reply(b, node_id, MYACT_CMD_READ_MODEL, &fr, 50) == 0 && fr.can_dlc >= 8) {
+    memcpy(model, &fr.data[1], 7);
+    model[7] = '\0';
+  }
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_VERSION) == 0 &&
+      recv_myact_reply(b, node_id, MYACT_CMD_READ_VERSION, &fr, 50) == 0 && fr.can_dlc >= 8) {
+    sw_version = (uint16_t)fr.data[1] | ((uint16_t)fr.data[2] << 8);
+  }
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_RUNTIME) == 0 &&
+      recv_myact_reply(b, node_id, MYACT_CMD_READ_RUNTIME, &fr, 50) == 0 && fr.can_dlc >= 8) {
+    runtime_ms = (uint32_t)fr.data[4] | ((uint32_t)fr.data[5] << 8) |
+                 ((uint32_t)fr.data[6] << 16) | ((uint32_t)fr.data[7] << 24);
+  }
 
   if (send_myact_read(b, node_id, MYACT_CMD_READ_STATUS1) == 0 && recv_myact_reply(b, node_id, MYACT_CMD_READ_STATUS1, &fr, 80) == 0 && fr.can_dlc >= 8) {
     got_status1 = 1;
@@ -201,9 +216,8 @@ static int init_axis_feedback(struct motion_backend* b, size_t axis) {
     angle_deg = (int16_t)((uint16_t)fr.data[6] | ((uint16_t)fr.data[7] << 8));
   }
 
-  if (b->cfg.experimental_native_speed_mode) {
-    if (send_myact_read(b, node_id, MYACT_CMD_READ_STATUS2) == 0) (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_STATUS2, &fr, 50);
-  }
+  if (send_myact_read(b, node_id, MYACT_CMD_READ_STATUS2) == 0)
+    (void)recv_myact_reply(b, node_id, MYACT_CMD_READ_STATUS2, &fr, 50);
 
   if (!got_status1 && !got_angle) return -1;
 
@@ -215,6 +229,9 @@ static int init_axis_feedback(struct motion_backend* b, size_t axis) {
   b->snap.mode_display[axis] = 0;
   b->snap.diag_ext[axis] = (uint32_t)(got_status1 ? ((status_err_flags & 0xFFFFu) | ((uint32_t)(fr.data[1] & 0x1u) << 16)) : 0u);
   b->snap.last_rx_ms[axis] = t_ms;
+  b->snap.axis_available[axis] = 1;
+  STC_LOG_INFO("axis%zu myact init OK node=%u model=%s ver=%u runtime_ms=%u status1 err=0x%04X feedback fresh",
+               axis, node_id, model[0] ? model : "unknown", sw_version, runtime_ms, (unsigned)status_err_flags);
   return 0;
 }
 static int prepare_for_motion_locked(struct motion_backend* b, size_t axis, uint64_t now) {
