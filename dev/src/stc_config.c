@@ -65,6 +65,15 @@ static int parse_double(const char* value, double* out) {
   return 0;
 }
 
+static int parse_hz_to_interval_ms(const char* value, int* out_ms) {
+  double hz = 0.0;
+  if (parse_double(value, &hz) != 0 || hz <= 0.0) return -1;
+  const double interval_ms = 1000.0 / hz;
+  if (interval_ms < 1.0) return -1;
+  *out_ms = (int)(interval_ms + 0.5);
+  return 0;
+}
+
 
 static int parse_bool(const char* value, int* out) {
   if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "TRUE") == 0 || strcmp(value, "yes") == 0 || strcmp(value, "on") == 0) {
@@ -121,10 +130,14 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->telemetry_interval_ms = 10;
   cfg->experimental_native_speed_mode = 0;
   snprintf(cfg->tlm_dest_ip, sizeof(cfg->tlm_dest_ip), "%s", "127.0.0.1");
+  snprintf(cfg->tlmh_ip, sizeof(cfg->tlmh_ip), "%s", cfg->tlm_dest_ip);
+  snprintf(cfg->tlml_ip, sizeof(cfg->tlml_ip), "%s", cfg->tlm_dest_ip);
   cfg->tlmh_port = 6010;
   cfg->tlml_port = 6020;
   cfg->tlmh_interval_ms = 10;
   cfg->tlml_interval_ms = 100;
+  cfg->can_bitrate = 500000;
+  cfg->can_restart_ms = 100;
   cfg->can_scan_max_node = 32;
   cfg->can_timeout_ms = 1000;
   cfg->strict_stale_policy = 0;
@@ -303,6 +316,12 @@ bool load_config(const char* path, stc_config_t* cfg) {
       } else if (strcmp(key, "tlm_dest_ip") == 0) {
         if (strlen(value) >= sizeof(cfg->tlm_dest_ip)) goto parse_error;
         strcpy(cfg->tlm_dest_ip, value);
+      } else if (strcmp(key, "tlmh_ip") == 0) {
+        if (strlen(value) >= sizeof(cfg->tlmh_ip)) goto parse_error;
+        strcpy(cfg->tlmh_ip, value);
+      } else if (strcmp(key, "tlml_ip") == 0) {
+        if (strlen(value) >= sizeof(cfg->tlml_ip)) goto parse_error;
+        strcpy(cfg->tlml_ip, value);
       } else if (strcmp(key, "tlmh_port") == 0) {
         if (parse_int(value, &cfg->tlmh_port) != 0) goto parse_error;
       } else if (strcmp(key, "tlml_port") == 0) {
@@ -319,8 +338,12 @@ bool load_config(const char* path, stc_config_t* cfg) {
         STC_LOG_WARN("%s:%d: [Network].mcast_tlml_port is deprecated; use tlml_port", path, line_no);
       } else if (strcmp(key, "tlmh_interval_ms") == 0) {
         if (parse_int(value, &cfg->tlmh_interval_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "tlmh_hz") == 0) {
+        if (parse_hz_to_interval_ms(value, &cfg->tlmh_interval_ms) != 0) goto parse_error;
       } else if (strcmp(key, "tlml_interval_ms") == 0) {
         if (parse_int(value, &cfg->tlml_interval_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "tlml_hz") == 0) {
+        if (parse_hz_to_interval_ms(value, &cfg->tlml_interval_ms) != 0) goto parse_error;
       } else if (strcmp(key, "can_scan_max_node") == 0) {
         if (parse_int(value, &cfg->can_scan_max_node) != 0) goto parse_error;
       } else if (strcmp(key, "can_timeout_ms") == 0) {
@@ -342,7 +365,9 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (strlen(value) >= sizeof(cfg->can_if)) goto parse_error;
         strcpy(cfg->can_if, value);
       } else if (strcmp(key, "bitrate") == 0) {
-        /* reserved */
+        if (parse_int(value, &cfg->can_bitrate) != 0) goto parse_error;
+      } else if (strcmp(key, "restart_ms") == 0) {
+        if (parse_int(value, &cfg->can_restart_ms) != 0) goto parse_error;
       } else {
         recognized = false;
       }
@@ -377,6 +402,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->tlml_tx_priority) != 0) goto parse_error;
       } else if (strcmp(key, "controller_id_strict_legacy") == 0) {
         if (parse_int(value, &cfg->controller_id_strict_legacy) != 0) goto parse_error;
+      } else if (strcmp(key, "strict_stale_policy") == 0) {
+        if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else {
         recognized = false;
       }
