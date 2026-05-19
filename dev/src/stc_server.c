@@ -1397,8 +1397,13 @@ static int telemetry_send_if_dest_available(const tlm_tx_arg_t* a,
   }
   pthread_mutex_unlock(&a->sh->mtx);
 
+  if (!have_dest && a->config_addr_valid) {
+    dest_addr = a->config_addr;
+    have_dest = 1;
+  }
+
   if (!have_dest) {
-    // CU session is authoritative; don't send when disconnected.
+    // No active CU and no configured static destination.
     return 0;
   }
 
@@ -2346,6 +2351,8 @@ int main(int argc, char** argv) {
 
   tlm_tx_arg_t harg = { .udp_fd = udp_h, .config_ip = net.tlmh_ip, .port = net.tlmh_port, .period_ns = net.tlmh_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
   tlm_tx_arg_t larg = { .udp_fd = udp_l, .config_ip = net.tlml_ip, .port = net.tlml_port, .period_ns = net.tlml_period_ns, .sh = &sh, .cfg = cfg, .sender_id = 1 };
+  const int static_telemetry_configured = (net.tlmh_ip && net.tlml_ip &&
+                                           net.tlmh_ip[0] != '\0' && net.tlml_ip[0] != '\0');
   harg.config_addr_valid = (parse_ipv4_addr(harg.config_ip, &harg.config_addr) == 0);
   larg.config_addr_valid = (parse_ipv4_addr(larg.config_ip, &larg.config_addr) == 0);
   if (create_thread_with_sched(&th_h,
@@ -2411,7 +2418,11 @@ int main(int argc, char** argv) {
 
   STC_LOG_INFO("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)", net.can_if);
   STC_LOG_INFO("STC server listening on TCP port %d", net.tcp_port);
-  STC_LOG_INFO("UDP unicast telemetry: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
+  if (static_telemetry_configured) {
+    STC_LOG_INFO("UDP telemetry static destination: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
+  } else {
+    STC_LOG_INFO("UDP unicast telemetry: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);
+  }
 
   while (!atomic_load(&g_stop)) {
     struct pollfd pfd = {.fd = srv, .events = POLLIN, .revents = 0};
@@ -2893,9 +2904,15 @@ int main(int argc, char** argv) {
     atomic_store(&g_client_fd, -1);
     pthread_mutex_lock(&sh.mtx);
     sh.d.active_cu_connected = 0;
-    sh.d.active_cu_addr.s_addr = htonl(INADDR_ANY);
+    if (!static_telemetry_configured) {
+      sh.d.active_cu_addr.s_addr = htonl(INADDR_ANY);
+    }
     pthread_mutex_unlock(&sh.mtx);
-    STC_LOG_INFO("Client disconnected; telemetry destination cleared until CU reconnects");
+    if (static_telemetry_configured) {
+      STC_LOG_INFO("Client disconnected; static telemetry destination preserved");
+    } else {
+      STC_LOG_INFO("Client disconnected; telemetry destination cleared until CU reconnects");
+    }
   }
 
 cleanup:
