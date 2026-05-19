@@ -143,6 +143,11 @@ static double clamp_range(double v, double lo, double hi) {
   return v;
 }
 
+static void log_myact_failure(struct motion_backend* b, size_t axis, const char* action, int rc) {
+  const unsigned err_flags = b ? (unsigned)b->snap.status_word[axis] : 0u;
+  STC_LOG_ERROR("axis%zu MYACT %s failed rc=%d err_flags=0x%04X", axis, action, rc, err_flags);
+}
+
 
 
 
@@ -280,9 +285,10 @@ static void refresh_feedback_locked(struct motion_backend* b, uint64_t t_ms) {
   }
 }
 
-static void axis_stop_locked(struct motion_backend* b, size_t axis, uint64_t t_ms, int shutdown) {
+static int axis_stop_locked(struct motion_backend* b, size_t axis, uint64_t t_ms, int shutdown) {
   const uint8_t node_id = b->cfg.axis_node_id[axis];
-  if (node_id) (void)send_myact_cmd(b, node_id, MYACT_CMD_STOP, 0, 0);
+  int stop_rc = -1;
+  if (node_id) stop_rc = send_myact_cmd(b, node_id, MYACT_CMD_STOP, 0, 0);
   if (shutdown && node_id) {
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 50 * 1000 * 1000};
     nanosleep(&ts, NULL);
@@ -294,6 +300,7 @@ static void axis_stop_locked(struct motion_backend* b, size_t axis, uint64_t t_m
   b->snap.vel_raw[axis] = 0;
   b->snap.mode_display[axis] = 0;
   b->snap.last_rx_ms[axis] = t_ms;
+  return stop_rc;
 }
 
 static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uint64_t t_ms) {
@@ -321,7 +328,9 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       (void)send_myact_cmd(b, node_id, MYACT_CMD_BRAKE_RELEASE, 0, 0);
       b->velocity_session_ready[axis] = 1;
     }
-    if (send_myact_cmd(b, node_id, MYACT_CMD_SPEED, 0, speed_0p01dps) == 0) {
+    const int speed_rc = send_myact_cmd(b, node_id, MYACT_CMD_SPEED, 0, speed_0p01dps);
+    if (speed_rc == 0) {
+      STC_LOG_INFO("axis%zu MYACT A2 speed_deg_s=%.3f rc=OK", axis, clamped);
       b->speed_active[axis] = (speed_0p01dps != 0);
       b->last_speed_raw_0p01dps[axis] = speed_0p01dps;
       b->last_speed_cmd_ms[axis] = m->cmd_ts_ms;
@@ -332,6 +341,8 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->last_cmd_ms[axis] = m->cmd_ts_ms;
       b->cmd_vel_raw[axis] = local_axis_deg_to_counts(cfg, clamped);
       b->cmd_ack_pending[axis] = 1u;
+    } else {
+      log_myact_failure(b, axis, "A2", speed_rc);
     }
   } else if (m->kind == AXIS_CMD_POSITION_ABS || m->kind == AXIS_CMD_POSITION_REL) {
     if (prepare_for_motion_locked(b, axis, t_ms) != 0) return;
@@ -341,17 +352,26 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
     if (m->kind == AXIS_CMD_POSITION_REL) {
       const int32_t delta_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
-      if (cmd_ok == 0) b->last_abs_via_a8_service[axis] = 1;
+      if (cmd_ok == 0) {
+        STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, target_deg, max_speed);
+        b->last_abs_via_a8_service[axis] = 1;
+      } else log_myact_failure(b, axis, "A8", cmd_ok);
     } else if (b->native_abs_validated[axis]) {
       const int32_t target_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_ABS, speed_dps, target_0p01deg);
-      if (cmd_ok == 0) b->last_abs_via_a8_service[axis] = 0;
+      if (cmd_ok == 0) {
+        STC_LOG_INFO("axis%zu MYACT A4 abs_deg=%.3f speed=%.3f rc=OK", axis, target_deg, max_speed);
+        b->last_abs_via_a8_service[axis] = 0;
+      } else log_myact_failure(b, axis, "A4", cmd_ok);
     } else {
       const double current_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
       const double delta_deg = target_deg - current_deg;
       const int32_t delta_0p01deg = (int32_t)llround(delta_deg * gr * 100.0);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
-      if (cmd_ok == 0) b->last_abs_via_a8_service[axis] = 1;
+      if (cmd_ok == 0) {
+        STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, delta_deg, max_speed);
+        b->last_abs_via_a8_service[axis] = 1;
+      } else log_myact_failure(b, axis, "A8", cmd_ok);
     }
     if (cmd_ok == 0) {
       b->speed_active[axis] = 0;
@@ -365,7 +385,9 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       b->cmd_ack_pending[axis] = 1u;
     }
   } else if (m->kind == AXIS_CMD_STOP) {
-    axis_stop_locked(b, axis, t_ms, 1);
+    const int stop_rc = axis_stop_locked(b, axis, t_ms, 1);
+    if (stop_rc == 0) STC_LOG_INFO("axis%zu MYACT stop rc=OK", axis);
+    else log_myact_failure(b, axis, "stop", stop_rc);
   }
 
   b->applied_seq[axis] = m->seq;
