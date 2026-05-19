@@ -83,6 +83,7 @@ typedef struct stc_config_s {
   uint16_t axis_pp_profile_vel[STC_AXIS_COUNT];
   uint8_t axis_diag_cat[STC_AXIS_COUNT];
   uint8_t axis_diag_subcat[STC_AXIS_COUNT];
+  // Deprecated: TLML now uses canonical motor_status[18]; config key motor_status_map is ignored.
   int8_t motor_status_map[8];
 
   int turret_az_axis;

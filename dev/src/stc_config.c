@@ -99,25 +99,6 @@ static int parse_axis_driver(const char* value, stc_axis_driver_t* out) {
   else return -1;
   return 0;
 }
-static int parse_motor_status_map(const char* value, int8_t out[8]) {
-  char tmp[256];
-  snprintf(tmp, sizeof(tmp), "%s", value);
-
-  char* tok = strtok(tmp, ",");
-  int idx = 0;
-  while (tok && idx < 8) {
-    trim_inplace(tok);
-    int axis = 0;
-    if (parse_int(tok, &axis) != 0) return -1;
-    if (axis < -1 || axis >= (int)STC_AXIS_COUNT) return -1;
-    out[idx++] = (int8_t)axis;
-    tok = strtok(NULL, ",");
-  }
-
-  if (idx != 8 || tok != NULL) return -1;
-  return 0;
-}
-
 void stc_config_set_defaults(stc_config_t* cfg) {
   if (!cfg) return;
   memset(cfg, 0, sizeof(*cfg));
@@ -238,7 +219,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
   int max_axis_seen = -1;
   int seen_diag_cat[STC_AXIS_COUNT] = {0};
   int seen_diag_subcat[STC_AXIS_COUNT] = {0};
-  int seen_motor_status_map = 0;
 
   char line[512];
   int line_no = 0;
@@ -527,8 +507,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
     if (strcmp(section, "diagnostics") == 0) {
       bool recognized = true;
       if (strcmp(key, "motor_status_map") == 0) {
-        if (parse_motor_status_map(value, cfg->motor_status_map) != 0) goto parse_error;
-        seen_motor_status_map = 1;
+        STC_LOG_WARN("%s:%d: motor_status_map is deprecated and ignored; TLML uses canonical motor_status[18]", path, line_no);
       } else {
         int axis = -1;
         if (sscanf(key, "axis[%d].category", &axis) == 1) {
@@ -640,10 +619,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
     }
   }
 
-  if (!seen_motor_status_map) {
-    STC_LOG_ERROR("%s: missing [diagnostics].motor_status_map", path);
-    return false;
-  }
   for (int i = 0; i < cfg->num_axes; i++) {
     if (!seen_diag_cat[i] || !seen_diag_subcat[i]) {
       STC_LOG_ERROR("%s: missing diagnostic category/subcategory for axis %d", path, i);

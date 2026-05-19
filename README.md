@@ -82,6 +82,8 @@ Show usage/options:
 
 Key runtime flags include TCP/CAN settings, telemetry endpoints, and RT scheduling controls.
 
+Note: `[diagnostics].motor_status_map` is deprecated and ignored; TLML uses canonical `motor_status[18]`.
+
 ### Mode 2: Server + GUI
 
 1. Start server in one terminal:
