@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Simplified ST-side operational state machine for the communication stub.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Mirrors INIT/SAFE/OPER/FAIL semantics from the runtime server, with compact
+ *   transitions for self-levelling, IBIT, and storage command emulation.
  */
 
 // StubStateMachine.h - Simple FSM for turret stub aligned to CU ICD states.
@@ -18,9 +19,10 @@
 #include <mutex>
 #include <string>
 
+/** @brief Stub-local state machine used to gate accepted simulated commands. */
 class StubStateMachine {
 public:
-    // Stub-level runtime states aligned with the CU ICD state model.
+    /** @brief ST-visible states encoded into telemetry and command gating logic. */
     enum class State : uint8_t {
         Init = 0,
         InitDone = 1,

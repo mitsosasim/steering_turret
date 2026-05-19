@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Simulated single-axis motor dynamics model used by the ST stub.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Supports position-target and velocity-target modes with bounded acceleration,
+ *   velocity, and position limits; integrated in fixed simulator time steps.
  */
 
 // Lightweight motor model with limited velocity and acceleration.
@@ -18,16 +19,17 @@
 #include <chrono>
 #include <mutex>
 
+/** @brief Lightweight axis plant model for turret/SUT simulation. */
 class MotorModel {
 public:
-    // Instantaneous motor state exposed to callers.
+    /** @brief Instantaneous motor kinematic state in axis units (degrees, deg/s, deg/s^2). */
     struct State {
         double position{0.0};
         double velocity{0.0};
         double acceleration{0.0};
     };
 
-    // Physical constraints used by the integrator.
+    /** @brief Axis limits enforced during commanding and integration. */
     struct Limits {
         double maxVelocity{45.0};     // unit per second
         double maxAcceleration{90.0}; // unit per second^2
@@ -38,19 +40,19 @@ public:
     MotorModel() = default;
     explicit MotorModel(const Limits& limits);
 
-    // Updates motion limits and clamps current state/target into the new bounds.
+    /** @brief Update constraints and clamp stored state/targets to the new range. */
     void setLimits(const Limits& limits);
-    // Reinitializes model state and switches back to position mode.
+    /** @brief Reset model state and return control mode to absolute-position tracking. */
     void reset(double position = 0.0, double velocity = 0.0);
 
-    // Requests absolute position tracking.
+    /** @brief Set absolute position target (position mode). */
     void setPositionTarget(double position);
-    // Requests direct velocity tracking.
+    /** @brief Set signed velocity target (velocity mode). */
     void setVelocityTarget(double velocity);
 
-    // Returns current state without integrating.
+    /** @brief Read state snapshot without advancing integration. */
     State state() const;
-    // Integrates one time step and returns updated state.
+    /** @brief Integrate one step using elapsed monotonic time and return new state. */
     State step();
 
 private:

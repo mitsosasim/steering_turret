@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Process entry point for the ST communication simulator executable.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Loads axis/config files, acquires single-instance lock file, wires StCom,
+ *   TurretSimulator and state machine objects, and dispatches protocol commands.
  */
 
 // stub_ST.cpp - Steering Turret simulator with simple motor dynamics.

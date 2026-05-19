@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   CU-side state model used by the ST communication stub.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Encodes operational/maintenance/failure states, validates transitions,
+ *   and exposes callback hooks for observing state changes in integration tests.
  */
 
 #pragma once
@@ -17,14 +18,10 @@
 #include <string>
 #include <functional>
 
-/**
- * @brief Models the turret state machine from the provided diagram
- *        (OFF -> INIT -> SAFE -> OPERATIONAL/MAINTENANCE/FAIL).
- *
- *  This class is thread-safe for concurrent commands thanks to the internal mutex.
- */
+/** @brief Control-Unit (CU) state machine model used by the stub simulator. */
 class CUStateMachine {
 public:
+    /** @brief CU runtime states including operational submodes and fail substates. */
     enum class State {
         Off,
         Init,
@@ -39,12 +36,14 @@ public:
         OperationalAuto
     };
 
+    /** @brief Operational control modes allowed while in operational states. */
     enum class OperationalMode {
         Manual,
         Calibration,
         Automatic
     };
 
+    /** @brief Construct state machine in default startup state. */
     CUStateMachine();
 
     State state() const;
@@ -66,6 +65,7 @@ public:
     void signalFailure(const std::string& reason);
     void startFailureIbit();
     void finishFailureIbit(bool ok);
+    /** @brief Register callback invoked after each accepted state transition. */
     void setStateChangeCallback(std::function<void(State)> cb);
 
 private:

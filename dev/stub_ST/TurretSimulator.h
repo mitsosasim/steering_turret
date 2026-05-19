@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   18-axis steering-turret/SUT simulator model used by the legacy C++ stub.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Simulates 2 ST axes + 16 SUT axes, builds TLMH/TLML payloads in ICD order,
+ *   runs an integration thread, and protects shared snapshots with internal locking.
  */
 
 // TurretSimulator.h - Az/El turret model with SUT axes.
@@ -24,9 +25,10 @@
 #include <mutex>
 #include <thread>
 
+/** @brief Composite simulator for ST az/el plus 8 SUT pairs (18 axes total). */
 class TurretSimulator {
 public:
-    // mainAxes: ST azimuth/elevation limits. sutAxes: 8 SUTs * 2 axes.
+    /** @brief mainAxes = [ST az, ST el], sutAxes = 8 SUTs × [az,el] in axis order. */
     TurretSimulator(const std::array<MotorModel::Limits, 2>& mainAxes,
                     const std::array<MotorModel::Limits, 16>& sutAxes);
     ~TurretSimulator();
@@ -48,8 +50,9 @@ public:
     void setSutElVelocity(size_t sutId, float elRate);
 
    
-    // Builds high/low telemetry payloads from current simulated state.
+    /** @brief Build TLMH payload by flattening axis state into protocol array order. */
     st_protocol::TelemetryHPayload buildTelemetryH(const StubStateMachine& fsm) const;
+    /** @brief Build TLML payload including FSM state, uptime, and placeholder env data. */
     st_protocol::TelemetryLPayload buildTelemetryL(const StubStateMachine& fsm) const;
     // Snapshot getters used by command handlers and telemetry builders.
     std::array<float, 2> mainPosition() const;

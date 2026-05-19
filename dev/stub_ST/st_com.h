@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   TCP command server + UDP telemetry publisher for the ST communication stub.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Command frames are reassembled from a non-blocking TCP stream, responses are
+ *   binary-encoded over the same client socket, and telemetry is periodically
+ *   published via UDP to the latest connected CU peer address.
  */
 
 // st_com.h - Lightweight communication handler for steering turret stub.
@@ -42,6 +44,7 @@ struct Config {
     std::chrono::milliseconds telemetryL_Interval{100};
 };
 
+/** @brief Communication frontend bridging CU TCP commands and stub telemetry streams. */
 class StCom {
 public:
     using CommandHandler = std::function<void(const CommandMessage&, StCom&)>;
