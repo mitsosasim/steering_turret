@@ -84,6 +84,10 @@ Key runtime flags include TCP/CAN settings, telemetry endpoints, and RT scheduli
 
 Note: `[diagnostics].motor_status_map` is deprecated and ignored; TLML uses canonical `motor_status[18]`.
 
+Protocol compatibility note: protocol version byte remains `0x01` for current CU compatibility.
+TLML now follows the canonical **100-byte base layout**.
+Legacy 83-byte payloads are no longer supported.
+
 ### Mode 2: Server + GUI
 
 1. Start server in one terminal:

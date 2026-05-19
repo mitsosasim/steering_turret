@@ -199,7 +199,6 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   for (size_t i = 0; i < STC_MAX_MIRROR; i++) {
     cfg->mirror_axis[i] = -1;
   }
-  for (size_t i = 0; i < 8; i++) cfg->motor_status_map[i] = (int8_t)(2 + i);
 }
 
 bool load_config(const char* path, stc_config_t* cfg) {

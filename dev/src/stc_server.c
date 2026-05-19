@@ -252,7 +252,6 @@ typedef struct shared_data {
   double storage_deg[STC_AXIS_COUNT];
   uint8_t diag_cat[STC_AXIS_COUNT];
   uint8_t diag_subcat[STC_AXIS_COUNT];
-  int8_t motor_map[8];
 
   int turret_az_axis;
   int turret_el_axis;
@@ -2178,7 +2177,6 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
 
   sh->d.mirror_count = cfg->mirror_count;
   memcpy(sh->d.mirror_axis, cfg->mirror_axis, sizeof(sh->d.mirror_axis));
-  memcpy(sh->d.motor_map, cfg->motor_status_map, sizeof(sh->d.motor_map));
   sh->d.controller_id_strict_legacy = cfg->controller_id_strict_legacy ? 1 : 0;
   sh->d.startup_feedback_grace_ms = (cfg->startup_feedback_grace_ms > 0) ? (uint32_t)cfg->startup_feedback_grace_ms : 0u;
   sh->d.speed_watchdog_ms = (cfg->speed_watchdog_ms >= 0) ? cfg->speed_watchdog_ms : 0;
