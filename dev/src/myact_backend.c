@@ -152,12 +152,14 @@ static int send_myact_read(struct motion_backend* b, uint8_t node_id, uint8_t cm
 
 static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t expected_cmd, struct can_frame* out, int timeout_ms) {
   if (!b || !out) return -1;
+  const canid_t expected_id = (canid_t)(MYACT_CAN_BASE + (uint32_t)node_id);
   const uint64_t deadline = now_ms() + (uint64_t)((timeout_ms > 0) ? timeout_ms : 50);
   while (now_ms() <= deadline) {
     struct can_frame f;
     const ssize_t r = read(b->can_socket, &f, sizeof(f));
     if (r == (ssize_t)sizeof(f)) {
-      if (f.can_dlc < 1 || f.can_id != (MYACT_CAN_BASE + node_id)) continue;
+      const canid_t rx_id = f.can_id & CAN_SFF_MASK;
+      if (f.can_dlc < 1 || rx_id != expected_id) continue;
       if (f.data[0] != expected_cmd) continue;
       *out = f;
       return 0;
