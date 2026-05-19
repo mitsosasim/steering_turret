@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Implements the motion_backend API using an in-process simulator backend.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Presents the same backend contract that stc_server uses for real CAN, so
+ *   command/state/telemetry paths can run unchanged in development environments.
+ *   Deterministic enough for functional testing, but not a hardware timing model.
  */
 
 #include "motion_backend.h"
@@ -82,12 +84,14 @@ static void integrator_loop(motion_backend* b) {
   using namespace std::chrono;
   constexpr auto period = milliseconds(10);
   auto next = steady_clock::now() + period;
+  /* Fixed-period integration loop approximating backend telemetry cadence. */
   while (b->running.load()) {
     {
       std::lock_guard<std::mutex> lock(b->mtx);
       uint64_t t_ms = now_ms();
       for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
         auto& a = b->axes[axis];
+        /* Match real backend speed-stream watchdog behavior when commands stop. */
         if (a.has_speed_target && b->cfg.speed_watchdog_ms > 0 &&
             (t_ms - a.last_speed_cmd_ms) > static_cast<uint64_t>(b->cfg.speed_watchdog_ms)) {
           a.has_speed_target = false;
@@ -96,6 +100,7 @@ static void integrator_loop(motion_backend* b) {
           a.mode_display = 0;
         }
         if (!a.has_position_target && !a.has_speed_target) continue;
+        /* Plant propagation for active PP/PV modes; values feed snapshot telemetry. */
         auto st = a.model.step();
         b->snap.pos_raw[axis] = axis_deg_to_counts(&a.cfg, st.position);
         b->snap.vel_raw[axis] = vel_deg_s_to_raw(a.cfg, st.velocity);
@@ -157,6 +162,7 @@ int sim_motion_backend_discover(motion_backend_t* backend) {
 int sim_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !targets_deg) return -1;
+  /* Profile-position path mirrors motion_backend_apply_pp_move contract. */
   std::lock_guard<std::mutex> lock(b->mtx);
   for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
     if ((axes_mask & (1u << axis)) == 0) continue;
@@ -173,6 +179,7 @@ int sim_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !speeds_deg_s) return -1;
   const uint64_t t_ms = now_ms();
+  /* Velocity mode path mirrors motion_backend_apply_speed and refreshes watchdog time. */
   std::lock_guard<std::mutex> lock(b->mtx);
   for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
     if ((axes_mask & (1u << axis)) == 0) continue;
@@ -190,6 +197,7 @@ int sim_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask
 int sim_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b) return -1;
+  /* Quick-stop mirrors DS402 intent: hold position and zero commanded velocity. */
   std::lock_guard<std::mutex> lock(b->mtx);
   for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
     if ((axes_mask & (1u << axis)) == 0) continue;
@@ -208,6 +216,7 @@ int sim_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask)
 int sim_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b) return -1;
+  /* Fault clear is modeled by restoring nominal statusword in snapshot. */
   std::lock_guard<std::mutex> lock(b->mtx);
   for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
     if ((axes_mask & (1u << axis)) == 0) continue;
@@ -228,6 +237,7 @@ int sim_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, ui
 int sim_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   motion_backend* b = reinterpret_cast<motion_backend*>(backend);
   if (!b || !snapshot) return -1;
+  /* Snapshot copy emulates backend polling: caller receives consistent cached state. */
   std::lock_guard<std::mutex> lock(b->mtx);
   *snapshot = b->snap;
   return 0;

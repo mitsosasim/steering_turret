@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Adapts the generic motion backend API used by stc_server to real CAN hardware.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Bridges backend commands to PD4-C CANopen/DS402 nodes and MYACT nodes.
+ *   Performs node discovery and identity reads for diagnostics, then keeps
+ *   expected-vs-responsive availability and CAN health in snapshot state.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -106,6 +108,7 @@ static int compute_can_ok(const struct motion_backend* b) {
 
 static void refresh_can_status(struct motion_backend* b) {
   if (!b) return;
+  /* Aggregate per-axis connectivity into global CAN health for telemetry/state gating. */
   b->snap.can_ok = compute_can_ok(b);
   b->snap.capabilities.supports_native_a2_speed = 0;
   b->snap.capabilities.supports_native_absolute_position = 0;
@@ -161,6 +164,7 @@ static int ensure_enabled(struct motion_backend* b, size_t axis, mtr_mode_t mode
 }
 
 static int verify_node_responsive(pd4c_ctx_t* ctx, uint32_t timeout_ms) {
+  /* Liveness probe: bounded SDO read of identity vendor entry (0x1018:01). */
   if (!ctx) return 0;
   uint32_t vendor_id = 0;
   int effective_timeout_ms = (timeout_ms > 0 && timeout_ms <= INT32_MAX) ? (int)timeout_ms : 500;
@@ -179,6 +183,7 @@ static int read_node_identity(pd4c_ctx_t* ctx, uint32_t timeout_ms, uint32_t ide
   const int sdo_timeout_ms = bounded_sdo_timeout_ms(timeout_ms);
   pd4c_set_sdo_timeout(ctx, sdo_timeout_ms);
 
+  /* Identity tuple readout for diagnostics: vendor/product/revision/serial. */
   for (uint8_t i = 0; i < 4; i++) {
     const uint8_t subidx = (uint8_t)(i + 1u);
     int rc = pd4c_sdo_read_u32(ctx, 0x1018u, subidx, &identity[i]);
@@ -208,6 +213,7 @@ static int discover_responsive_nodes(struct motion_backend* b) {
 
   memset(b->node_discovery, 0, sizeof(b->node_discovery));
   memset(b->snap.can_discovered_nodes, 0, sizeof(b->snap.can_discovered_nodes));
+  /* Discover responsive nodes before axis attach so startup can skip silent nodes cleanly. */
   for (int node = 1; node <= scan_max; node++) {
     pd4c_ctx_t tmp;
     memset(&tmp, 0, sizeof(tmp));
@@ -289,6 +295,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
 
   (void)discover_responsive_nodes(b);
 
+  /* Attach only configured/expected axes; keep missing nodes visible via availability flags. */
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     uint8_t node_id = cfg->axis_node_id[axis];
     const stc_axis_driver_t driver = cfg->axis_cfg[axis].driver;
@@ -401,6 +408,7 @@ void motion_backend_stop(motion_backend_t* backend) {
 }
 
 int motion_backend_discover(motion_backend_t* backend) {
+  /* Re-scan bus on demand to refresh responsive-device diagnostics. */
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
   const int responsive_count = discover_responsive_nodes(b);
@@ -415,6 +423,7 @@ int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, 
   if (!b || !targets_deg) return -1;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if ((axes_mask & (1u << axis)) == 0 || !b->axis[axis].connected || b->axis[axis].driver != STC_AXIS_DRIVER_PD4C) continue;
+    /* DS402 enable/operation mode must be active before profile-position target is sent. */
     if (ensure_enabled(b, axis, MTR_MODE_PP) != PD4C_OK) continue;
     int32_t target_counts = axis_deg_to_counts(&b->cfg.axis_cfg[axis], targets_deg[axis]);
     uint16_t pv = b->cfg.axis_cfg[axis].pp_profile_vel;
@@ -435,6 +444,7 @@ int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, co
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if ((axes_mask & (1u << axis)) == 0 || !b->axis[axis].connected) continue;
     if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) {
+      /* Continuous speed stream relies on watchdog refresh from repeated commands. */
       if (ensure_enabled(b, axis, MTR_MODE_PV) != PD4C_OK) continue;
     } else if (b->axis[axis].driver != STC_AXIS_DRIVER_MYACT_X8_25) {
       continue;
@@ -458,6 +468,7 @@ int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, co
 }
 
 int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
+  /* Broadcast-safe quick-stop path across selected axes; recovery remains caller-managed. */
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -473,6 +484,7 @@ int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
 }
 
 int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
+  /* Fault reset helper across mixed drivers, preserving per-axis success accounting. */
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
 
@@ -506,6 +518,7 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !snapshot) return -1;
   uint64_t now = mono_ms();
+  /* Snapshot is populated from cached telemetry/state; no blocking bus operations here. */
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!b->axis[axis].connected) continue;
 
