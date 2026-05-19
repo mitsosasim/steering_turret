@@ -19,7 +19,9 @@
 
 /** Return non-zero when DS402 statusword indicates a drive fault condition. */
 int stc_detect_ds402_fault(uint16_t status);
+/** Return non-zero when age(last_rx_ms) exceeds timeout_ms (stale CAN telemetry). */
 int stc_detect_can_timeout(uint64_t now_ms, uint64_t last_rx_ms, uint32_t timeout_ms);
+/** Return non-zero while runtime is inside startup grace window for stale suppression. */
 int stc_is_within_startup_grace(uint64_t now_ms, uint64_t server_start_ms, uint32_t startup_grace_ms);
 
 #endif

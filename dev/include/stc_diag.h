@@ -33,7 +33,9 @@ uint32_t stc_diag_encode(uint8_t category,
                          uint16_t error_code);
 
 bool run_pbit_startup(void);
+/** Run one CBIT pass over latest shared telemetry and update critical-fault status. */
 stc_diag_health_t run_cbit_cycle(shared_data_t* shared);
+/** Execute commanded IBIT sequence (blocking test flow controlled by caller). */
 bool run_ibit_sequence(shared_data_t* shared);
 
 void stc_diag_set_pbit_result(bool pass);
@@ -62,4 +64,5 @@ typedef enum {
 } stc_diag_error_code_t;
 
 stc_diag_myact_severity_t stc_diag_myact_error_severity(uint16_t error_flags);
+/** Extract representative diagnostic code from MYACT error bitfield for telemetry. */
 uint16_t stc_diag_myact_primary_error_code(uint16_t error_flags);
