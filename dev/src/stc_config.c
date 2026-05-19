@@ -74,6 +74,10 @@ static int parse_hz_to_interval_ms(const char* value, int* out_ms) {
   return 0;
 }
 
+static int valid_axis_ref(int axis_ref) {
+  return axis_ref == -1 || (axis_ref >= 0 && axis_ref < (int)STC_AXIS_COUNT);
+}
+
 
 static int parse_bool(const char* value, int* out) {
   if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "TRUE") == 0 || strcmp(value, "yes") == 0 || strcmp(value, "on") == 0) {
@@ -573,13 +577,29 @@ bool load_config(const char* path, stc_config_t* cfg) {
     return false;
   }
 
-  if (cfg->turret_az_axis < 0 || cfg->turret_az_axis >= cfg->num_axes) {
+  if (!valid_axis_ref(cfg->turret_az_axis) || cfg->turret_az_axis >= cfg->num_axes) {
     STC_LOG_ERROR("%s: [Turret].az_axis is missing or out of range", path);
     return false;
   }
-  if (cfg->turret_el_axis >= cfg->num_axes) {
+  if (!valid_axis_ref(cfg->turret_el_axis) || cfg->turret_el_axis >= cfg->num_axes) {
     STC_LOG_ERROR("%s: [Turret].el_axis out of range", path);
     return false;
+  }
+  for (int i = 0; i < cfg->sut_count; i++) {
+    if (!valid_axis_ref(cfg->sut_az_axis[i]) || cfg->sut_az_axis[i] >= cfg->num_axes) {
+      STC_LOG_ERROR("%s: [SUT%d].az_axis out of range", path, i + 1);
+      return false;
+    }
+    if (!valid_axis_ref(cfg->sut_el_axis[i]) || cfg->sut_el_axis[i] >= cfg->num_axes) {
+      STC_LOG_ERROR("%s: [SUT%d].el_axis out of range", path, i + 1);
+      return false;
+    }
+  }
+  for (int i = 0; i < cfg->mirror_count; i++) {
+    if (!valid_axis_ref(cfg->mirror_axis[i]) || cfg->mirror_axis[i] >= cfg->num_axes) {
+      STC_LOG_ERROR("%s: [Mirror%d].axis out of range", path, i + 1);
+      return false;
+    }
   }
 
   if (!seen_motor_status_map) {
