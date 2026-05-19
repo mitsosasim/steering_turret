@@ -168,6 +168,9 @@ static int udp_send_to(int fd, const char* dest_ip, int port, const uint8_t* buf
 typedef struct {
   uint64_t sample_count;
   uint64_t deadline_miss_count;
+  uint64_t no_destination_count;
+  uint64_t send_error_count;
+  uint64_t packets_sent_count;
   uint64_t expected_wake_ns;
   uint64_t actual_wake_ns;
   uint64_t send_complete_ns;
@@ -299,7 +302,8 @@ typedef struct {
 static void tx_timing_update(tx_timing_stats_t* stats,
                              uint64_t expected_wake_ns,
                              uint64_t actual_wake_ns,
-                             uint64_t send_complete_ns) {
+                             uint64_t send_complete_ns,
+                             long period_ns) {
   if (!stats) return;
   const uint64_t jitter_ns = abs_diff_u64(actual_wake_ns, expected_wake_ns);
   const uint64_t sec_idx = actual_wake_ns / 1000000000ULL;
@@ -308,7 +312,8 @@ static void tx_timing_update(tx_timing_stats_t* stats,
   stats->expected_wake_ns = expected_wake_ns;
   stats->actual_wake_ns = actual_wake_ns;
   stats->send_complete_ns = send_complete_ns;
-  if (actual_wake_ns > expected_wake_ns) {
+  if (period_ns > 0 && actual_wake_ns > expected_wake_ns &&
+      (actual_wake_ns - expected_wake_ns) > (uint64_t)period_ns) {
     stats->deadline_miss_count++;
   }
 
@@ -1404,12 +1409,12 @@ static int telemetry_send_if_dest_available(const tlm_tx_arg_t* a,
 
   if (!have_dest) {
     // No active CU and no configured static destination.
-    return 0;
+    return 1;
   }
 
   char ipbuf[INET_ADDRSTRLEN];
   format_ipv4_addr(&dest_addr, ipbuf, sizeof(ipbuf));
-  return udp_send_to(a->udp_fd, ipbuf, a->port, buf, blen);
+  return (udp_send_to(a->udp_fd, ipbuf, a->port, buf, blen) == 0) ? 0 : -1;
 }
 
 static long telemetry_interval_ms_to_period_ns(int interval_ms, long default_period_ns) {
@@ -1452,14 +1457,20 @@ static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms) {
 
   if (c.samples > 0) {
     STC_LOG_INFO(
-      "OBS timing | tlmh(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=%llu tcp_to_queue_us=%.1f queue_to_exec_us=%.1f end_to_end_us=%.1f) | queue_depth_peak=%llu",
+      "OBS timing | tlmh(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=%llu tcp_to_queue_us=%.1f queue_to_exec_us=%.1f end_to_end_us=%.1f) | queue_depth_peak=%llu",
       (unsigned long long)h.sample_count,
+      (unsigned long long)h.packets_sent_count,
       (unsigned long long)h.deadline_miss_count,
+      (unsigned long long)h.no_destination_count,
+      (unsigned long long)h.send_error_count,
       ns_to_us(h.last_sec_jitter_min_ns),
       ns_to_us(h.last_sec_jitter_avg_ns),
       ns_to_us(h.last_sec_jitter_max_ns),
       (unsigned long long)l.sample_count,
+      (unsigned long long)l.packets_sent_count,
       (unsigned long long)l.deadline_miss_count,
+      (unsigned long long)l.no_destination_count,
+      (unsigned long long)l.send_error_count,
       ns_to_us(l.last_sec_jitter_min_ns),
       ns_to_us(l.last_sec_jitter_avg_ns),
       ns_to_us(l.last_sec_jitter_max_ns),
@@ -1470,14 +1481,20 @@ static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms) {
       (unsigned long long)qpeak);
   } else {
     STC_LOG_INFO(
-      "OBS timing | tlmh(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu miss=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=0 pending) | queue_depth_peak=%llu",
+      "OBS timing | tlmh(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=0 pending) | queue_depth_peak=%llu",
       (unsigned long long)h.sample_count,
+      (unsigned long long)h.packets_sent_count,
       (unsigned long long)h.deadline_miss_count,
+      (unsigned long long)h.no_destination_count,
+      (unsigned long long)h.send_error_count,
       ns_to_us(h.last_sec_jitter_min_ns),
       ns_to_us(h.last_sec_jitter_avg_ns),
       ns_to_us(h.last_sec_jitter_max_ns),
       (unsigned long long)l.sample_count,
+      (unsigned long long)l.packets_sent_count,
       (unsigned long long)l.deadline_miss_count,
+      (unsigned long long)l.no_destination_count,
+      (unsigned long long)l.send_error_count,
       ns_to_us(l.last_sec_jitter_min_ns),
       ns_to_us(l.last_sec_jitter_avg_ns),
       ns_to_us(l.last_sec_jitter_max_ns),
@@ -1538,12 +1555,15 @@ static void* diag_server_thread(void* arg) {
     pthread_mutex_unlock(&darg->sh->mtx);
 
     int n = snprintf(out, sizeof(out),
-                     "{\"tlmh\":{\"samples\":%llu,\"deadline_miss\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
-                     "\"tlml\":{\"samples\":%llu,\"deadline_miss\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
+                     "{\"tlmh\":{\"samples\":%llu,\"sent\":%llu,\"deadline_miss\":%llu,\"no_destination\":%llu,\"send_errors\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
+                     "\"tlml\":{\"samples\":%llu,\"sent\":%llu,\"deadline_miss\":%llu,\"no_destination\":%llu,\"send_errors\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
                      "\"command_path\":{\"samples\":%llu,\"tcp_recv_ns\":%llu,\"action_queued_ns\":%llu,\"exec_start_ns\":%llu,\"tcp_to_queue_avg_ns\":%llu,\"queue_to_exec_avg_ns\":%llu,\"end_to_end_avg_ns\":%llu},"
                      "\"queue_depth_peak\":%llu,\"backend\":{\"mode\":%u,\"transport_status\":%u,\"capabilities\":{\"native_a2_speed\":%u,\"native_absolute_position\":%u}}}\n",
                      (unsigned long long)h.sample_count,
+                     (unsigned long long)h.packets_sent_count,
                      (unsigned long long)h.deadline_miss_count,
+                     (unsigned long long)h.no_destination_count,
+                     (unsigned long long)h.send_error_count,
                      (unsigned long long)h.expected_wake_ns,
                      (unsigned long long)h.actual_wake_ns,
                      (unsigned long long)h.send_complete_ns,
@@ -1551,7 +1571,10 @@ static void* diag_server_thread(void* arg) {
                      (unsigned long long)h.last_sec_jitter_max_ns,
                      (unsigned long long)h.last_sec_jitter_avg_ns,
                      (unsigned long long)l.sample_count,
+                     (unsigned long long)l.packets_sent_count,
                      (unsigned long long)l.deadline_miss_count,
+                     (unsigned long long)l.no_destination_count,
+                     (unsigned long long)l.send_error_count,
                      (unsigned long long)l.expected_wake_ns,
                      (unsigned long long)l.actual_wake_ns,
                      (unsigned long long)l.send_complete_ns,
@@ -1609,12 +1632,21 @@ static void* tlmh_tx_thread(void* arg) {
     uint8_t buf[512];
     size_t blen = 0;
     if (stc_icd_tlmh_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
-      (void)telemetry_send_if_dest_available(a, buf, blen);
+      int tx_rc = telemetry_send_if_dest_available(a, buf, blen);
+      pthread_mutex_lock(&a->sh->mtx);
+      if (tx_rc == 0) {
+        a->sh->d.tlmh_timing.packets_sent_count++;
+      } else if (tx_rc > 0) {
+        a->sh->d.tlmh_timing.no_destination_count++;
+      } else {
+        a->sh->d.tlmh_timing.send_error_count++;
+      }
+      pthread_mutex_unlock(&a->sh->mtx);
     }
 
     const uint64_t send_complete_ns = mono_ns();
     pthread_mutex_lock(&a->sh->mtx);
-    tx_timing_update(&a->sh->d.tlmh_timing, expected_wake_ns, actual_wake_ns, send_complete_ns);
+    tx_timing_update(&a->sh->d.tlmh_timing, expected_wake_ns, actual_wake_ns, send_complete_ns, period_ns);
     pthread_mutex_unlock(&a->sh->mtx);
     observability_emit_periodic_log(a->sh, mono_ms());
     sleep_until(&next, period_ns);
@@ -1743,12 +1775,21 @@ static void* tlml_tx_thread(void* arg) {
     uint8_t buf[1024];
     size_t blen = 0;
     if (stc_icd_tlml_pack(&a->cfg, &m, buf, sizeof(buf), &blen) == STC_ICD_OK) {
-      (void)telemetry_send_if_dest_available(a, buf, blen);
+      int tx_rc = telemetry_send_if_dest_available(a, buf, blen);
+      pthread_mutex_lock(&a->sh->mtx);
+      if (tx_rc == 0) {
+        a->sh->d.tlml_timing.packets_sent_count++;
+      } else if (tx_rc > 0) {
+        a->sh->d.tlml_timing.no_destination_count++;
+      } else {
+        a->sh->d.tlml_timing.send_error_count++;
+      }
+      pthread_mutex_unlock(&a->sh->mtx);
     }
 
     const uint64_t send_complete_ns = mono_ns();
     pthread_mutex_lock(&a->sh->mtx);
-    tx_timing_update(&a->sh->d.tlml_timing, expected_wake_ns, actual_wake_ns, send_complete_ns);
+    tx_timing_update(&a->sh->d.tlml_timing, expected_wake_ns, actual_wake_ns, send_complete_ns, period_ns);
     pthread_mutex_unlock(&a->sh->mtx);
     observability_emit_periodic_log(a->sh, mono_ms());
     sleep_until(&next, period_ns);
