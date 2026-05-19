@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   SocketCAN transport adapter that binds x8_25 protocol callbacks to Linux CAN.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Exposes transport-facing abstraction owned by the x8_25 socketcan module.
+ *   Not real-time policy itself; scheduling is owned by caller thread context.
+ *   Hardware-facing via SocketCAN file descriptor, but protocol-neutral above x8_25.
+ *   Caller owns object lifetime and any cross-thread synchronization.
  */
 
 #ifndef MYACT_SOCKETCAN_H

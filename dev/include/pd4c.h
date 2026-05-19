@@ -83,24 +83,24 @@ typedef enum {
 
 /** Latest parsed TPDO/HB/EMCY telemetry snapshot from one node. */
 typedef struct {
-    uint16_t statusword;     // TPDO1
-    int8_t   mode_display;   // TPDO1
-    int32_t  pos_actual;     // TPDO2
-    int32_t  vel_actual;     // TPDO3 (normalized to i32)
+    uint16_t statusword;     // TPDO1: 0x6041 statusword (DS402 state/fault/set-point bits).
+    int8_t   mode_display;   // TPDO1: 0x6061 mode-of-operation display echoed by drive.
+    int32_t  pos_actual;     // TPDO2: 0x6064 position actual value (device counts).
+    int32_t  vel_actual;     // TPDO3: 0x6044 velocity actual value, normalized to i32.
     bool     have_tpdo1;
     bool     have_tpdo2;
     bool     have_tpdo3;
 
-    pd4c_nmt_state_t hb_state;
+    pd4c_nmt_state_t hb_state; // Heartbeat byte (0x700+node): NMT state from node supervision.
     bool     have_hb;
 
-    // EMCY (CiA301)
-    uint16_t emcy_error_code;
-    uint8_t  emcy_error_reg;
+    // EMCY (CiA301) from COB-ID 0x080+node.
+    uint16_t emcy_error_code; // EMCY error code.
+    uint8_t  emcy_error_reg;  // EMCY error register.
     uint8_t  emcy_mfg[5];
     bool     have_emcy;
 
-    // monotonic timestamps (ms)
+    // Monotonic receive timestamps (ms) of last TPDO/HB/EMCY update.
     uint64_t ts_tpdo1_ms;
     uint64_t ts_tpdo2_ms;
     uint64_t ts_tpdo3_ms;
@@ -137,11 +137,16 @@ typedef struct pd4c_ctx {
 } pd4c_ctx_t;
 
 /* --------- Core open/close --------- */
+/** Open/bind SocketCAN context for one node and initialize fixed COB-IDs. */
 int  pd4c_open(pd4c_ctx_t* ctx, const char* ifname, uint8_t node_id);
+/** Close CAN socket for context (caller owns ctx storage). */
 void pd4c_close(pd4c_ctx_t* ctx);
 
+/** Install logging callback used by this context. */
 void pd4c_set_logger(pd4c_ctx_t* ctx, pd4c_log_fn fn, void* user);
+/** Configure bounded SDO response timeout used by setup/diagnostic operations. */
 void pd4c_set_sdo_timeout(pd4c_ctx_t* ctx, int timeout_ms);
+/** Read-only telemetry/cache accessor for TPDO/HB/EMCY data. */
 const pd4c_telemetry_t* pd4c_telem(const pd4c_ctx_t* ctx);
 
 /* --------- Polling / parsing --------- */
@@ -159,37 +164,54 @@ enum {
  * timeout_ms: -1 block forever, 0 non-blocking, >0 ms
  * returns: >=0 event bitmask, <0 error
  */
+/** Poll one frame, parse TPDO/HB/EMCY, and update telemetry/cache state. */
 int pd4c_poll(pd4c_ctx_t* ctx, int timeout_ms);
 
 /* --------- NMT helpers --------- */
+/** Send NMT Start Remote Node command (control-plane, non-real-time). */
 int pd4c_nmt_start(pd4c_ctx_t* ctx);
+/** Send NMT Stop Remote Node command (control-plane, non-real-time). */
 int pd4c_nmt_stop(pd4c_ctx_t* ctx);
+/** Send NMT Enter Pre-Operational command (control-plane, non-real-time). */
 int pd4c_nmt_preop(pd4c_ctx_t* ctx);
+/** Send NMT Reset Node command (control-plane, non-real-time). */
 int pd4c_nmt_reset_node(pd4c_ctx_t* ctx);
 
 /* --------- SDO expedited (non real-time) --------- */
+/** SDO setup/diagnostic read of UINT8 object entry. */
 int pd4c_sdo_read_u8 (pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint8_t*  out);
+/** SDO setup/diagnostic read of UINT16 object entry. */
 int pd4c_sdo_read_u16(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint16_t* out);
+/** SDO setup/diagnostic read of UINT32 object entry. */
 int pd4c_sdo_read_u32(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint32_t* out);
+/** SDO setup/diagnostic read of INT32 object entry. */
 int pd4c_sdo_read_i32(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, int32_t*  out);
 
+/** SDO setup/diagnostic write of UINT8 object entry. */
 int pd4c_sdo_write_u8 (pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint8_t  v);
+/** SDO setup/diagnostic write of UINT16 object entry. */
 int pd4c_sdo_write_u16(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint16_t v);
+/** SDO setup/diagnostic write of UINT32 object entry. */
 int pd4c_sdo_write_u32(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint32_t v);
+/** SDO setup/diagnostic write of INT32 object entry. */
 int pd4c_sdo_write_i32(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, int32_t  v);
 
 /* --------- Runtime PDO send APIs --------- */
 /* RPDO1: 6040 + 6060 */
+/** Real-time PDO command: controlword + op-mode to RPDO1. */
 int pd4c_rpdo1_send_control_mode(pd4c_ctx_t* ctx, uint16_t controlword, int8_t mode);
 
 /* RPDO2: 607A + 6081 */
+/** Real-time PDO command: profile-position target/velocity to RPDO2. */
 int pd4c_rpdo2_send_pp(pd4c_ctx_t* ctx, int32_t target_pos, uint16_t profile_vel);
 
 /* RPDO3: 6042 */
+/** Real-time PDO command: target velocity to RPDO3. */
 int pd4c_rpdo3_send_target_velocity(pd4c_ctx_t* ctx, int16_t target_vel);
 
 /* --------- DS402 convenience (uses PDO + telemetry) --------- */
 const char* pd4c_ds402_state_str(uint16_t statusword);
+/** DS402 quick-stop controlword command path (PDO, no blocking wait). */
 int pd4c_ds402_quick_stop(pd4c_ctx_t* ctx, int8_t mode);
 
 /* Profile Position move with correct DS402 "new set-point" handshake.
@@ -211,12 +233,12 @@ int pd4c_pp_move(pd4c_ctx_t* ctx,
                  int is_relative,
                  int timeout_ms);
 
-/* Sends DS402 enable sequence via RPDO1 (mode is sent too).
+/* Sends DS402 enable-operation state transition sequence via RPDO1 (mode is sent too).
  * Requires TPDO1 updates (statusword) to observe completion.
  */
 int pd4c_ds402_enable_operation(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms);
 
-/* Fault reset pulse (DS402 bit7) via RPDO1.
+/* Fault reset pulse (DS402 bit7) via RPDO1 state-transition helper.
  * If you want a specific pattern (e.g., 0x6F/0x7F), do it at application level.
  */
 int pd4c_ds402_fault_reset(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms);

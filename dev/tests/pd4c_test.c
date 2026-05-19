@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   On-hardware smoke/diagnostic exerciser for Nanotec PD4-C CANopen/DS402 paths.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Validates mixed SDO setup traffic and runtime PDO command/telemetry behavior.
+ *   Uses an additional passive listener socket to observe TPDO/HB/EMCY traffic
+ *   independently from library telemetry caching for easier bus-level triage.
  */
 
 /*
@@ -162,6 +164,10 @@ typedef struct {
     uint32_t cnt_emcy;
 } telem_t;
 
+/* Passive listener is intentionally separate from pd4c_ctx socket:
+ * it confirms what is really present on the bus even if the library socket
+ * is filtered or application-level polling cadence delays cache visibility.
+ */
 static int can_open_listener(const char* ifname, int node_id, int* out_sock) {
     int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (s < 0) return -errno;

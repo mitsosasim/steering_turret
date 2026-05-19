@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   SocketCAN-backed Nanotec PD4-C CANopen/DS402 implementation used by STC.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Uses one raw CAN socket bound to one interface and node-id-scoped COB-IDs.
+ *   SDO expedited upload/download is used for bounded setup/diagnostic access.
+ *   Runtime motion is driven through RPDO control/position/velocity paths.
+ *   DS402 helpers implement enable, fault-reset, and quick-stop sequences.
  */
 
 #define _GNU_SOURCE
@@ -151,6 +154,7 @@ static inline void wr_le32(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
+/* Parse one incoming frame into telemetry cache and return event bit(s). */
 static int handle_frame(pd4c_ctx_t* ctx, const struct can_frame* fr) {
     if (!ctx || !fr) return PD4C_EINVAL;
 
@@ -212,6 +216,7 @@ static int handle_frame(pd4c_ctx_t* ctx, const struct can_frame* fr) {
     return PD4C_EVT_NONE;
 }
 
+/* Poll one CAN frame, then parse TPDO/HB/EMCY into ctx->telem snapshot. */
 int pd4c_poll(pd4c_ctx_t* ctx, int timeout_ms) {
     if (!ctx) return PD4C_EINVAL;
 
@@ -224,6 +229,7 @@ int pd4c_poll(pd4c_ctx_t* ctx, int timeout_ms) {
 
 /* ---------------- open/close ---------------- */
 
+/* Build node-specific CANopen COB-IDs used by this PD4-C node instance. */
 static void init_ids(pd4c_ctx_t* ctx) {
     const uint8_t n = ctx->node_id;
     ctx->sdo_tx_id = 0x600u + n;
@@ -332,6 +338,7 @@ int pd4c_nmt_reset_node(pd4c_ctx_t* ctx) {
 
 /* ---------------- SDO expedited ---------------- */
 
+/* Wait for matching SDO response while still consuming telemetry frames. */
 static int sdo_wait_resp(pd4c_ctx_t* ctx, int timeout_ms, struct can_frame* out) {
     uint64_t start = now_ms();
     for (;;) {
@@ -362,6 +369,7 @@ static int sdo_abort(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint32_t code) 
     return PD4C_ESDO_ABORT;
 }
 
+/* Expedited SDO upload (read): single request then matching 8-byte response. */
 static int sdo_read_exp(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint8_t* payload, uint8_t* payload_len) {
     if (!ctx || !payload || !payload_len) return PD4C_EINVAL;
 
@@ -382,7 +390,7 @@ static int sdo_read_exp(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint8_t* pay
     uint16_t ridx = le16(resp.data + 1);
     uint8_t rsub = resp.data[3];
 
-    if (cs == 0x80) {
+    if (cs == 0x80) { /* SDO abort transfer response */
         uint32_t ac = le32(resp.data + 4);
         return sdo_abort(ctx, ridx, rsub, ac);
     }
@@ -402,6 +410,7 @@ static int sdo_read_exp(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint8_t* pay
     return PD4C_OK;
 }
 
+/* Expedited SDO download (write): bounded setup/diagnostic path only. */
 static int sdo_write_exp(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, const uint8_t* payload, uint8_t payload_len) {
     if (!ctx || (!payload && payload_len)) return PD4C_EINVAL;
     if (!(payload_len == 1 || payload_len == 2 || payload_len == 4)) return PD4C_EINVAL;
@@ -426,7 +435,7 @@ static int sdo_write_exp(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, const uint8
     uint16_t ridx = le16(resp.data + 1);
     uint8_t rsub = resp.data[3];
 
-    if (cs == 0x80) {
+    if (cs == 0x80) { /* SDO abort transfer response */
         uint32_t ac = le32(resp.data + 4);
         return sdo_abort(ctx, ridx, rsub, ac);
     }
@@ -494,6 +503,7 @@ int pd4c_sdo_write_i32(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, int32_t v) {
 
 /* ---------------- PDO send ---------------- */
 
+/* RPDO1 runtime path: write DS402 controlword + op-mode command. */
 int pd4c_rpdo1_send_control_mode(pd4c_ctx_t* ctx, uint16_t controlword, int8_t mode) {
     if (!ctx) return PD4C_EINVAL;
     uint8_t d[3];
@@ -502,6 +512,7 @@ int pd4c_rpdo1_send_control_mode(pd4c_ctx_t* ctx, uint16_t controlword, int8_t m
     return can_send_frame(ctx, ctx->rpdo1_id, d, 3);
 }
 
+/* RPDO2 runtime path: write PP target position + profile velocity. */
 int pd4c_rpdo2_send_pp(pd4c_ctx_t* ctx, int32_t target_pos, uint16_t profile_vel) {
     if (!ctx) return PD4C_EINVAL;
     uint8_t d[6];
@@ -510,6 +521,7 @@ int pd4c_rpdo2_send_pp(pd4c_ctx_t* ctx, int32_t target_pos, uint16_t profile_vel
     return can_send_frame(ctx, ctx->rpdo2_id, d, 6);
 }
 
+/* RPDO3 runtime path: write target velocity object used in velocity mode. */
 int pd4c_rpdo3_send_target_velocity(pd4c_ctx_t* ctx, int16_t target_vel) {
     if (!ctx) return PD4C_EINVAL;
     uint8_t d[2];
@@ -523,6 +535,7 @@ int pd4c_rpdo3_send_target_velocity(pd4c_ctx_t* ctx, int16_t target_vel) {
 #define PD4C_SW_SETPOINT_ACK   0x1000u  // bit12
 #define PD4C_SW_TARGET_REACHED 0x0400u  // bit10 (optional)
 
+/* Decode CiA402 statusword to coarse state id used by wait helpers. */
 static int ds402_state(uint16_t sw) {
     /* Derived from CiA402 state machine patterns (mask 0x006F). */
     uint16_t m = sw & 0x006F;
@@ -551,6 +564,7 @@ const char* pd4c_ds402_state_str(uint16_t sw) {
     }
 }
 
+/* Wait for one DS402 coarse state by polling TPDO1 statusword updates. */
 static int wait_status(pd4c_ctx_t* ctx, int desired_state, int timeout_ms) {
     uint64_t start = now_ms();
     while ((int)(now_ms() - start) < timeout_ms) {
@@ -593,6 +607,7 @@ static int wait_statusword_mask_eq(pd4c_ctx_t* ctx,
 }
 
 
+/* Run DS402 transition sequence to OPERATION ENABLED via RPDO1 commands. */
 int pd4c_ds402_enable_operation(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms) {
     if (!ctx) return PD4C_EINVAL;
     if (timeout_ms < 200) timeout_ms = 200;
@@ -600,22 +615,23 @@ int pd4c_ds402_enable_operation(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms) {
     /* shutdown -> switch on -> enable op */
     int rc;
 
-    rc = pd4c_rpdo1_send_control_mode(ctx, 0x0006, mode);
+    rc = pd4c_rpdo1_send_control_mode(ctx, 0x0006, mode); /* shutdown */
     if (rc != PD4C_OK) return rc;
     rc = wait_status(ctx, 2, timeout_ms); /* READY TO SWITCH ON */
     if (rc != PD4C_OK) logf_ctx(ctx, PD4C_LOG_WARN, "enable_op: did not reach READY (rc=%d)", rc);
 
-    rc = pd4c_rpdo1_send_control_mode(ctx, 0x0007, mode);
+    rc = pd4c_rpdo1_send_control_mode(ctx, 0x0007, mode); /* switch on */
     if (rc != PD4C_OK) return rc;
     rc = wait_status(ctx, 3, timeout_ms); /* SWITCHED ON */
     if (rc != PD4C_OK) logf_ctx(ctx, PD4C_LOG_WARN, "enable_op: did not reach SWITCHED ON (rc=%d)", rc);
 
-    rc = pd4c_rpdo1_send_control_mode(ctx, 0x000F, mode);
+    rc = pd4c_rpdo1_send_control_mode(ctx, 0x000F, mode); /* enable operation */
     if (rc != PD4C_OK) return rc;
     rc = wait_status(ctx, 4, timeout_ms); /* OPERATION ENABLED */
     return rc;
 }
 
+/* DS402 fault reset pulse on controlword bit7 then wait until not-FAULT. */
 int pd4c_ds402_fault_reset(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms) {
     if (!ctx) return PD4C_EINVAL;
     if (timeout_ms < 200) timeout_ms = 200;
@@ -639,6 +655,7 @@ int pd4c_ds402_fault_reset(pd4c_ctx_t* ctx, int8_t mode, int timeout_ms) {
     return PD4C_ETIMEDOUT;
 }
 
+/* DS402 quick-stop command sequence (controlword with quick-stop bit cleared). */
 int pd4c_ds402_quick_stop(pd4c_ctx_t* ctx, int8_t mode) {
     if (!ctx) return PD4C_EINVAL;
     /* Clear bit2 (quick stop) while keeping switch on + enable voltage + enable op bits as needed.
@@ -647,6 +664,7 @@ int pd4c_ds402_quick_stop(pd4c_ctx_t* ctx, int8_t mode) {
     return pd4c_rpdo1_send_control_mode(ctx, 0x000B, mode);
 }
 
+/* Profile Position helper with DS402 set-point edge handshake on bit4/bit12. */
 int pd4c_pp_move(pd4c_ctx_t* ctx,
                  int32_t target_pos,
                  uint16_t profile_vel,

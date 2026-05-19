@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Standalone calibrated bench/demo motion tool for PD4-C/PD6-C tuning.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   This is not the normal multi-threaded stc_server runtime path.
+ *   It is a single-node commissioning/demo utility with explicit safety flow:
+ *   read SDO diagnostics, optionally apply startup limits, run bounded motion,
+ *   and return to safe stop/home behavior on completion or interrupt.
  */
 
 
@@ -482,6 +485,9 @@ static void log_scaling(pd4c_ctx_t* ctx, const demo_cfg_t* cfg) {
 }
 
 static int maybe_widen_soft_limits(pd4c_ctx_t* ctx, demo_cfg_t* cfg) {
+  /* Demo guardrail: ensure 607D software limits are large enough for calibrated
+   * ±140 deg excursions after applying corrected counts/degree scaling.
+   */
 #if AUTO_WRITE_SOFT_LIMITS
   int32_t need_abs = deg_to_raw(cfg, DEMO_MAX_DEG) - cfg->home_raw;
   if (need_abs < 0) need_abs = -need_abs;
@@ -519,6 +525,9 @@ static int maybe_widen_soft_limits(pd4c_ctx_t* ctx, demo_cfg_t* cfg) {
 }
 
 static int maybe_write_motion_limits(pd4c_ctx_t* ctx, demo_cfg_t* cfg) {
+  /* Demo startup writes are explicit and bounded SDO diagnostics/setup ops,
+   * kept separate from real-time PDO motion commands.
+   */
 #if AUTO_WRITE_MOTION_LIMITS
   int rc = 0;
 
@@ -793,6 +802,9 @@ static int pp_move_abs_deg_force(pd4c_ctx_t* ctx, const demo_cfg_t* cfg, double 
 }
 
 static void safe_stop_and_home(pd4c_ctx_t* ctx, const demo_cfg_t* cfg) {
+  /* Safety behavior for demo/bench use: always issue quick-stop first, then
+   * drive back to calibrated HOME with abort flag temporarily masked.
+   */
   sig_atomic_t stop_saved = g_stop;
   g_stop = 0; /* allow the safety return-home move to complete */
 
@@ -808,6 +820,7 @@ static void safe_stop_and_home(pd4c_ctx_t* ctx, const demo_cfg_t* cfg) {
 
 static void on_signal(int signo) {
   (void)signo;
+  /* Async-signal-safe stop flag consumed by main motion loop. */
   g_stop = 1;
 }
 
@@ -842,6 +855,9 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  /* SIGINT/SIGTERM convert into graceful stop path that still executes
+   * safe_stop_and_home before close when possible.
+   */
   signal(SIGINT, on_signal);
   signal(SIGTERM, on_signal);
 

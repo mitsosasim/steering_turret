@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Maps parsed INI axis configuration into normalized runtime axis_cfg_t entries.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Implementation ownership: stc_axis_cfg_map module used during startup only.
+ *   Not real-time sensitive; called while building runtime configuration snapshot.
+ *   Protocol/hardware-facing through driver/node mapping fields in axis_cfg_t.
+ *   Caller owns input/output storage; function performs deterministic value copy/map.
  */
 
 #ifndef STC_AXIS_CFG_MAP_H

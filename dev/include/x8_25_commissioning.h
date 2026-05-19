@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Commissioning-only API for persistent MYACTUATOR X8-25 parameter writes/reads.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Owned by x8_25 commissioning module and separated from runtime-safe API.
+ *   Not real-time sensitive: endpoints are setup/maintenance, not motion loop paths.
+ *   Protocol/hardware-facing vendor command surface for CAN-connected actuators.
+ *   Caller owns sequencing, locking, and when persistent writes are allowed.
  */
 
 #ifndef X8_25_COMMISSIONING_H
