@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Thread-safe process logger API used by STC runtime and test utilities.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Intended for concurrent use from TCP/CAN/telemetry threads and unit/integration
+ *   tests; implementation internally synchronizes output serialization.
  */
 
 #pragma once
@@ -19,7 +20,7 @@
 extern "C" {
 #endif
 
-// Logger functions are thread-safe and internally synchronized.
+/** Logger functions are thread-safe and internally synchronized. */
 typedef enum {
   STC_LOG_LEVEL_ERROR = 0,
   STC_LOG_LEVEL_WARN = 1,

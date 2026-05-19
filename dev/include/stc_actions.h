@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Declares the internal action/command queue exchanged between runtime threads.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   TCP command thread enqueues actions, CAN worker dequeues and executes them.
+ *   Stream-speed actions are coalesced to keep freshest rate command per axis.
+ *   eventfd wakeup is used so CAN worker can sleep without busy-waiting.
  */
 
 #ifndef STC_ACTIONS_H
@@ -20,6 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/** Action opcode consumed by the CAN worker execution loop. */
 typedef enum {
   ACTION_SET_STATE = 0,
   ACTION_PP_MOVE,
@@ -42,6 +45,7 @@ typedef enum {
   STC_AXIS_MOTION_SPEED = 2
 } stc_axis_motion_kind_t;
 
+/** One queued action plus optional axis payload data. */
 typedef struct {
   uint32_t axes_mask;
   uint64_t obs_tcp_rx_ns;

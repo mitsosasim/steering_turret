@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Defines the generic motion backend interface consumed by stc_server.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Exposes one abstraction for real CANopen hardware and simulator backends.
+ *   The CAN worker thread owns backend lifetime and all backend API calls.
  */
 
 #ifndef STC_MOTION_BACKEND_H
@@ -23,13 +24,19 @@
 extern "C" {
 #endif
 
+/** Opaque backend handle implemented by the motion backend module. */
 typedef struct motion_backend motion_backend_t;
 
+/** Backend feature flags used to gate optional command paths. */
 typedef struct {
   uint8_t supports_native_a2_speed;
   uint8_t supports_native_absolute_position;
 } motion_backend_capabilities_t;
 
+/**
+ * Static backend configuration copied from parsed INI config into runtime.
+ * Ownership: caller-owned during start; backend copies required values.
+ */
 typedef struct {
   const char* can_if;
   char backend[32];
@@ -90,6 +97,7 @@ typedef struct {
   uint64_t ts_emcy_ms;
 } motion_snapshot_t;
 
+/** Create and initialize backend instance. Called by CAN worker at startup. */
 int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend);
 void motion_backend_stop(motion_backend_t* backend);
 int motion_backend_discover(motion_backend_t* backend);

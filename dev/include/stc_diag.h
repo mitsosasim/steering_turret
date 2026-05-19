@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Declares BIT/diagnostic interfaces used by the STC health subsystem.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   PBIT validates startup readiness, CBIT monitors runtime critical faults,
+ *   and IBIT executes commanded in-depth checks. Diagnostic words are encoded
+ *   as category/subcategory/error-code triplets for telemetry reporting.
  */
 
 #pragma once
@@ -19,11 +21,13 @@
 struct shared_data;
 typedef struct shared_data shared_data_t;
 
+/** Top-level health state exported to state-machine and telemetry paths. */
 typedef enum {
   STC_DIAG_HEALTH_OK = 0,
   STC_DIAG_HEALTH_CRITICAL_FAULT
 } stc_diag_health_t;
 
+/** Pack category/subcategory/error into one 32-bit diagnostic value. */
 uint32_t stc_diag_encode(uint8_t category,
                          uint8_t subcategory,
                          uint16_t error_code);

@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Operational state machine API for STC command/motion permission gating.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Encodes SAFE/OPER/FAIL behavior and legal transitions used by runtime.
+ *   Motion and streaming commands are accepted only in explicitly allowed states.
  */
 
 #ifndef STC_STATE_H
@@ -18,6 +19,7 @@
 extern "C" {
 #endif
 
+/** Runtime control-unit states visible to command handling and diagnostics. */
 typedef enum {
   STC_STATE_INIT = 0,
   STC_STATE_INIT_DONE,

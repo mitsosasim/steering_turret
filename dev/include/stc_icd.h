@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Transport-agnostic binary ICD parser/packer for STC command and telemetry frames.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Supports CMD/RSP (TCP) and TLMH/TLML (UDP) formats with deterministic wire
+ *   layout. Encoding/decoding is manual little-endian byte handling; no struct
+ *   casting is permitted to keep ABI/packing behavior explicit and portable.
  */
 
 #ifndef STC_ICD_H

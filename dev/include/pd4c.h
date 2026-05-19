@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Low-level Nanotec PD4-C CANopen/DS402 API for STC motion control.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   SocketCAN-based transport. PDOs are used for runtime motion exchange;
+ *   SDO access is for bounded setup/diagnostic operations only.
+ *   Single-threaded library contract; external locking is required if shared.
  */
 
 #ifndef PD4C_H
@@ -45,6 +47,7 @@ extern "C" {
  *   EMCY:  0x080+node -> 8 bytes (CiA301)
  */
 
+/** Return codes shared by all PD4-C API calls. */
 typedef enum {
     PD4C_OK          = 0,
     PD4C_EINVAL      = -1,
@@ -78,6 +81,7 @@ typedef enum {
     PD4C_MODE_VELOCITY         = 2
 } pd4c_op_mode_t;
 
+/** Latest parsed TPDO/HB/EMCY telemetry snapshot from one node. */
 typedef struct {
     uint16_t statusword;     // TPDO1
     int8_t   mode_display;   // TPDO1
@@ -104,6 +108,7 @@ typedef struct {
     uint64_t ts_emcy_ms;
 } pd4c_telemetry_t;
 
+/** Context owned by caller; contains socket, IDs, and cached telemetry. */
 typedef struct pd4c_ctx {
     int      sock;
     char     ifname[32];
