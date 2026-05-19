@@ -21,6 +21,8 @@ typedef enum stc_axis_driver_e {
   STC_AXIS_DRIVER_SIM
 } stc_axis_driver_t;
 
+const char* axis_driver_to_string(stc_axis_driver_t driver);
+
 typedef struct axis_cfg_s {
   stc_axis_driver_t driver;
   int node_id;

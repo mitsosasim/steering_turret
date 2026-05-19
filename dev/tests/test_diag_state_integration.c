@@ -3,10 +3,17 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#ifdef NDEBUG
+#define TEST_ASSERT_OR_ABORT(cond) do { if (!(cond)) { fprintf(stderr, "CHECK failed: %s\n", #cond); abort(); } } while (0)
+#else
+#define TEST_ASSERT_OR_ABORT(cond) assert(cond)
+#endif
 
 static stc_state_t apply(stc_state_t current, stc_event_t evt) {
   stc_state_t next = STC_STATE_INIT;
-  assert(stc_state_transition(current, evt, &next) == 0);
+  TEST_ASSERT_OR_ABORT(stc_state_transition(current, evt, &next) == 0);
   return next;
 }
 
