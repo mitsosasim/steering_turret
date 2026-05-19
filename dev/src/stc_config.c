@@ -144,6 +144,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->can_restart_ms = 100;
   cfg->can_scan_max_node = 32;
   cfg->can_timeout_ms = 1000;
+  cfg->startup_feedback_grace_ms = 3000;
   cfg->strict_stale_policy = 0;
   cfg->rt_enabled = 1;
   cfg->rt_strict = 0;
@@ -352,6 +353,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->can_scan_max_node) != 0) goto parse_error;
       } else if (strcmp(key, "can_timeout_ms") == 0) {
         if (parse_int(value, &cfg->can_timeout_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "startup_feedback_grace_ms") == 0) {
+        if (parse_int(value, &cfg->startup_feedback_grace_ms) != 0) goto parse_error;
       } else if (strcmp(key, "strict_stale_policy") == 0) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else {

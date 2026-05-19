@@ -41,6 +41,7 @@ typedef struct stc_config_s {
   int can_restart_ms;
   int can_scan_max_node;
   int can_timeout_ms;
+  int startup_feedback_grace_ms;
   int strict_stale_policy;
 
   int rt_enabled;
