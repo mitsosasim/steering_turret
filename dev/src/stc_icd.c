@@ -1,5 +1,6 @@
 #include "stc_icd.h"
 
+#include <assert.h>
 #include <string.h>
 
 /* ----------------------------- Endian helpers ----------------------------- */
@@ -479,9 +480,8 @@ stc_icd_rc_t stc_icd_tlml_parse(const stc_icd_cfg_t* cfg,
                                 stc_tlml_t* out) {
   if (!cfg || !buf || !out) return STC_ICD_EINVAL;
 
-  /* minimum base (no errors) */
-  const size_t base = 4u+1u+1u+2u+8u + 1u+4u + 4u+4u+4u + 8u+8u+8u+8u + 8u+8u + 4u+4u + 1u;
-  if (len < base) return STC_ICD_EPROTO;
+  assert(STC_ICD_TLML_BASE_SIZE == 100u);
+  if (len < STC_ICD_TLML_BASE_SIZE) return STC_ICD_EPROTO;
 
   memset(out, 0, sizeof(*out));
   memcpy(out->magic, &buf[0], 4);
@@ -505,15 +505,15 @@ stc_icd_rc_t stc_icd_tlml_parse(const stc_icd_cfg_t* cfg,
   out->alt_m = rd_f64_le(&buf[off]); off += 8;
   out->heading_deg = rd_f64_le(&buf[off]); off += 8;
 
-  memcpy(out->motor_status, &buf[off], 8); off += 8;
-  memcpy(out->laser_status, &buf[off], 8); off += 8;
+  memcpy(out->motor_status, &buf[off], STC_ICD_AXES_COUNT); off += STC_ICD_AXES_COUNT;
+  memcpy(out->laser_status, &buf[off], STC_ICD_LASER_COUNT); off += STC_ICD_LASER_COUNT;
 
   out->level_x = rd_f32_le(&buf[off]); off += 4;
   out->level_y = rd_f32_le(&buf[off]); off += 4;
 
   uint8_t declared = buf[off]; off += 1;
 
-  if (len != (base + ((size_t)declared * 4u))) return STC_ICD_EPROTO;
+  if (len != (STC_ICD_TLML_BASE_SIZE + ((size_t)declared * 4u))) return STC_ICD_EPROTO;
 
   uint16_t use_n = declared;
 
@@ -537,8 +537,8 @@ stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
   uint16_t n = tlm->error_count;
   if (n > STC_ICD_MAX_ERRORS) n = STC_ICD_MAX_ERRORS;
 
-  const size_t base = 4u+1u+1u+2u+8u + 1u+4u + 4u+4u+4u + 8u+8u+8u+8u + 8u+8u + 4u+4u + 1u;
-  const size_t total = base + ((size_t)n * 4u);
+  assert(STC_ICD_TLML_BASE_SIZE == 100u);
+  const size_t total = STC_ICD_TLML_BASE_SIZE + ((size_t)n * 4u);
   if (total > out_cap) return STC_ICD_EBUFS;
 
   size_t off = 0;
@@ -560,13 +560,14 @@ stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
   wr_f64_le(&out_buf[off], tlm->alt_m); off += 8;
   wr_f64_le(&out_buf[off], tlm->heading_deg); off += 8;
 
-  memcpy(&out_buf[off], tlm->motor_status, 8); off += 8;
-  memcpy(&out_buf[off], tlm->laser_status, 8); off += 8;
+  memcpy(&out_buf[off], tlm->motor_status, STC_ICD_AXES_COUNT); off += STC_ICD_AXES_COUNT;
+  memcpy(&out_buf[off], tlm->laser_status, STC_ICD_LASER_COUNT); off += STC_ICD_LASER_COUNT;
 
   wr_f32_le(&out_buf[off], tlm->level_x); off += 4;
   wr_f32_le(&out_buf[off], tlm->level_y); off += 4;
 
   out_buf[off] = (uint8_t)n; off += 1;
+  assert(off == STC_ICD_TLML_BASE_SIZE);
 
   for (uint16_t i = 0; i < n; i++) {
     wr_u32_le(&out_buf[off], tlm->errors[i]); off += 4;
