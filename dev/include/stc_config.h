@@ -43,6 +43,8 @@ typedef struct stc_config_s {
   int can_timeout_ms;
   int startup_feedback_grace_ms;
   int strict_stale_policy;
+  int speed_watchdog_ms;
+  int speed_stream_period_ms;
 
   int rt_enabled;
   int rt_strict;

@@ -232,6 +232,7 @@ typedef struct shared_data {
   int mirror_axis[STC_MAX_MIRROR];
 
   int speed_watchdog_ms;
+  int speed_stream_period_ms;
   int ds402_timeout_ms;
   int pp_sdo_diag;              // enable SDO snapshot before PP move
   uint32_t can_timeout_ms;
@@ -1024,7 +1025,7 @@ _Atomic uint64_t g_can_worker_action_dispatch_iterations = 0;
 static void* can_worker_thread(void* arg) {
   can_worker_arg_t* a = (can_worker_arg_t*)arg;
   const uint64_t maintenance_period_ms = 10;
-  const uint64_t speed_stream_period_ms = 50;
+  uint64_t speed_stream_period_ms = 50;
   uint64_t next_maintenance_ms = mono_ms();
 
   motion_backend_cfg_t backend_cfg;
@@ -1356,6 +1357,7 @@ static void* can_worker_thread(void* arg) {
     pthread_mutex_lock(&a->sh->mtx);
     st_state = a->sh->d.st_state;
     watchdog_ms = a->sh->d.speed_watchdog_ms;
+    speed_stream_period_ms = (a->sh->d.speed_stream_period_ms > 0) ? (uint64_t)a->sh->d.speed_stream_period_ms : 50u;
     fail_stop_pending = a->sh->d.fail_stop_pending;
     fail_stop_axes_mask = a->sh->d.fail_stop_axes_mask;
     a->sh->d.fail_stop_pending = 0;
@@ -1415,7 +1417,9 @@ static void* can_worker_thread(void* arg) {
         pthread_mutex_lock(&a->sh->mtx);
         a->sh->d.stream[axis].enabled = 0;
         pthread_mutex_unlock(&a->sh->mtx);
-        (void)motion_backend_quick_stop(backend, (1u << axis));
+        double zero_speeds[STC_AXIS_COUNT] = {0};
+        zero_speeds[axis] = 0.0;
+        (void)motion_backend_apply_speed(backend, (1u << axis), zero_speeds);
         axis_enabled[axis] = 0;
         if (speed_stream_active[axis]) {
           const uint64_t duration_ms = (now >= speed_stream_start_ms[axis]) ? (now - speed_stream_start_ms[axis]) : 0;
@@ -1424,6 +1428,7 @@ static void* can_worker_thread(void* arg) {
                        speed_stream_tx_count[axis],
                        speed_stream_fail_count[axis],
                        duration_ms);
+          STC_LOG_INFO("axis%zu speed watchdog expired", axis);
           STC_LOG_INFO("axis%zu MYACT speed stream stop", axis);
           speed_stream_active[axis] = 0;
         }
@@ -2100,6 +2105,8 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   memcpy(sh->d.motor_map, cfg->motor_status_map, sizeof(sh->d.motor_map));
   sh->d.controller_id_strict_legacy = cfg->controller_id_strict_legacy ? 1 : 0;
   sh->d.startup_feedback_grace_ms = (cfg->startup_feedback_grace_ms > 0) ? (uint32_t)cfg->startup_feedback_grace_ms : 0u;
+  sh->d.speed_watchdog_ms = (cfg->speed_watchdog_ms >= 0) ? cfg->speed_watchdog_ms : 0;
+  sh->d.speed_stream_period_ms = (cfg->speed_stream_period_ms > 0) ? cfg->speed_stream_period_ms : 50;
   sh->d.strict_stale_policy = cfg->strict_stale_policy ? 1 : 0;
 }
 

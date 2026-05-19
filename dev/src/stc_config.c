@@ -146,6 +146,8 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->can_timeout_ms = 1000;
   cfg->startup_feedback_grace_ms = 3000;
   cfg->strict_stale_policy = 0;
+  cfg->speed_watchdog_ms = 250;
+  cfg->speed_stream_period_ms = 50;
   cfg->rt_enabled = 1;
   cfg->rt_strict = 0;
   cfg->rt_sched_policy = SCHED_FIFO;
@@ -355,6 +357,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->can_timeout_ms) != 0) goto parse_error;
       } else if (strcmp(key, "strict_stale_policy") == 0) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
+      } else if (strcmp(key, "speed_watchdog_ms") == 0) {
+        if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "speed_stream_period_ms") == 0) {
+        if (parse_int(value, &cfg->speed_stream_period_ms) != 0) goto parse_error;
       } else {
         recognized = false;
       }
@@ -411,6 +417,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->startup_feedback_grace_ms) != 0) goto parse_error;
       } else if (strcmp(key, "strict_stale_policy") == 0) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
+      } else if (strcmp(key, "speed_watchdog_ms") == 0) {
+        if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
+      } else if (strcmp(key, "speed_stream_period_ms") == 0) {
+        if (parse_int(value, &cfg->speed_stream_period_ms) != 0) goto parse_error;
       } else {
         recognized = false;
       }
@@ -631,6 +641,15 @@ bool load_config(const char* path, stc_config_t* cfg) {
       STC_LOG_ERROR("%s: axis %d has invalid active_status2_interval_ms", path, i);
       return false;
     }
+  }
+
+  if (cfg->speed_watchdog_ms < 0) {
+    STC_LOG_ERROR("%s: speed_watchdog_ms must be >= 0", path);
+    return false;
+  }
+  if (cfg->speed_stream_period_ms <= 0) {
+    STC_LOG_ERROR("%s: speed_stream_period_ms must be > 0", path);
+    return false;
   }
 
   if (cfg->startup_feedback_grace_ms < 0) {
