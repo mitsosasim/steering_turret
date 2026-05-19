@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Defines the INI configuration model for STC runtime and axis mappings.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Covers network/CAN settings, axis mapping, and turret/SUT/mirror/laser maps.
+ *   Configuration is loaded once at startup and copied into runtime structures.
  */
 
 #ifndef STC_CONFIG_H
@@ -26,6 +27,7 @@ extern "C" {
 #define STC_MAX_SUT 8
 #define STC_MAX_MIRROR 8
 
+/** Parsed configuration container populated from INI and consumed at startup. */
 typedef struct stc_config_s {
   int tcp_port;
   char backend[32];

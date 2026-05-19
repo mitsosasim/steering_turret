@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Shared physical axis model and conversion helpers used across STC modules.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Defines the canonical 18-axis layout plus counts/degrees conversion logic,
+ *   velocity scaling, telemetry derivation, and saturation-related runtime state.
  */
 
 #ifndef STC_MODEL_H
@@ -21,6 +22,7 @@
 extern "C" {
 #endif
 
+/** Canonical STC axis count: turret + SUT + mirror channels in fixed order. */
 #define STC_AXIS_COUNT 18u
 
 typedef enum axis_vel_raw_units_e {
@@ -36,6 +38,7 @@ typedef enum stc_axis_driver_e {
 
 const char* axis_driver_to_string(stc_axis_driver_t driver);
 
+/** Per-axis configuration with units, limits, and protocol/driver mapping data. */
 typedef struct axis_cfg_s {
   stc_axis_driver_t driver;
   int node_id;
@@ -68,6 +71,7 @@ typedef struct axis_cfg_s {
   uint16_t pp_profile_vel;
 } axis_cfg_t;
 
+/** Normalized runtime telemetry cache for one axis (raw + converted values). */
 typedef struct axis_telem_s {
   int32_t pos_raw;
   int32_t vel_raw;

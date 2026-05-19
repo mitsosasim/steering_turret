@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Low-level MYACTUATOR X8-25 / V3 protocol interface for axis drives.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Transport-agnostic callback design (no direct CAN dependency in API).
+ *   No heap allocation and no internal threads; caller owns scheduling/locking.
+ *   Used by STC for present and future mirror/SUT actuator support.
  */
 
 #ifndef X8_25_H
@@ -87,6 +89,7 @@ typedef enum {
 
 typedef void (*myact_log_fn)(myact_log_level_t level, const char* msg, void* user);
 
+/** Generic CAN frame abstraction passed to user-provided transport callbacks. */
 typedef struct {
     uint32_t id;
     uint8_t  dlc;
@@ -104,6 +107,7 @@ typedef int      (*myact_send_fn)(const myact_can_frame_t* frame, void* user);
 typedef int      (*myact_recv_fn)(myact_can_frame_t* frame, uint32_t timeout_ms, void* user);
 typedef uint64_t (*myact_time_ms_fn)(void* user);
 
+/** IO callback table used to bind protocol logic to a transport backend. */
 typedef struct {
     myact_send_fn    send;
     myact_recv_fn    recv;

@@ -5,10 +5,11 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Axis command clamping and saturation helper API for command safety checks.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Enforces configured position/speed limits and reports when requests were
+ *   saturated so diagnostics/telemetry can expose operator-command limiting.
  */
 
 #ifndef STC_LIMITS_H
@@ -18,6 +19,7 @@
 
 #include <stdbool.h>
 
+/** Clamp scalar value to inclusive [min,max] bounds. */
 double stc_clamp(double val, double min, double max);
 
 bool stc_clamp_axis_cmd(const axis_cfg_t* cfg,
