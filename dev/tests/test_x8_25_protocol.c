@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Protocol-level regression tests for MYACTUATOR X8-25 frame encode/decode behavior.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Catches wire-format or checksum regressions that would break actuator interoperability.
  */
 
 #include "x8_25.h"

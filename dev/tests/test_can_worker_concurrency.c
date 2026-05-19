@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Stress/concurrency regression tests for CAN worker loop and shared-state synchronization.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Protects against races between command ingestion, worker execution, and telemetry publication paths.
  */
 
 #define STC_TEST_HOOKS 1

@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   State-machine transition validity tests for SAFE/OPER/FAIL control gating.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Ensures illegal transitions stay rejected and diagnostic/fault inputs drive deterministic state progression.
  */
 
 #include "stc_state.h"
@@ -24,12 +24,14 @@
 #define TEST_CHECK(cond) assert(cond)
 #endif
 
+/** Verifies one legal transition mapping; catches accidental edits to state transition table. */
 static void expect_transition(stc_state_t from, stc_event_t evt, stc_state_t to) {
   stc_state_t next;
   TEST_CHECK(stc_state_transition(from, evt, &next) == 0);
   TEST_CHECK(next == to);
 }
 
+/** Verifies one illegal transition remains rejected; protects motion gating safety behavior. */
 static void expect_invalid(stc_state_t from, stc_event_t evt) {
   stc_state_t next = STC_STATE_INIT;
   TEST_CHECK(stc_state_transition(from, evt, &next) != 0);

@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Thread-safe logger stress tests under multi-threaded runtime-style load.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Protects serialized logging guarantees used by runtime threads and test harnesses.
  */
 
 #define _POSIX_C_SOURCE 200809L

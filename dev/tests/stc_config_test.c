@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Config parser strictness and backward-compatibility regression tests for STC INI files.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Protects startup determinism by rejecting malformed configs while preserving accepted legacy spellings and defaults.
  */
 
 #include "stc_config.h"
@@ -52,6 +52,7 @@ static void write_tmp_config(const char* contents, char out_path[], size_t out_p
   if (fclose(f) != 0) die("fclose failed");
 }
 
+/* Verifies strict key validation so typoed network keys fail fast instead of silently altering runtime networking. */
 static void test_reject_typoed_network_key(void) {
   const char* cfg_text =
       "[Network]\n"
@@ -89,6 +90,7 @@ static void test_reject_typoed_network_key(void) {
   unlink(path);
 }
 
+/* Verifies strict section-name parsing to catch operator configuration mistakes before turret runtime starts. */
 static void test_reject_typoed_section_name(void) {
   const char* cfg_text =
       "[Netwrok]\n"
@@ -122,6 +124,7 @@ static void test_reject_typoed_section_name(void) {
 }
 
 
+/* Verifies backward compatibility aliases to prevent regressions when loading legacy deployment INI files. */
 static void test_accept_deprecated_multicast_network_keys(void) {
   const char* cfg_text =
       "[Network]\n"
@@ -162,6 +165,7 @@ static void test_accept_deprecated_multicast_network_keys(void) {
   unlink(path);
 }
 
+/* Verifies a canonical valid config still loads, protecting startup compatibility and expected defaults. */
 static void test_accept_valid_config(void) {
   const char* cfg_text =
       "[Network]\n"
@@ -202,6 +206,7 @@ static void test_accept_valid_config(void) {
 }
 
 
+/* Verifies sparse optional sections parse correctly, preventing false startup failures on partial installations. */
 static void test_accept_sparse_sut_and_mirror_sections(void) {
   const char* cfg_text =
       "[Network]\n"

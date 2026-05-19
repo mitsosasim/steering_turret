@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Mocked CAN backend availability and health-status regression tests.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Verifies can_ok and node discovery accounting used by diagnostics/state gating without requiring hardware.
  */
 
 #include "motion_backend.h"

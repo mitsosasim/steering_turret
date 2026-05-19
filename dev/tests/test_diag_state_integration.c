@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Integration tests linking diagnostics outcomes to state-machine transitions.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Protects SAFE/FAIL behavior so runtime gating follows reported health conditions.
  */
 
 #include "stc_diag.h"

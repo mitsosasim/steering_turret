@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   SocketCAN identifier mapping tests for MYACTUATOR transport adapter.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Protects protocol ID calculations required for reliable X8-25 command/telemetry routing.
  */
 
 #include "x8_25.h"

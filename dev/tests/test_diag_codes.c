@@ -5,10 +5,10 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Diagnostic code encoding and motor-status flag mapping regression tests.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Ensures BIT outputs remain wire-compatible and that motor fault/state flags are interpreted consistently.
  */
 
 #include "stc_diag.h"
