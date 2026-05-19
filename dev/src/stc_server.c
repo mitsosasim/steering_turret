@@ -187,6 +187,7 @@ typedef struct {
 
 typedef struct {
   uint64_t samples;
+  uint64_t invalid_samples;
   uint64_t tcp_recv_ns;
   uint64_t action_queued_ns;
   uint64_t exec_start_ns;
@@ -342,6 +343,13 @@ static void cmd_timing_update(cmd_timing_stats_t* stats,
                               uint64_t action_queued_ns,
                               uint64_t exec_start_ns) {
   if (!stats) return;
+  if (!(tcp_recv_ns > 0 &&
+        action_queued_ns >= tcp_recv_ns &&
+        exec_start_ns >= action_queued_ns)) {
+    stats->invalid_samples++;
+    return;
+  }
+
   const uint64_t tcp_to_queue_ns = (action_queued_ns >= tcp_recv_ns) ? (action_queued_ns - tcp_recv_ns) : 0;
   const uint64_t queue_to_exec_ns = (exec_start_ns >= action_queued_ns) ? (exec_start_ns - action_queued_ns) : 0;
   const uint64_t end_to_end_ns = (exec_start_ns >= tcp_recv_ns) ? (exec_start_ns - tcp_recv_ns) : 0;
@@ -350,9 +358,12 @@ static void cmd_timing_update(cmd_timing_stats_t* stats,
   stats->tcp_recv_ns = tcp_recv_ns;
   stats->action_queued_ns = action_queued_ns;
   stats->exec_start_ns = exec_start_ns;
-  stats->tcp_to_queue_avg_ns += (tcp_to_queue_ns - stats->tcp_to_queue_avg_ns) / stats->samples;
-  stats->queue_to_exec_avg_ns += (queue_to_exec_ns - stats->queue_to_exec_avg_ns) / stats->samples;
-  stats->end_to_end_avg_ns += (end_to_end_ns - stats->end_to_end_avg_ns) / stats->samples;
+  stats->tcp_to_queue_avg_ns =
+    (uint64_t)((((__uint128_t)stats->tcp_to_queue_avg_ns * (stats->samples - 1)) + tcp_to_queue_ns) / stats->samples);
+  stats->queue_to_exec_avg_ns =
+    (uint64_t)((((__uint128_t)stats->queue_to_exec_avg_ns * (stats->samples - 1)) + queue_to_exec_ns) / stats->samples);
+  stats->end_to_end_avg_ns =
+    (uint64_t)((((__uint128_t)stats->end_to_end_avg_ns * (stats->samples - 1)) + end_to_end_ns) / stats->samples);
 }
 
 static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms);
@@ -1457,7 +1468,7 @@ static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms) {
 
   if (c.samples > 0) {
     STC_LOG_INFO(
-      "OBS timing | tlmh(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=%llu tcp_to_queue_us=%.1f queue_to_exec_us=%.1f end_to_end_us=%.1f) | queue_depth_peak=%llu",
+      "OBS timing | tlmh(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | tlml(samples=%llu sent=%llu deadline_miss=%llu no_dest=%llu send_err=%llu jitter_us=min:%.1f avg:%.1f max:%.1f) | cmd(samples=%llu invalid=%llu tcp_to_queue_us=%.1f queue_to_exec_us=%.1f end_to_end_us=%.1f) | queue_depth_peak=%llu",
       (unsigned long long)h.sample_count,
       (unsigned long long)h.packets_sent_count,
       (unsigned long long)h.deadline_miss_count,
@@ -1475,6 +1486,7 @@ static void observability_emit_periodic_log(shared_t* sh, uint64_t now_ms) {
       ns_to_us(l.last_sec_jitter_avg_ns),
       ns_to_us(l.last_sec_jitter_max_ns),
       (unsigned long long)c.samples,
+      (unsigned long long)c.invalid_samples,
       ns_to_us(c.tcp_to_queue_avg_ns),
       ns_to_us(c.queue_to_exec_avg_ns),
       ns_to_us(c.end_to_end_avg_ns),
@@ -1557,7 +1569,7 @@ static void* diag_server_thread(void* arg) {
     int n = snprintf(out, sizeof(out),
                      "{\"tlmh\":{\"samples\":%llu,\"sent\":%llu,\"deadline_miss\":%llu,\"no_destination\":%llu,\"send_errors\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
                      "\"tlml\":{\"samples\":%llu,\"sent\":%llu,\"deadline_miss\":%llu,\"no_destination\":%llu,\"send_errors\":%llu,\"expected_wake_ns\":%llu,\"actual_wake_ns\":%llu,\"send_complete_ns\":%llu,\"jitter_last_sec\":{\"min\":%llu,\"max\":%llu,\"avg\":%llu}},"
-                     "\"command_path\":{\"samples\":%llu,\"tcp_recv_ns\":%llu,\"action_queued_ns\":%llu,\"exec_start_ns\":%llu,\"tcp_to_queue_avg_ns\":%llu,\"queue_to_exec_avg_ns\":%llu,\"end_to_end_avg_ns\":%llu},"
+                     "\"command_path\":{\"samples\":%llu,\"invalid_samples\":%llu,\"tcp_recv_ns\":%llu,\"action_queued_ns\":%llu,\"exec_start_ns\":%llu,\"tcp_to_queue_avg_ns\":%llu,\"queue_to_exec_avg_ns\":%llu,\"end_to_end_avg_ns\":%llu},"
                      "\"queue_depth_peak\":%llu,\"backend\":{\"mode\":%u,\"transport_status\":%u,\"capabilities\":{\"native_a2_speed\":%u,\"native_absolute_position\":%u}}}\n",
                      (unsigned long long)h.sample_count,
                      (unsigned long long)h.packets_sent_count,
@@ -1582,6 +1594,7 @@ static void* diag_server_thread(void* arg) {
                      (unsigned long long)l.last_sec_jitter_max_ns,
                      (unsigned long long)l.last_sec_jitter_avg_ns,
                      (unsigned long long)c.samples,
+                     (unsigned long long)c.invalid_samples,
                      (unsigned long long)c.tcp_recv_ns,
                      (unsigned long long)c.action_queued_ns,
                      (unsigned long long)c.exec_start_ns,
