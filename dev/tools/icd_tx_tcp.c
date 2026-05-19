@@ -181,9 +181,9 @@ static void usage(const char* prog) {
     "  reset | factory | shutdown\n"
     "  manualpos <lat> <lon> <alt> <heading>\n"
     "  posmode <gps|manual|0|1>\n"
-    "  req_sw\n"
-    "  req_hw_info\n"
-    "  req_work_time\n"
+    "  req_sw | req_sw_version\n"
+    "  req_hw_info | req_hw\n"
+    "  req_work_time | req_worktime\n"
     "\n"
     "Test suites:\n"
     "  suite          (sends many valid commands)\n"
@@ -494,15 +494,15 @@ int main(int argc, char** argv) {
     else c.u.posmode.v = (uint8_t)atoi(argv[4]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
-  } else if (!strcmp(cmdn, "req_sw")) {
+  } else if (!strcmp(cmdn, "req_sw") || !strcmp(cmdn, "req_sw_version")) {
     INIT_CMD(STC_CMD_REQ_SW_VERSION);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
-  } else if (!strcmp(cmdn, "req_hw_info")) {
+  } else if (!strcmp(cmdn, "req_hw_info") || !strcmp(cmdn, "req_hw")) {
     INIT_CMD(STC_CMD_REQ_HW_INFO);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
-  } else if (!strcmp(cmdn, "req_work_time")) {
+  } else if (!strcmp(cmdn, "req_work_time") || !strcmp(cmdn, "req_worktime")) {
     INIT_CMD(STC_CMD_REQ_WORK_TIME);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
