@@ -2049,7 +2049,7 @@ static void* tlml_tx_thread(void* arg) {
 static void print_usage(FILE* out, const char* p) {
   fprintf(out, "Usage: %s [--tcp-port 7000] [--can can0] [--node 1] [--can-bitrate 1000] [--can-restart-ms 100]\n"
           "          [--can-scan-max-node 32]\n"
-          "          [--config dev/config/stc_default.ini] [--backend sim|simulator|can|hardware]\n"
+          "          [--config dev/config/stc_default.ini] [--backend sim|simulator|can|hardware|hardware_can]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
@@ -2059,14 +2059,18 @@ static void print_usage(FILE* out, const char* p) {
           "          [--rt-enabled 0|1] [--rt-strict 0|1] [--rt-policy fifo|rr|other]\n"
           "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n"
           "          [--diag-port 0|PORT] [--strict-stale-policy 0|1]\n\n"
-          "--backend sim|simulator|can|hardware\n"
+          "--backend sim|simulator|can|hardware|hardware_can\n"
           "    Select runtime backend.\n"
-          "    simulator: no real hardware\n"
-          "    can/hardware: real CAN bus; per-axis motor driver is selected by [AxisN].driver\n\n"
-          "Valid [AxisN].driver values:\n"
-          "    disabled\n"
-          "    pd4c / nanotec / nanotec_pd4c\n"
-          "    myact_x8_25 / myactuator / myact / x8_25\n",
+          "    simulator: no real hardware.\n"
+          "    can/hardware: real CAN runtime. Per-axis motor driver is selected by [AxisN].driver.\n"
+          "\n"
+          "[Runtime]\n"
+          "backend=can\n"
+          "\n"
+          "[AxisN]\n"
+          "driver=pd4c | myact_x8_25 | disabled\n"
+          "\n"
+          "Do not use --backend pd4c or --backend myactuator. Those are axis drivers, not runtime backends.\n",
           p);
 }
 

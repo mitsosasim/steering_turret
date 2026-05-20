@@ -256,6 +256,86 @@ static void test_accept_sparse_sut_and_mirror_sections(void) {
 }
 
 /* Verifies mixed CAN driver families parse as a valid startup configuration. */
+
+/* Verifies [Runtime].backend aliases map to expected runtime-backend enum values and reject axis-driver strings. */
+static void test_runtime_backend_values(void) {
+  struct runtime_case {
+    const char* backend_value;
+    int expect_ok;
+    stc_runtime_backend_t expected_backend;
+  } cases[] = {
+      {"can", 1, STC_RUNTIME_BACKEND_HARDWARE_CAN},
+      {"hardware", 1, STC_RUNTIME_BACKEND_HARDWARE_CAN},
+      {"simulator", 1, STC_RUNTIME_BACKEND_SIMULATOR},
+      {"myactuator", 0, STC_RUNTIME_BACKEND_SIMULATOR},
+      {"pd4c", 0, STC_RUNTIME_BACKEND_SIMULATOR},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    char cfg_text[1024];
+    snprintf(cfg_text, sizeof(cfg_text),
+             "[Runtime]\n"
+             "backend = %s\n"
+             "\n"
+             "[Network]\n"
+             "tcp_port = 7000\n"
+             "tlm_dest_ip = 127.0.0.1\n"
+             "tlmh_port = 6010\n"
+             "tlml_port = 6020\n"
+             "tlmh_interval_ms = 10\n"
+             "tlml_interval_ms = 100\n"
+             "\n"
+             "[Axis0]\n"
+             "node_id = 1\n"
+             "counts_per_rev = 4096\n"
+             "gear_ratio = 1\n"
+             "min_deg = -180\n"
+             "max_deg = 180\n"
+             "max_speed_deg_s = 90\n"
+             "storage_deg = 0\n"
+             "pp_profile_vel = 500\n"
+             "diag_cat = 0x06\n"
+             "diag_subcat = 0x3F\n"
+             "\n"
+             "[Turret]\n"
+             "az_axis = 0\n"
+             "el_axis = 0\n"
+             "\n"
+             "[diagnostics]\n"
+             "axis[0].category = 0x06\n"
+             "axis[0].subcategory = 0x3F\n",
+             cases[i].backend_value);
+
+    char path[64];
+    stc_config_t cfg;
+    char msg[128];
+    write_tmp_config(cfg_text, path, sizeof(path));
+    if (cases[i].expect_ok) {
+      snprintf(msg, sizeof(msg), "expected [Runtime] backend=%s to parse", cases[i].backend_value);
+      expect_true(load_config(path, &cfg), msg);
+      snprintf(msg, sizeof(msg), "expected [Runtime] backend=%s to map to expected runtime backend", cases[i].backend_value);
+      expect_true(cfg.runtime_backend == cases[i].expected_backend, msg);
+    } else {
+      snprintf(msg, sizeof(msg), "expected [Runtime] backend=%s to fail parse", cases[i].backend_value);
+      expect_true(!load_config(path, &cfg), msg);
+    }
+    unlink(path);
+  }
+}
+
+/* Verifies non-simulator builds default runtime backend to hardware_can when backend is not explicitly set. */
+static void test_hardware_build_default_backend(void) {
+  stc_config_t cfg;
+  stc_config_set_defaults(&cfg);
+#ifndef USE_SIMULATOR
+  expect_true(cfg.runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN,
+              "expected hardware build default runtime backend to hardware_can");
+#else
+  expect_true(cfg.runtime_backend == STC_RUNTIME_BACKEND_SIMULATOR,
+              "expected simulator build default runtime backend to simulator");
+#endif
+}
+
 static void test_accept_mixed_can_axis_drivers(void) {
   const char* cfg_text =
       "[Network]\n"
@@ -335,6 +415,8 @@ int main(void) {
   test_accept_deprecated_multicast_network_keys();
   test_accept_sparse_sut_and_mirror_sections();
   test_accept_mixed_can_axis_drivers();
+  test_runtime_backend_values();
+  test_hardware_build_default_backend();
   fprintf(stderr, "PASS: stc_config_test\n");
   return 0;
 }
