@@ -271,10 +271,12 @@ add_executable(stc_config_test
   dev/tests/stc_config_test.c
   dev/src/stc_config.c
   dev/src/stc_log.c
+  dev/src/stc_model.c
 )
 
 target_include_directories(stc_config_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(stc_config_test PRIVATE -Wall -Wextra)
+target_link_libraries(stc_config_test PRIVATE m)
 
 add_executable(test_log_concurrency
   dev/tests/test_log_concurrency.c
