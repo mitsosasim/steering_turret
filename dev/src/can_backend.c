@@ -29,6 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <math.h>
 
 typedef enum {
   MTR_MODE_NONE = 0,
@@ -37,8 +38,25 @@ typedef enum {
   MTR_MODE_PP = PD4C_MODE_PROFILE_POSITION
 } mtr_mode_t;
 
+typedef axis_cfg_t stc_axis_cfg_t;
+typedef motion_snapshot_t stc_axis_telem_t;
+
+typedef struct {
+  const char* name;
+
+  int (*init)(void* driver_ctx, const stc_axis_cfg_t* cfg);
+  int (*poll)(void* driver_ctx, stc_axis_telem_t* out);
+  int (*stop)(void* driver_ctx);
+  int (*shutdown)(void* driver_ctx);
+
+  int (*move_abs)(void* driver_ctx, double target_deg, double speed_deg_s);
+  int (*move_rel)(void* driver_ctx, double delta_deg, double speed_deg_s);
+  int (*speed)(void* driver_ctx, double speed_deg_s);
+} stc_axis_driver_ops_t;
+
 typedef struct {
   stc_axis_driver_t driver;
+  const stc_axis_driver_ops_t* ops;
   int connected;
   int enabled;
   int faulted;
@@ -65,6 +83,58 @@ typedef struct {
     } x8;
   } u;
 } axis_rt_t;
+
+static int pd4c_axis_init(void* driver_ctx, const stc_axis_cfg_t* cfg) { (void)driver_ctx; (void)cfg; return PD4C_OK; }
+static int pd4c_axis_poll(void* driver_ctx, stc_axis_telem_t* out) { (void)out; return pd4c_poll((pd4c_ctx_t*)driver_ctx, 0); }
+static int pd4c_axis_stop(void* driver_ctx) { return pd4c_ds402_quick_stop((pd4c_ctx_t*)driver_ctx, (int8_t)MTR_MODE_PP); }
+static int pd4c_axis_shutdown(void* driver_ctx) { pd4c_close((pd4c_ctx_t*)driver_ctx); return PD4C_OK; }
+static int pd4c_axis_move_abs(void* driver_ctx, double target_deg, double speed_deg_s) { (void)driver_ctx; (void)target_deg; (void)speed_deg_s; return PD4C_EINVAL; }
+static int pd4c_axis_move_rel(void* driver_ctx, double delta_deg, double speed_deg_s) { (void)driver_ctx; (void)delta_deg; (void)speed_deg_s; return PD4C_EINVAL; }
+static int pd4c_axis_speed(void* driver_ctx, double speed_deg_s) {
+  const int32_t tv_raw = (int32_t)llround(speed_deg_s);
+  return pd4c_rpdo3_send_target_velocity((pd4c_ctx_t*)driver_ctx, (int16_t)tv_raw);
+}
+
+static int myact_axis_init(void* driver_ctx, const stc_axis_cfg_t* cfg) { (void)driver_ctx; (void)cfg; return MYACT_OK; }
+static int myact_axis_poll(void* driver_ctx, stc_axis_telem_t* out) { (void)out; return myact_poll((myact_ctx_t*)driver_ctx, 0); }
+static int myact_axis_stop(void* driver_ctx) { return myact_stop_send((myact_ctx_t*)driver_ctx); }
+static int myact_axis_shutdown(void* driver_ctx) { return myact_shutdown_send((myact_ctx_t*)driver_ctx); }
+static int myact_axis_move_abs(void* driver_ctx, double target_deg, double speed_deg_s) {
+  return myact_position_abs_deg_send_raw((myact_ctx_t*)driver_ctx, target_deg, (uint16_t)llround(speed_deg_s));
+}
+static int myact_axis_move_rel(void* driver_ctx, double delta_deg, double speed_deg_s) {
+  return myact_position_inc_send_raw((myact_ctx_t*)driver_ctx, (uint16_t)llround(speed_deg_s), myact_deg_to_raw_0p01(delta_deg));
+}
+static int myact_axis_speed(void* driver_ctx, double speed_deg_s) { return myact_speed_dps_send_raw((myact_ctx_t*)driver_ctx, speed_deg_s); }
+
+static const stc_axis_driver_ops_t pd4c_ops = {
+    .name = "pd4c",
+    .init = pd4c_axis_init,
+    .poll = pd4c_axis_poll,
+    .stop = pd4c_axis_stop,
+    .shutdown = pd4c_axis_shutdown,
+    .move_abs = pd4c_axis_move_abs,
+    .move_rel = pd4c_axis_move_rel,
+    .speed = pd4c_axis_speed,
+};
+
+static const stc_axis_driver_ops_t myact_ops = {
+    .name = "myact_x8_25",
+    .init = myact_axis_init,
+    .poll = myact_axis_poll,
+    .stop = myact_axis_stop,
+    .shutdown = myact_axis_shutdown,
+    .move_abs = myact_axis_move_abs,
+    .move_rel = myact_axis_move_rel,
+    .speed = myact_axis_speed,
+};
+
+static void* axis_driver_ctx(axis_rt_t* axis) {
+  if (!axis) return NULL;
+  if (axis->driver == STC_AXIS_DRIVER_PD4C) return &axis->u.pd4c.ctx;
+  if (axis->driver == STC_AXIS_DRIVER_MYACT_X8_25) return &axis->u.x8.ctx;
+  return NULL;
+}
 
 struct motion_backend {
   motion_backend_cfg_t cfg;
@@ -310,6 +380,9 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
     }
 
     b->axis[axis].driver = driver;
+    b->axis[axis].ops = (driver == STC_AXIS_DRIVER_PD4C) ? &pd4c_ops
+                      : (driver == STC_AXIS_DRIVER_MYACT_X8_25) ? &myact_ops
+                      : NULL;
     switch (driver) {
       case STC_AXIS_DRIVER_PD4C: {
         int rc = pd4c_open(&b->axis[axis].u.pd4c.ctx, cfg->can_if, node_id);
@@ -403,7 +476,7 @@ void can_motion_backend_stop(motion_backend_t* backend) {
   if (!b) return;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!b->axis[axis].connected) continue;
-    if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) pd4c_close(&b->axis[axis].u.pd4c.ctx);
+    if (b->axis[axis].ops && b->axis[axis].ops->shutdown) (void)b->axis[axis].ops->shutdown(axis_driver_ctx(&b->axis[axis]));
     if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) myact_socketcan_close(&b->axis[axis].u.x8.io);
   }
   free(b);
@@ -455,9 +528,10 @@ int can_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask
     int32_t tv_raw = axis_deg_s_to_target_vel_units(&b->cfg.axis_cfg[axis], speeds_deg_s[axis], &clipped);
     if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
     if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
-    int cmd_ok = 0;
-    if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) cmd_ok = (pd4c_rpdo3_send_target_velocity(&b->axis[axis].u.pd4c.ctx, (int16_t)tv_raw) == PD4C_OK);
-    else cmd_ok = (myact_speed_dps_send_raw(&b->axis[axis].u.x8.ctx, speeds_deg_s[axis]) == MYACT_OK);
+    const double speed_cmd = (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) ? (double)tv_raw : speeds_deg_s[axis];
+    const int cmd_ok = (b->axis[axis].ops && b->axis[axis].ops->speed)
+      ? (b->axis[axis].ops->speed(axis_driver_ctx(&b->axis[axis]), speed_cmd) == 0)
+      : 0;
     if (cmd_ok) {
       const uint64_t tms = mono_ms();
       b->axis[axis].last_rx_ms = tms;
@@ -476,10 +550,10 @@ int can_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask)
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if ((axes_mask & (1u << axis)) == 0 || !b->axis[axis].connected) continue;
     if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) {
-      if (pd4c_ds402_quick_stop(&b->axis[axis].u.pd4c.ctx, (int8_t)b->axis[axis].u.pd4c.mode) == PD4C_OK) b->axis[axis].last_rx_ms = mono_ms();
+      if (b->axis[axis].ops && b->axis[axis].ops->stop && b->axis[axis].ops->stop(axis_driver_ctx(&b->axis[axis])) == PD4C_OK) b->axis[axis].last_rx_ms = mono_ms();
       b->axis[axis].enabled = 0;
     } else if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
-      (void)myact_stop_send(&b->axis[axis].u.x8.ctx);
+      if (b->axis[axis].ops && b->axis[axis].ops->stop) (void)b->axis[axis].ops->stop(axis_driver_ctx(&b->axis[axis]));
     }
   }
   return 0;
