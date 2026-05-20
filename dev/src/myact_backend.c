@@ -58,6 +58,7 @@ typedef enum {
 typedef struct {
   axis_cmd_kind_t kind;
   double value;
+  double speed_limit_deg_s;
   uint64_t seq;
   uint64_t cmd_ts_ms;
 } axis_mailbox_t;
@@ -398,7 +399,9 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
 
   const axis_cfg_t* cfg = &b->cfg.axis_cfg[axis];
   const double gr = (cfg->gear_ratio > 0.0) ? cfg->gear_ratio : 1.0;
-  const double max_speed = fmax(0.1, cfg->max_speed_deg_s);
+  const double configured_max_speed = fmax(0.1, cfg->max_speed_deg_s);
+  const double requested_limit = fmax(0.0, m->speed_limit_deg_s);
+  const double max_speed = (requested_limit > 0.0) ? fmin(configured_max_speed, requested_limit) : configured_max_speed;
 
   if (m->kind == AXIS_CMD_SPEED) {
     const double clamped = clamp_range(m->value, -max_speed, max_speed);
@@ -659,6 +662,7 @@ int myact_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_
     if ((axes_mask & (1u << axis)) == 0) continue;
     b->mailbox[axis].kind = AXIS_CMD_POSITION_ABS;
     b->mailbox[axis].value = targets_deg[axis];
+    b->mailbox[axis].speed_limit_deg_s = 0.0;
     b->mailbox[axis].seq = b->next_seq++;
     b->mailbox[axis].cmd_ts_ms = now_ms();
   }
@@ -668,9 +672,8 @@ int myact_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_
 }
 
 int myact_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]) {
-  (void)speed_limit_deg_s;
   struct motion_backend* b = (struct motion_backend*)backend;
-  if (!b || !kind || !values_deg_or_dps) return -1;
+  if (!b || !kind || !values_deg_or_dps || !speed_limit_deg_s) return -1;
   const uint64_t t_ms = now_ms();
   pthread_mutex_lock(&b->lock);
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -682,6 +685,7 @@ int myact_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_m
       default: b->mailbox[axis].kind = AXIS_CMD_POSITION_ABS; break;
     }
     b->mailbox[axis].value = values_deg_or_dps[axis];
+    b->mailbox[axis].speed_limit_deg_s = speed_limit_deg_s[axis];
     b->mailbox[axis].seq = b->next_seq++;
     b->mailbox[axis].cmd_ts_ms = t_ms;
   }
@@ -700,6 +704,7 @@ int myact_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_ma
     if ((axes_mask & (1u << axis)) == 0) continue;
     b->mailbox[axis].kind = AXIS_CMD_SPEED;
     b->mailbox[axis].value = speeds_deg_s[axis];
+    b->mailbox[axis].speed_limit_deg_s = 0.0;
     b->mailbox[axis].seq = b->next_seq++;
     b->mailbox[axis].cmd_ts_ms = t_ms;
   }
@@ -718,6 +723,7 @@ int myact_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mas
     if ((axes_mask & (1u << axis)) == 0) continue;
     b->mailbox[axis].kind = AXIS_CMD_STOP;
     b->mailbox[axis].value = 0.0;
+    b->mailbox[axis].speed_limit_deg_s = 0.0;
     b->mailbox[axis].seq = b->next_seq++;
     b->mailbox[axis].cmd_ts_ms = t_ms;
   }

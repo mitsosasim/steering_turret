@@ -3272,6 +3272,11 @@ int main(int argc, char** argv) {
                     kinds[axis] = STC_AXIS_MOTION_ABS;
                     values[axis] = targets[axis];
                     speed_limits[axis] = sh.d.cfg[axis].max_speed_deg_s;
+                    if (sh.d.cfg[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25 &&
+                        sh.d.cfg[axis].pp_profile_vel > 0) {
+                      /* Legacy profile velocity is stored as 0.1 deg/s for MYACT motion profiles. */
+                      speed_limits[axis] = ((double)sh.d.cfg[axis].pp_profile_vel) / 10.0;
+                    }
                   }
                   if ((cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_RELATIVE) ||
                       (cmd.cmd_id == STC_CMD_SUT && cmd.u.sut.motion_type == STC_MOTION_RELATIVE) ||
