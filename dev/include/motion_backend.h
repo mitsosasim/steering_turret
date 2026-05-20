@@ -63,6 +63,7 @@ typedef struct {
   int can_bitrate;
   int can_restart_ms;
   int can_scan_max_node;
+  int can_discovery_enabled;
   int speed_watchdog_ms;
   double position_tolerance_deg;
   int position_timeout_ms;
@@ -70,6 +71,7 @@ typedef struct {
   int ds402_timeout_ms;
   int pp_sdo_diag;
   uint32_t can_timeout_ms;
+  int axis_enabled[STC_AXIS_COUNT];
   axis_cfg_t axis_cfg[STC_AXIS_COUNT];
   uint8_t axis_node_id[STC_AXIS_COUNT];
 } motion_backend_cfg_t;
