@@ -364,8 +364,15 @@ add_executable(test_motion_backend_router
   dev/src/stc_log.c
 )
 target_include_directories(test_motion_backend_router PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
-target_compile_definitions(test_motion_backend_router PRIVATE SIMULATION)
 target_compile_options(test_motion_backend_router PRIVATE -Wall -Wextra)
+if(USE_SIMULATOR)
+  target_compile_definitions(test_motion_backend_router PRIVATE SIMULATION)
+else()
+  target_compile_definitions(test_motion_backend_router PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
+endif()
 
 if(BUILD_DIAG_GUI)
   find_package(Qt6 COMPONENTS Core Gui Widgets Network QUIET)

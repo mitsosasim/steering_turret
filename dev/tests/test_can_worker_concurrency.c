@@ -34,6 +34,13 @@ static void check_pthread(int rc, const char* what) {
   }
 }
 
+static void require_true(int cond, const char* what) {
+  if (!cond) {
+    fprintf(stderr, "require_true failed: %s\n", what);
+    abort();
+  }
+}
+
 static void init_backend_cfg_for_test(stc_config_t* cfg) {
   memset(cfg, 0, sizeof(*cfg));
   snprintf(cfg->backend, sizeof(cfg->backend), "%s", "simulator");
@@ -51,37 +58,37 @@ static void test_runtime_backend_and_driver_selection(void) {
   snprintf(cfg.backend, sizeof(cfg.backend), "%s", "can");
   cfg.axis_enabled[0] = 1;
   cfg.axis_driver[0] = STC_AXIS_DRIVER_PD4C;
-  assert(select_runtime_backend(&cfg, &runtime_backend) == 0);
-  assert(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN);
-  assert(cfg.axis_driver[0] == STC_AXIS_DRIVER_PD4C);
+  require_true(select_runtime_backend(&cfg, &runtime_backend) == 0, "can backend + pd4c accepted");
+  require_true(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN, "can backend resolves to hardware can");
+  require_true(cfg.axis_driver[0] == STC_AXIS_DRIVER_PD4C, "axis 0 driver remains pd4c");
 
   init_backend_cfg_for_test(&cfg);
   snprintf(cfg.backend, sizeof(cfg.backend), "%s", "can");
   cfg.axis_enabled[1] = 1;
   cfg.axis_driver[1] = STC_AXIS_DRIVER_MYACT_X8_25;
-  assert(select_runtime_backend(&cfg, &runtime_backend) == 0);
-  assert(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN);
-  assert(cfg.axis_driver[1] == STC_AXIS_DRIVER_MYACT_X8_25);
+  require_true(select_runtime_backend(&cfg, &runtime_backend) == 0, "can backend + myact accepted");
+  require_true(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN, "can backend resolves to hardware can");
+  require_true(cfg.axis_driver[1] == STC_AXIS_DRIVER_MYACT_X8_25, "axis 1 driver remains myact");
 
   init_backend_cfg_for_test(&cfg);
   snprintf(cfg.backend, sizeof(cfg.backend), "%s", "can");
   cfg.axis_enabled[2] = 0;
   cfg.axis_driver[2] = STC_AXIS_DRIVER_DISABLED;
-  assert(select_runtime_backend(&cfg, &runtime_backend) == 0);
-  assert(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN);
-  assert(cfg.axis_driver[2] == STC_AXIS_DRIVER_DISABLED);
+  require_true(select_runtime_backend(&cfg, &runtime_backend) == 0, "can backend + disabled axis accepted");
+  require_true(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN, "can backend resolves to hardware can");
+  require_true(cfg.axis_driver[2] == STC_AXIS_DRIVER_DISABLED, "axis 2 driver remains disabled");
 
   init_backend_cfg_for_test(&cfg);
   snprintf(cfg.backend, sizeof(cfg.backend), "%s", "myactuator");
   cfg.axis_enabled[0] = 1;
   cfg.axis_driver[0] = STC_AXIS_DRIVER_MYACT_X8_25;
-  assert(select_runtime_backend(&cfg, &runtime_backend) != 0);
+  require_true(select_runtime_backend(&cfg, &runtime_backend) != 0, "myactuator backend string rejected");
 
   init_backend_cfg_for_test(&cfg);
   snprintf(cfg.backend, sizeof(cfg.backend), "%s", "pd4c");
   cfg.axis_enabled[0] = 1;
   cfg.axis_driver[0] = STC_AXIS_DRIVER_PD4C;
-  assert(select_runtime_backend(&cfg, &runtime_backend) != 0);
+  require_true(select_runtime_backend(&cfg, &runtime_backend) != 0, "pd4c backend string rejected");
 }
 
 static void* action_producer_thread(void* arg) {

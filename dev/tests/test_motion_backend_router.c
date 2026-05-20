@@ -87,6 +87,15 @@ int myact_motion_backend_quick_stop(motion_backend_t* b, uint32_t m) { (void)b; 
 int myact_motion_backend_clear_faults(motion_backend_t* b, uint32_t m) { (void)b; (void)m; return -1; }
 int myact_motion_backend_set_laser(motion_backend_t* b, uint8_t i, uint8_t o) { (void)b; (void)i; (void)o; return -1; }
 int myact_motion_backend_get_snapshot(motion_backend_t* b, motion_snapshot_t* s) { (void)b; (void)s; return -1; }
+int can_motion_backend_start(const motion_backend_cfg_t* c, motion_backend_t** o) { (void)c; (void)o; return -1; }
+void can_motion_backend_stop(motion_backend_t* b) { (void)b; }
+int can_motion_backend_discover(motion_backend_t* b) { (void)b; return -1; }
+int can_motion_backend_apply_pp_move(motion_backend_t* b, uint32_t m, const double t[STC_AXIS_COUNT]) { (void)b; (void)m; (void)t; return -1; }
+int can_motion_backend_apply_speed(motion_backend_t* b, uint32_t m, const double s[STC_AXIS_COUNT]) { (void)b; (void)m; (void)s; return -1; }
+int can_motion_backend_quick_stop(motion_backend_t* b, uint32_t m) { (void)b; (void)m; return -1; }
+int can_motion_backend_clear_faults(motion_backend_t* b, uint32_t m) { (void)b; (void)m; return -1; }
+int can_motion_backend_set_laser(motion_backend_t* b, uint8_t i, uint8_t o) { (void)b; (void)i; (void)o; return -1; }
+int can_motion_backend_get_snapshot(motion_backend_t* b, motion_snapshot_t* s) { (void)b; (void)s; return -1; }
 
 static void test_abs_then_rel(void) {
   motion_backend_cfg_t cfg = {0};
