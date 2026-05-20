@@ -36,6 +36,35 @@ typedef enum {
   MTR_MODE_PP = PD4C_MODE_PROFILE_POSITION
 } mtr_mode_t;
 
+typedef struct {
+  stc_axis_driver_t driver;
+  int connected;
+  int enabled;
+  int faulted;
+  uint64_t last_rx_ms;
+  uint64_t last_cmd_ms;
+  uint64_t last_healthcheck_ms;
+  union {
+    struct {
+      pd4c_ctx_t ctx;
+      int mode;
+    } pd4c;
+    struct {
+      myact_ctx_t ctx;
+      myact_socketcan_t io;
+      int brake_released;
+      int runmode;
+      double raw_zero_deg;
+      double last_raw_angle_deg;
+      double last_physical_deg;
+      double last_speed_deg_s;
+      uint16_t error_flags;
+      double bus_voltage_v;
+      int motor_temp_c;
+    } x8;
+  } u;
+} axis_rt_t;
+
 struct motion_backend {
   motion_backend_cfg_t cfg;
   struct {
@@ -47,34 +76,6 @@ struct motion_backend {
     uint32_t revision;
     uint32_t serial;
   } node_discovery[128];
-  typedef struct {
-    stc_axis_driver_t driver;
-    int connected;
-    int enabled;
-    int faulted;
-    uint64_t last_rx_ms;
-    uint64_t last_cmd_ms;
-    uint64_t last_healthcheck_ms;
-    union {
-      struct {
-        pd4c_ctx_t ctx;
-        int mode;
-      } pd4c;
-      struct {
-        myact_ctx_t ctx;
-        myact_socketcan_t io;
-        int brake_released;
-        int runmode;
-        double raw_zero_deg;
-        double last_raw_angle_deg;
-        double last_physical_deg;
-        double last_speed_deg_s;
-        uint16_t error_flags;
-        double bus_voltage_v;
-        int motor_temp_c;
-      } x8;
-    } u;
-  } axis_rt_t;
   axis_rt_t axis[STC_AXIS_COUNT];
   int32_t axis_last_cmd_pos_raw[STC_AXIS_COUNT];
   int32_t axis_last_cmd_vel_raw[STC_AXIS_COUNT];
@@ -285,7 +286,7 @@ static int discover_responsive_nodes(struct motion_backend* b) {
   return responsive_count;
 }
 
-int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
+int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
   if (!cfg || !out_backend) return -1;
   struct motion_backend* b = (struct motion_backend*)calloc(1, sizeof(*b));
   if (!b) return -1;
@@ -396,7 +397,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   return 0;
 }
 
-void motion_backend_stop(motion_backend_t* backend) {
+void can_motion_backend_stop(motion_backend_t* backend) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -407,7 +408,7 @@ void motion_backend_stop(motion_backend_t* backend) {
   free(b);
 }
 
-int motion_backend_discover(motion_backend_t* backend) {
+int can_motion_backend_discover(motion_backend_t* backend) {
   /* Re-scan bus on demand to refresh responsive-device diagnostics. */
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
@@ -418,7 +419,7 @@ int motion_backend_discover(motion_backend_t* backend) {
   return responsive_count;
 }
 
-int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
+int can_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !targets_deg) return -1;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -438,7 +439,7 @@ int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, 
   return 0;
 }
 
-int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]) {
+int can_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !speeds_deg_s) return -1;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -467,7 +468,7 @@ int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, co
   return 0;
 }
 
-int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
+int can_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   /* Broadcast-safe quick-stop path across selected axes; recovery remains caller-managed. */
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
@@ -483,7 +484,7 @@ int motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {
   return 0;
 }
 
-int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
+int can_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   /* Fault reset helper across mixed drivers, preserving per-axis success accounting. */
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
@@ -507,14 +508,14 @@ int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) {
   return 0;
 }
 
-int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
+int can_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
   STC_LOG_INFO("laser_stub id=%u on_off=%u (no physical laser hardware integrated)", laser_id, on_off);
   return 0;
 }
 
-int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
+int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !snapshot) return -1;
   uint64_t now = mono_ms();
@@ -567,8 +568,8 @@ int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* sn
       }
       if (cache->status1.valid) {
         b->axis[axis].u.x8.error_flags = cache->status1.error_flags;
-        b->axis[axis].u.x8.bus_voltage_v = cache->status1.bus_voltage_v;
-        b->axis[axis].u.x8.motor_temp_c = cache->status1.temperature_celsius;
+        b->axis[axis].u.x8.bus_voltage_v = cache->status1.voltage_0p1v / 10.0;
+        b->axis[axis].u.x8.motor_temp_c = cache->status1.motor_temp_c;
         b->axis[axis].u.x8.brake_released = cache->status1.brake_release_command_state ? 1 : 0;
       }
       b->snap.status_word[axis] = b->axis[axis].u.x8.error_flags;
