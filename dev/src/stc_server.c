@@ -1959,7 +1959,7 @@ static void* tlml_tx_thread(void* arg) {
 
     for (size_t axis = 0; axis < STC_ICD_AXES_COUNT; axis++) {
       const int enabled = axis_enabled[axis] ? 1 : 0;
-      if (!enabled) {
+      if (!enabled || a->sh->d.cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) {
         m.motor_status[axis] = 0x00;
         continue;
       }
@@ -2258,15 +2258,50 @@ static const char* axis_protocol_from_driver(stc_axis_driver_t driver) {
   }
 }
 
+static const char* axis_role_from_config(const stc_config_t* cfg, size_t axis, char* buf, size_t buf_sz) {
+  if (!cfg || !buf || buf_sz == 0) return "none";
+  if ((int)axis == cfg->turret_az_axis) return "turret_az";
+  if ((int)axis == cfg->turret_el_axis) return "turret_el";
+  for (int i = 0; i < cfg->mirror_count; ++i) {
+    if ((int)axis == cfg->mirror_axis[i]) {
+      (void)snprintf(buf, buf_sz, "mirror%d", i + 1);
+      return buf;
+    }
+  }
+  for (int i = 0; i < cfg->sut_count; ++i) {
+    if ((int)axis == cfg->sut_az_axis[i]) {
+      (void)snprintf(buf, buf_sz, "sut%d_az", i + 1);
+      return buf;
+    }
+    if ((int)axis == cfg->sut_el_axis[i]) {
+      (void)snprintf(buf, buf_sz, "sut%d_el", i + 1);
+      return buf;
+    }
+  }
+  return "unmapped";
+}
+
 static void log_enabled_axis_drivers(const stc_config_t* cfg) {
   if (!cfg) return;
+  size_t configured_axes = 0;
+  size_t disabled_axes = 0;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if (!cfg->axis_enabled[axis]) continue;
-    STC_LOG_INFO("axis%zu driver=%s protocol=%s node=%d",
+    if (cfg->axis_enabled[axis] && cfg->axis_driver[axis] != STC_AXIS_DRIVER_DISABLED) configured_axes++;
+    else disabled_axes++;
+  }
+  STC_LOG_INFO("configured_axes=%zu disabled_axes=%zu", configured_axes, disabled_axes);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!cfg->axis_enabled[axis] || cfg->axis_driver[axis] == STC_AXIS_DRIVER_DISABLED) {
+      STC_LOG_DEBUG("axis%zu disabled", axis);
+      continue;
+    }
+    char role_buf[32] = {0};
+    STC_LOG_INFO("axis%zu driver=%s protocol=%s node=%d role=%s",
                  axis,
                  axis_driver_to_string(cfg->axis_driver[axis]),
                  axis_protocol_from_driver(cfg->axis_driver[axis]),
-                 cfg->axis_node_id[axis]);
+                 cfg->axis_node_id[axis],
+                 axis_role_from_config(cfg, axis, role_buf, sizeof(role_buf)));
   }
 }
 
