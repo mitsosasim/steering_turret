@@ -1310,13 +1310,9 @@ class DiagnosticsWindow : public QMainWindow {
     auto *panel = new QWidget(this);
     auto *layout = new QHBoxLayout(panel);
     layout->setSpacing(10);
+    layout->setContentsMargins(0, 0, 0, 0);
 
-    auto *leftColumn = new QWidget(panel);
-    auto *leftColumnLayout = new QVBoxLayout(leftColumn);
-    leftColumnLayout->setContentsMargins(0, 0, 0, 0);
-    leftColumnLayout->setSpacing(10);
-
-    auto *cmdGroup = new QGroupBox("Command Input", leftColumn);
+    auto *cmdGroup = new QGroupBox("Command Input", panel);
     auto *cmdForm = new QFormLayout(cmdGroup);
     cmdForm->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
     cmdForm->setHorizontalSpacing(12);
@@ -1382,9 +1378,7 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow(resetStateButton_);
     cmdForm->addRow(reconnectButton_);
     cmdForm->addRow(canBringupButton_);
-    leftColumnLayout->addWidget(cmdGroup);
-
-    auto *statusGroup = new QGroupBox("Status", leftColumn);
+    auto *statusGroup = new QGroupBox("Status", panel);
     auto *statusLayout = new QVBoxLayout(statusGroup);
     statusLayout->setSpacing(6);
     tcpStatusLabel_ = new QLabel("CU TCP: Disconnected", statusGroup);
@@ -1417,13 +1411,13 @@ class DiagnosticsWindow : public QMainWindow {
     statusLayout->addWidget(uptimeLabel_);
     statusLayout->addWidget(tlmlErrorsLabel_);
 
-    leftColumnLayout->addWidget(statusGroup);
     const bool devRaw = !QString::fromLocal8Bit(qgetenv(kDevRawPanelEnv)).trimmed().isEmpty();
     canBringupButton_->setVisible(devRaw);
     canBringupButton_->setEnabled(devRaw);
 
-    layout->addWidget(leftColumn, 2);
-    layout->addWidget(buildAxisPanel(), 3);
+    layout->addWidget(statusGroup, 2);
+    layout->addWidget(buildAxisPanel(), 2);
+    layout->addWidget(cmdGroup, 3);
     return panel;
   }
 
@@ -1566,14 +1560,14 @@ class DiagnosticsWindow : public QMainWindow {
 
     axisTable_ = new QTableWidget(group);
     axisTable_->setColumnCount(5);
-    axisTable_->setHorizontalHeaderLabels({"Axis", "Position", "Velocity", "Acceleration", "Status"});
-    axisTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    axisTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    axisTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    axisTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    axisTable_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    axisTable_->setHorizontalHeaderLabels({"Axis", "Pos", "Vel", "Acc", "Status"});
+    axisTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    const int colWidth = 95;
+    for (int col = 0; col < axisTable_->columnCount(); ++col) {
+      axisTable_->setColumnWidth(col, colWidth);
+    }
+    axisTable_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     axisTable_->setMinimumHeight(460);
-    axisTable_->setMaximumWidth(760);
     layout->addWidget(axisTable_);
     return group;
   }
@@ -1589,8 +1583,9 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void initAxisTable() {
-    axisTable_->setRowCount(kAxisCount);
-    for (int i = 0; i < kAxisCount; ++i) {
+    constexpr int kTelemetryRows = 18;
+    axisTable_->setRowCount(kTelemetryRows);
+    for (int i = 0; i < kTelemetryRows; ++i) {
       axisTable_->setItem(i, 0, new QTableWidgetItem(QString::fromLatin1(kAxisLabels[i])));
       axisTable_->setItem(i, 1, new QTableWidgetItem("0.000"));
       axisTable_->setItem(i, 2, new QTableWidgetItem("0.000"));
