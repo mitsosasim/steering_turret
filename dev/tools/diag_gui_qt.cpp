@@ -708,10 +708,11 @@ class DiagnosticsWindow : public QMainWindow {
                          : cmd.u.mirror.motion_type == STC_MOTION_ABSOLUTE ? "absolute"
                          : cmd.u.mirror.motion_type == STC_MOTION_SPEED ? "speed"
                          : "unknown";
-      appendLog(QString("Sending MIRROR id=%1 mode=%2 value=%3 deg")
+      appendLog(QString("GUI send MIRROR id=%1 mode=%2 value=%3 %4")
                   .arg(id == 0xFF ? QString("all") : QString::number(id))
                   .arg(mode)
-                  .arg(cmd.u.mirror.elevation, 0, 'f', 3));
+                  .arg(cmd.u.mirror.elevation, 0, 'f', 3)
+                  .arg(cmd.u.mirror.motion_type == STC_MOTION_SPEED ? "deg/s" : "deg"));
     } else if (cmd.cmd_id == STC_CMD_TURRET) {
       appendLog(QString("Sending TURRET mode=%1 az=%2 el=%3")
                   .arg(cmd.u.turret.motion_type)
@@ -1170,14 +1171,72 @@ class DiagnosticsWindow : public QMainWindow {
     }
   }
 
-  void updateMotionUnits(QComboBox *motionTypeBox, QLabel *unitsLabel) {
-    if (!motionTypeBox || !unitsLabel) return;
-    switch (motionTypeBox->currentData().toInt()) {
-      case STC_MOTION_RELATIVE: unitsLabel->setText("units: deg delta"); break;
-      case STC_MOTION_ABSOLUTE: unitsLabel->setText("units: deg"); break;
-      case STC_MOTION_SPEED: unitsLabel->setText("units: deg/s"); break;
-      default: unitsLabel->setText("units: -"); break;
+  void configureMovementSpin(QDoubleSpinBox *spin) {
+    if (!spin) return;
+    spin->setMinimumWidth(120);
+    spin->setButtonSymbols(QAbstractSpinBox::PlusMinus);
+    spin->setDecimals(3);
+  }
+
+  void updateMotionFieldUi(QComboBox *motionTypeBox,
+                           QLabel *unitsLabel,
+                           QDoubleSpinBox *primarySpin,
+                           QLabel *primaryLabel,
+                           QDoubleSpinBox *secondarySpin = nullptr,
+                           QLabel *secondaryLabel = nullptr) {
+    if (!motionTypeBox || !unitsLabel || !primarySpin) return;
+    const int motionType = motionTypeBox->currentData().toInt();
+    QString primaryName = "Value";
+    QString secondaryName = "Value";
+    QString unitText = "-";
+    QString suffix;
+    double minRange = -180.0;
+    double maxRange = 180.0;
+
+    switch (motionType) {
+      case STC_MOTION_RELATIVE:
+        primaryName = "Delta";
+        secondaryName = "Delta";
+        unitText = "deg";
+        suffix = " deg";
+        break;
+      case STC_MOTION_ABSOLUTE:
+        primaryName = "Target";
+        secondaryName = "Target";
+        unitText = "deg";
+        suffix = " deg";
+        break;
+      case STC_MOTION_SPEED:
+        primaryName = "Speed";
+        secondaryName = "Speed";
+        unitText = "deg/s";
+        suffix = " deg/s";
+        break;
+      default:
+        break;
     }
+
+    primarySpin->setRange(minRange, maxRange);
+    primarySpin->setSuffix(suffix);
+    if (secondarySpin) {
+      secondarySpin->setRange(minRange, maxRange);
+      secondarySpin->setSuffix(suffix);
+    }
+
+    unitsLabel->setText(QString("units: %1").arg(unitText));
+    if (primaryLabel) primaryLabel->setText(QString("%1").arg(primaryName));
+    if (secondaryLabel) secondaryLabel->setText(QString("%1").arg(secondaryName));
+  }
+
+  void updateMirrorFieldUi() {
+    if (!mirrorTypeBox_ || !mirrorUnitsLabel_ || !mirrorElevationSpin_ || !mirrorElevationFieldLabel_) return;
+    const int motionType = mirrorTypeBox_->currentData().toInt();
+    QString fieldLabel = "Elevation";
+    if (motionType == STC_MOTION_RELATIVE) fieldLabel = "Delta elevation (deg)";
+    else if (motionType == STC_MOTION_ABSOLUTE) fieldLabel = "Target elevation (deg)";
+    else if (motionType == STC_MOTION_SPEED) fieldLabel = "Elevation speed (deg/s)";
+    updateMotionFieldUi(mirrorTypeBox_, mirrorUnitsLabel_, mirrorElevationSpin_, mirrorElevationFieldLabel_);
+    mirrorElevationFieldLabel_->setText(fieldLabel);
   }
 
   void updateCommandAvailability() {
@@ -1411,20 +1470,20 @@ class DiagnosticsWindow : public QMainWindow {
         turretTypeBox_->addItem("Absolute", 1);
         turretTypeBox_->addItem("Speed", 2);
         turretAzSpin_ = new QDoubleSpinBox(w);
-        turretAzSpin_->setRange(-720.0, 720.0);
-        turretAzSpin_->setDecimals(3);
         turretElSpin_ = new QDoubleSpinBox(w);
-        turretElSpin_->setRange(-720.0, 720.0);
-        turretElSpin_->setDecimals(3);
-        turretUnitsLabel_ = new QLabel("units: deg delta", w);
+        configureMovementSpin(turretAzSpin_);
+        configureMovementSpin(turretElSpin_);
+        turretUnitsLabel_ = new QLabel("units: deg", w);
+        turretAzFieldLabel_ = new QLabel("Delta", w);
+        turretElFieldLabel_ = new QLabel("Delta", w);
         connect(turretTypeBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-          updateMotionUnits(turretTypeBox_, turretUnitsLabel_);
+          updateMotionFieldUi(turretTypeBox_, turretUnitsLabel_, turretAzSpin_, turretAzFieldLabel_, turretElSpin_, turretElFieldLabel_);
         });
         f->addRow("type", turretTypeBox_);
-        f->addRow("azimuth", turretAzSpin_);
-        f->addRow("elevation", turretElSpin_);
+        f->addRow(turretAzFieldLabel_, turretAzSpin_);
+        f->addRow(turretElFieldLabel_, turretElSpin_);
         f->addRow("", turretUnitsLabel_);
-        updateMotionUnits(turretTypeBox_, turretUnitsLabel_);
+        updateMotionFieldUi(turretTypeBox_, turretUnitsLabel_, turretAzSpin_, turretAzFieldLabel_, turretElSpin_, turretElFieldLabel_);
         break;
       case UiCommand::Mirror:
         mirrorIdBox_ = new QComboBox(w);
@@ -1435,17 +1494,17 @@ class DiagnosticsWindow : public QMainWindow {
         mirrorTypeBox_->addItem("Absolute", 1);
         mirrorTypeBox_->addItem("Speed", 2);
         mirrorElevationSpin_ = new QDoubleSpinBox(w);
-        mirrorElevationSpin_->setRange(-720.0, 720.0);
-        mirrorElevationSpin_->setDecimals(3);
-        mirrorUnitsLabel_ = new QLabel("units: deg delta", w);
+        configureMovementSpin(mirrorElevationSpin_);
+        mirrorUnitsLabel_ = new QLabel("units: deg", w);
+        mirrorElevationFieldLabel_ = new QLabel("Delta elevation (deg)", w);
         connect(mirrorTypeBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-          updateMotionUnits(mirrorTypeBox_, mirrorUnitsLabel_);
+          updateMirrorFieldUi();
         });
         f->addRow("mirror id", mirrorIdBox_);
         f->addRow("motion type", mirrorTypeBox_);
-        f->addRow("elevation", mirrorElevationSpin_);
+        f->addRow(mirrorElevationFieldLabel_, mirrorElevationSpin_);
         f->addRow("", mirrorUnitsLabel_);
-        updateMotionUnits(mirrorTypeBox_, mirrorUnitsLabel_);
+        updateMirrorFieldUi();
         break;
       case UiCommand::Sut:
         sutIdBox_ = new QComboBox(w);
@@ -1456,15 +1515,21 @@ class DiagnosticsWindow : public QMainWindow {
         sutTypeBox_->addItem("Absolute", 1);
         sutTypeBox_->addItem("Speed", 2);
         sutAzSpin_ = new QDoubleSpinBox(w);
-        sutAzSpin_->setRange(-720.0, 720.0);
-        sutAzSpin_->setDecimals(3);
         sutElSpin_ = new QDoubleSpinBox(w);
-        sutElSpin_->setRange(-720.0, 720.0);
-        sutElSpin_->setDecimals(3);
+        configureMovementSpin(sutAzSpin_);
+        configureMovementSpin(sutElSpin_);
+        sutUnitsLabel_ = new QLabel("units: deg", w);
+        sutAzFieldLabel_ = new QLabel("Delta", w);
+        sutElFieldLabel_ = new QLabel("Delta", w);
+        connect(sutTypeBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+          updateMotionFieldUi(sutTypeBox_, sutUnitsLabel_, sutAzSpin_, sutAzFieldLabel_, sutElSpin_, sutElFieldLabel_);
+        });
         f->addRow("sut id", sutIdBox_);
         f->addRow("motion type", sutTypeBox_);
-        f->addRow("SUT azimuth", sutAzSpin_);
-        f->addRow("mirror elevation", sutElSpin_);
+        f->addRow(sutAzFieldLabel_, sutAzSpin_);
+        f->addRow(sutElFieldLabel_, sutElSpin_);
+        f->addRow("", sutUnitsLabel_);
+        updateMotionFieldUi(sutTypeBox_, sutUnitsLabel_, sutAzSpin_, sutAzFieldLabel_, sutElSpin_, sutElFieldLabel_);
         break;
       case UiCommand::ManualPos:
         manualLatSpin_ = new QDoubleSpinBox(w);
@@ -1579,14 +1644,20 @@ class DiagnosticsWindow : public QMainWindow {
   QDoubleSpinBox *turretAzSpin_{};
   QDoubleSpinBox *turretElSpin_{};
   QLabel *turretUnitsLabel_{};
+  QLabel *turretAzFieldLabel_{};
+  QLabel *turretElFieldLabel_{};
   QComboBox *mirrorIdBox_{};
   QComboBox *mirrorTypeBox_{};
   QDoubleSpinBox *mirrorElevationSpin_{};
   QLabel *mirrorUnitsLabel_{};
+  QLabel *mirrorElevationFieldLabel_{};
   QComboBox *sutIdBox_{};
   QComboBox *sutTypeBox_{};
   QDoubleSpinBox *sutAzSpin_{};
   QDoubleSpinBox *sutElSpin_{};
+  QLabel *sutUnitsLabel_{};
+  QLabel *sutAzFieldLabel_{};
+  QLabel *sutElFieldLabel_{};
   QDoubleSpinBox *manualLatSpin_{};
   QDoubleSpinBox *manualLonSpin_{};
   QDoubleSpinBox *manualAltSpin_{};
