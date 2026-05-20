@@ -408,6 +408,39 @@ static void test_accept_mixed_can_axis_drivers(void) {
   unlink(path);
 }
 
+
+static void test_missing_axis_sections_default_to_disabled(void) {
+  const char* cfg_text =
+      "[Runtime]\n"
+      "backend=can\n"
+      "\n"
+      "[CAN]\n"
+      "ifname=can0\n"
+      "\n"
+      "[Axis0]\n"
+      "enabled=true\n"
+      "driver=myact_x8_25\n"
+      "node_id=1\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
+      "[Mirror1]\n"
+      "axis=0\n"
+      "\n";
+
+  char path[64];
+  stc_config_t cfg;
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(load_config(path, &cfg), "expected sparse axis sections config to parse");
+  expect_true(cfg.axis_enabled[0] == 1, "expected Axis0 enabled=true");
+  expect_true(cfg.axis_driver[0] == STC_AXIS_DRIVER_MYACT_X8_25, "expected Axis0 driver myact_x8_25");
+  for (size_t i = 1; i < STC_AXIS_COUNT; ++i) {
+    expect_true(cfg.axis_enabled[i] == 0, "expected missing AxisN enabled=false by default");
+    expect_true(cfg.axis_driver[i] == STC_AXIS_DRIVER_DISABLED, "expected missing AxisN driver=disabled by default");
+  }
+  unlink(path);
+}
+
 int main(void) {
   test_reject_typoed_network_key();
   test_reject_typoed_section_name();
@@ -415,6 +448,7 @@ int main(void) {
   test_accept_deprecated_multicast_network_keys();
   test_accept_sparse_sut_and_mirror_sections();
   test_accept_mixed_can_axis_drivers();
+  test_missing_axis_sections_default_to_disabled();
   test_runtime_backend_values();
   test_hardware_build_default_backend();
   fprintf(stderr, "PASS: stc_config_test\n");

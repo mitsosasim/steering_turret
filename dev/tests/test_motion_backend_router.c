@@ -142,10 +142,27 @@ static void test_speed_interleaved_no_target_reset(void) {
   assert_true(g_target_pos[0] == 20.0, "abs target preserved after speed mode");
 }
 
+
+static void test_count_configured_axes_counts_enabled_only(void) {
+  motion_backend_cfg_t cfg = {0};
+  int pd4c_count = -1;
+  int myact_count = -1;
+
+  cfg.axis_enabled[0] = 1;
+  cfg.axis_cfg[0].driver = STC_AXIS_DRIVER_MYACT_X8_25;
+  cfg.axis_enabled[1] = 0;
+  cfg.axis_cfg[1].driver = STC_AXIS_DRIVER_PD4C;
+
+  hardware_backend_count_configured_axes(&cfg, &pd4c_count, &myact_count);
+  assert_true(pd4c_count == 0, "pd4c init count stays zero for one-X8 config");
+  assert_true(myact_count == 1, "myact init count is one for one-X8 config");
+}
+
 int main(void) {
   test_abs_then_rel();
   test_multiple_rel_accumulates();
   test_speed_interleaved_no_target_reset();
+  test_count_configured_axes_counts_enabled_only();
   puts("OK");
   return 0;
 }
