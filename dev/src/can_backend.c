@@ -302,6 +302,12 @@ static int read_node_id_crosscheck(pd4c_ctx_t* ctx, uint32_t timeout_ms, uint8_t
 
 static int discover_responsive_nodes(struct motion_backend* b) {
   if (!b) return 0;
+  if (!b->cfg.can_discovery_enabled) {
+    memset(b->node_discovery, 0, sizeof(b->node_discovery));
+    memset(b->snap.can_discovered_nodes, 0, sizeof(b->snap.can_discovered_nodes));
+    b->snap.can_discovered_devices = 0;
+    return 0;
+  }
 
   int responsive_count = 0;
   const int scan_max = effective_scan_max(&b->cfg);
@@ -397,7 +403,9 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
     if (!cfg->axis_enabled[axis] || driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!node_id) continue;
 
-    if (driver == STC_AXIS_DRIVER_PD4C && !node_in_discovery_list(&b->snap, node_id)) {
+    if (cfg->can_discovery_enabled &&
+        driver == STC_AXIS_DRIVER_PD4C &&
+        !node_in_discovery_list(&b->snap, node_id)) {
       STC_LOG_WARN("Configured axis %zu node %u was not discovered as responsive; skipping connection.", axis, node_id);
       continue;
     }
@@ -479,7 +487,7 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
         break;
     }
     if (!b->axis[axis].connected) continue;
-    if (b->node_discovery[node_id].identity_ok) {
+    if (cfg->can_discovery_enabled && b->node_discovery[node_id].identity_ok) {
       STC_LOG_INFO(
         "can_axis_connect axis=%zu configured_node=%u discovery_identity=ok vendor_id=0x%08x product_code=0x%08x revision=0x%08x serial=0x%08x",
         axis,
@@ -488,7 +496,7 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
         b->node_discovery[node_id].product_code,
         b->node_discovery[node_id].revision,
         b->node_discovery[node_id].serial);
-    } else {
+    } else if (cfg->can_discovery_enabled) {
       STC_LOG_INFO(
         "can_axis_connect axis=%zu configured_node=%u discovery_identity=unavailable reason=read_failed rc=%d",
         axis,
@@ -496,8 +504,10 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
         b->node_discovery[node_id].identity_rc);
     }
   }
-  STC_LOG_INFO("discovery summary: scanned %d, responsive %u, connected %u",
-    effective_scan_max(&b->cfg), b->snap.can_discovered_devices, b->snap.can_connected_devices);
+  if (cfg->can_discovery_enabled) {
+    STC_LOG_INFO("discovery summary: scanned %d, responsive %u, connected %u",
+      effective_scan_max(&b->cfg), b->snap.can_discovered_devices, b->snap.can_connected_devices);
+  }
   refresh_can_status(b);
   *out_backend = b;
   return 0;
@@ -518,6 +528,7 @@ int can_motion_backend_discover(motion_backend_t* backend) {
   /* Re-scan bus on demand to refresh responsive-device diagnostics. */
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
+  if (!b->cfg.can_discovery_enabled) return 0;
   const int responsive_count = discover_responsive_nodes(b);
   refresh_can_status(b);
   STC_LOG_INFO("discovery summary: scanned %d, responsive %d, connected %u",

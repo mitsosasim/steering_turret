@@ -1072,6 +1072,7 @@ typedef struct {
   int can_bitrate;
   int can_restart_ms;
   int can_scan_max_node;
+  int can_discovery_enabled;
   const char* backend_name;
   int primary_node_id;
   int primary_tx_id;
@@ -1119,6 +1120,7 @@ static void* can_worker_thread(void* arg) {
   backend_cfg.can_bitrate = a->can_bitrate;
   backend_cfg.can_restart_ms = a->can_restart_ms;
   backend_cfg.can_scan_max_node = a->can_scan_max_node;
+  backend_cfg.can_discovery_enabled = a->can_discovery_enabled;
 
   pthread_mutex_lock(&a->sh->mtx);
   backend_cfg.speed_watchdog_ms = a->sh->d.speed_watchdog_ms;
@@ -1128,6 +1130,7 @@ static void* can_worker_thread(void* arg) {
   backend_cfg.ds402_timeout_ms = a->sh->d.ds402_timeout_ms;
   backend_cfg.pp_sdo_diag = a->sh->d.pp_sdo_diag;
   backend_cfg.can_timeout_ms = a->sh->d.can_timeout_ms;
+  memcpy(backend_cfg.axis_enabled, a->sh->d.axis_enabled, sizeof(backend_cfg.axis_enabled));
   memcpy(backend_cfg.axis_cfg, a->sh->d.cfg, sizeof(backend_cfg.axis_cfg));
   memcpy(backend_cfg.axis_node_id, a->sh->d.axis_node_id, sizeof(backend_cfg.axis_node_id));
   pthread_mutex_unlock(&a->sh->mtx);
@@ -1138,7 +1141,7 @@ static void* can_worker_thread(void* arg) {
     return NULL;
   }
 
-  (void)motion_backend_discover(backend);
+  if (backend_cfg.can_discovery_enabled) (void)motion_backend_discover(backend);
 
   int axis_enabled[STC_AXIS_COUNT] = {0};
   uint8_t speed_stream_active[STC_AXIS_COUNT] = {0};
@@ -2049,6 +2052,7 @@ static void* tlml_tx_thread(void* arg) {
 static void print_usage(FILE* out, const char* p) {
   fprintf(out, "Usage: %s [--tcp-port 7000] [--can can0] [--node 1] [--can-bitrate 1000] [--can-restart-ms 100]\n"
           "          [--can-scan-max-node 32]\n"
+          "          [--can-discovery 0|1]\n"
           "          [--config dev/config/stc_default.ini] [--backend sim|simulator|can|hardware|hardware_can]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
@@ -2085,6 +2089,7 @@ typedef struct {
   int can_bitrate;
   int can_restart_ms;
   int can_scan_max_node;
+  int can_discovery_enabled;
   uint32_t can_timeout_ms;
   int node_id;
   int tcp_port;
@@ -2354,6 +2359,7 @@ int main(int argc, char** argv) {
     .can_bitrate = 1000,
     .can_restart_ms = 100,
     .can_scan_max_node = 32,
+    .can_discovery_enabled = 0,
     .can_timeout_ms = 1000,
     .node_id = 1,
     .tcp_port = 7000,
@@ -2431,6 +2437,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--can-bitrate") && i + 1 < argc) net.can_bitrate = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--can-restart-ms") && i + 1 < argc) net.can_restart_ms = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--can-scan-max-node") && i + 1 < argc) net.can_scan_max_node = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--can-discovery") && i + 1 < argc) net.can_discovery_enabled = atoi(argv[++i]) ? 1 : 0;
     else if (!strcmp(argv[i], "--node") && i + 1 < argc) {
       net.node_id = atoi(argv[++i]);
       legacy_cli_mode = 1;
@@ -2634,6 +2641,7 @@ int main(int argc, char** argv) {
     net.sched.tlmh_tx_priority = parsed_cfg.tlmh_tx_priority;
     net.sched.tlml_tx_priority = parsed_cfg.tlml_tx_priority;
     net.can_scan_max_node = parsed_cfg.can_scan_max_node;
+    net.can_discovery_enabled = parsed_cfg.can_discovery_enabled ? 1 : 0;
     net.can_if = parsed_cfg.can_if;
     net.can_timeout_ms = (parsed_cfg.can_timeout_ms > 0) ? (uint32_t)parsed_cfg.can_timeout_ms : 0;
     sh.d.can_timeout_ms = net.can_timeout_ms;
@@ -2729,7 +2737,7 @@ int main(int argc, char** argv) {
   log_enabled_axis_drivers(&parsed_cfg);
 
   // CAN worker thread
-  can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .backend_name = backend_name, .primary_node_id = parsed_cfg.primary_node_id, .primary_tx_id = parsed_cfg.primary_tx_id, .primary_rx_id = parsed_cfg.primary_rx_id, .primary_motion_tx_id = parsed_cfg.primary_motion_tx_id, .primary_motion_rx_id = parsed_cfg.primary_motion_rx_id, .travel_min_deg = parsed_cfg.travel_min_deg, .travel_max_deg = parsed_cfg.travel_max_deg, .profile_max_speed_deg_s = parsed_cfg.profile_max_speed_deg_s, .profile_max_accel_deg_s2 = parsed_cfg.profile_max_accel_deg_s2, .telemetry_interval_ms = parsed_cfg.telemetry_interval_ms, .experimental_native_speed_mode = parsed_cfg.experimental_native_speed_mode, .sh = &sh, .q = &q };
+  can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .can_discovery_enabled = net.can_discovery_enabled, .backend_name = backend_name, .primary_node_id = parsed_cfg.primary_node_id, .primary_tx_id = parsed_cfg.primary_tx_id, .primary_rx_id = parsed_cfg.primary_rx_id, .primary_motion_tx_id = parsed_cfg.primary_motion_tx_id, .primary_motion_rx_id = parsed_cfg.primary_motion_rx_id, .travel_min_deg = parsed_cfg.travel_min_deg, .travel_max_deg = parsed_cfg.travel_max_deg, .profile_max_speed_deg_s = parsed_cfg.profile_max_speed_deg_s, .profile_max_accel_deg_s2 = parsed_cfg.profile_max_accel_deg_s2, .telemetry_interval_ms = parsed_cfg.telemetry_interval_ms, .experimental_native_speed_mode = parsed_cfg.experimental_native_speed_mode, .sh = &sh, .q = &q };
   if (create_thread_with_sched(&th_can,
                                "can_worker_thread",
                                can_worker_thread,
