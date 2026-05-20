@@ -687,6 +687,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
       return false;
     }
     if (cfg->axis_enabled[i]) {
+      if (cfg->axis_driver[i] == STC_AXIS_DRIVER_DISABLED) {
+        STC_LOG_ERROR("%s: Axis%d enabled but driver is missing", path, i);
+        return false;
+      }
       if (cfg->axis_driver[i] != STC_AXIS_DRIVER_PD4C && cfg->axis_driver[i] != STC_AXIS_DRIVER_MYACT_X8_25) {
         STC_LOG_ERROR("%s: axis %d is enabled but has invalid driver", path, i);
         return false;

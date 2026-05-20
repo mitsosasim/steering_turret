@@ -275,6 +275,19 @@ The server has two layers:
 `--backend can` means “use real CAN hardware.” It does not mean PD4C.
 The actual motor library and command semantics are selected per axis in `[AxisN].driver`.
 
+Warnings:
+- Missing `[AxisN]` sections are disabled. The server never auto-creates PD4C axes.
+- The CAN runtime opens only the axes explicitly enabled in the config.
+- CAN discovery is disabled by default and must be explicitly enabled.
+
+Expected one-X8 startup log:
+
+```text
+runtime_backend=hardware_can
+configured_axes=1 disabled_axes=17
+axis0 driver=myact_x8_25 protocol=myactuator node=1 role=mirror1
+```
+
 Mixed example:
 
 ```ini

@@ -441,6 +441,31 @@ static void test_missing_axis_sections_default_to_disabled(void) {
   unlink(path);
 }
 
+static void test_enabled_axis_requires_explicit_driver(void) {
+  const char* cfg_text =
+      "[Runtime]\n"
+      "backend=can\n"
+      "\n"
+      "[CAN]\n"
+      "ifname=can0\n"
+      "\n"
+      "[Axis0]\n"
+      "enabled=true\n"
+      "node_id=1\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
+      "[Mirror1]\n"
+      "axis=0\n"
+      "\n";
+
+  char path[64];
+  stc_config_t cfg;
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(!load_config(path, &cfg), "expected enabled axis without driver to fail parsing");
+  unlink(path);
+}
+
 int main(void) {
   test_reject_typoed_network_key();
   test_reject_typoed_section_name();
@@ -449,6 +474,7 @@ int main(void) {
   test_accept_sparse_sut_and_mirror_sections();
   test_accept_mixed_can_axis_drivers();
   test_missing_axis_sections_default_to_disabled();
+  test_enabled_axis_requires_explicit_driver();
   test_runtime_backend_values();
   test_hardware_build_default_backend();
   fprintf(stderr, "PASS: stc_config_test\n");
