@@ -2228,8 +2228,17 @@ static void log_enabled_axis_drivers(const stc_config_t* cfg) {
   if (!cfg) return;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!cfg->axis_enabled[axis]) continue;
-    STC_LOG_ERROR("enabled axis[%zu] driver=%s", axis, axis_driver_to_string(cfg->axis_driver[axis]));
+    STC_LOG_INFO("axis[%zu] driver=%s node_id=%d", axis, axis_driver_to_string(cfg->axis_driver[axis]), cfg->axis_node_id[axis]);
   }
+}
+
+static int has_invalid_enabled_axis_driver(const stc_config_t* cfg) {
+  if (!cfg) return 1;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!cfg->axis_enabled[axis]) continue;
+    if (cfg->axis_driver[axis] == STC_AXIS_DRIVER_DISABLED) return 1;
+  }
+  return 0;
 }
 
 static const char* select_backend_name(const stc_config_t* cfg) {
@@ -2247,31 +2256,19 @@ static const char* select_backend_name(const stc_config_t* cfg) {
 #endif
   }
 
-  if (strcmp(cfg->backend, "pd4c") == 0) {
-    if (has_myact) {
-      STC_LOG_ERROR("backend='pd4c' cannot be used with mixed hardware drivers (single-backend runtime)");
+  if (strcmp(cfg->backend, "pd4c") == 0 || strcmp(cfg->backend, "myactuator") == 0 || strcmp(cfg->backend, "can") == 0) {
+    if (has_invalid_enabled_axis_driver(cfg)) {
+      STC_LOG_ERROR("invalid axis configuration: enabled axis cannot use driver=disabled");
       log_enabled_axis_drivers(cfg);
       return NULL;
     }
-    if (!has_pd4c) {
-      STC_LOG_WARN("backend='pd4c' requested but no enabled PD4C axes found");
+    if (!has_pd4c && !has_myact) {
+      STC_LOG_WARN("backend='%s' requested but no enabled CAN-capable axes found", cfg->backend);
     }
     return "pd4c";
   }
 
-  if (strcmp(cfg->backend, "myactuator") == 0) {
-    if (has_pd4c) {
-      STC_LOG_ERROR("backend='myactuator' cannot be used with mixed hardware drivers (single-backend runtime)");
-      log_enabled_axis_drivers(cfg);
-      return NULL;
-    }
-    if (!has_myact) {
-      STC_LOG_WARN("backend='myactuator' requested but no enabled myactuator axes found");
-    }
-    return "myactuator";
-  }
-
-  STC_LOG_ERROR("invalid backend='%s' (expected simulator|pd4c|myactuator)", cfg->backend);
+  STC_LOG_ERROR("invalid backend='%s' (expected simulator|can|pd4c|myactuator)", cfg->backend);
   return NULL;
 }
 
@@ -2647,11 +2644,7 @@ int main(int argc, char** argv) {
     goto cleanup;
   }
   STC_LOG_INFO("backend_requested=%s backend_effective=%s", parsed_cfg.backend, backend_name);
-  if (parsed_cfg.num_axes > 0 && parsed_cfg.axis_enabled[0]) {
-    STC_LOG_INFO("axis0 driver=%s node=%d",
-                 axis_driver_to_string(parsed_cfg.axis_driver[0]),
-                 parsed_cfg.axis_node_id[0]);
-  }
+  log_enabled_axis_drivers(&parsed_cfg);
 
   // CAN worker thread
   can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .backend_name = backend_name, .primary_node_id = parsed_cfg.primary_node_id, .primary_tx_id = parsed_cfg.primary_tx_id, .primary_rx_id = parsed_cfg.primary_rx_id, .primary_motion_tx_id = parsed_cfg.primary_motion_tx_id, .primary_motion_rx_id = parsed_cfg.primary_motion_rx_id, .travel_min_deg = parsed_cfg.travel_min_deg, .travel_max_deg = parsed_cfg.travel_max_deg, .profile_max_speed_deg_s = parsed_cfg.profile_max_speed_deg_s, .profile_max_accel_deg_s2 = parsed_cfg.profile_max_accel_deg_s2, .telemetry_interval_ms = parsed_cfg.telemetry_interval_ms, .experimental_native_speed_mode = parsed_cfg.experimental_native_speed_mode, .sh = &sh, .q = &q };

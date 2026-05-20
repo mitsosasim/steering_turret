@@ -254,12 +254,72 @@ static void test_accept_sparse_sut_and_mirror_sections(void) {
   expect_true(cfg.mirror_axis[1] == -1, "expected missing [Mirror2] to remain unmapped");
   unlink(path);
 }
+
+/* Verifies mixed CAN driver families parse as a valid startup configuration. */
+static void test_accept_mixed_can_axis_drivers(void) {
+  const char* cfg_text =
+      "[Network]\n"
+      "tcp_port = 7000\n"
+      "tlm_dest_ip = 127.0.0.1\n"
+      "tlmh_port = 6010\n"
+      "tlml_port = 6020\n"
+      "tlmh_interval_ms = 10\n"
+      "tlml_interval_ms = 100\n"
+      "\n"
+      "[Axis0]\n"
+      "enabled = 1\n"
+      "driver = pd4c\n"
+      "node_id = 1\n"
+      "counts_per_rev = 4096\n"
+      "gear_ratio = 1\n"
+      "min_deg = -180\n"
+      "max_deg = 180\n"
+      "max_speed_deg_s = 90\n"
+      "storage_deg = 0\n"
+      "pp_profile_vel = 500\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
+      "[Axis1]\n"
+      "enabled = 1\n"
+      "driver = myact_x8_25\n"
+      "node_id = 2\n"
+      "counts_per_rev = 4096\n"
+      "gear_ratio = 1\n"
+      "min_deg = -180\n"
+      "max_deg = 180\n"
+      "max_speed_deg_s = 90\n"
+      "storage_deg = 0\n"
+      "pp_profile_vel = 500\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
+      "[Turret]\n"
+      "az_axis = 0\n"
+      "el_axis = 1\n"
+      "\n"
+      "[diagnostics]\n"
+      "axis[0].category = 0x06\n"
+      "axis[0].subcategory = 0x3F\n"
+      "axis[1].category = 0x06\n"
+      "axis[1].subcategory = 0x3F\n";
+
+  char path[64];
+  stc_config_t cfg;
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(load_config(path, &cfg), "expected mixed PD4C/MyActuator axis drivers to parse");
+  expect_true(cfg.axis_driver[0] == STC_AXIS_DRIVER_PD4C, "expected Axis0 driver pd4c");
+  expect_true(cfg.axis_driver[1] == STC_AXIS_DRIVER_MYACT_X8_25, "expected Axis1 driver myact_x8_25");
+  unlink(path);
+}
+
 int main(void) {
   test_reject_typoed_network_key();
   test_reject_typoed_section_name();
   test_accept_valid_config();
   test_accept_deprecated_multicast_network_keys();
   test_accept_sparse_sut_and_mirror_sections();
+  test_accept_mixed_can_axis_drivers();
   fprintf(stderr, "PASS: stc_config_test\n");
   return 0;
 }
