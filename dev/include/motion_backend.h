@@ -19,6 +19,7 @@
 #include "stc_actions.h"
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,6 +112,24 @@ typedef struct {
   uint64_t ts_hb_ms;
   uint64_t ts_emcy_ms;
 } motion_snapshot_t;
+
+
+/** Count enabled hardware CAN axes per driver from static config (dry-run helper for tests). */
+static inline void hardware_backend_count_configured_axes(const motion_backend_cfg_t* cfg,
+                                                          int* pd4c_count,
+                                                          int* myact_count) {
+  int pd4c = 0;
+  int myact = 0;
+  if (cfg) {
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
+      if (!cfg->axis_enabled[axis]) continue;
+      if (cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_PD4C) pd4c++;
+      else if (cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) myact++;
+    }
+  }
+  if (pd4c_count) *pd4c_count = pd4c;
+  if (myact_count) *myact_count = myact;
+}
 
 /** Create and initialize backend instance. Called by CAN worker at startup. */
 /** Create backend instance from cfg; called once by CAN worker during startup. */
