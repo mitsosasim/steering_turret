@@ -64,7 +64,7 @@ typedef struct {
 
 struct motion_backend {
   motion_backend_cfg_t cfg;
-  int can_socket;
+  int can_socket[STC_AXIS_COUNT];
   pthread_t worker;
   int running;
   pthread_mutex_t lock;
@@ -92,7 +92,7 @@ static uint64_t now_ms(void) {
   return ((uint64_t)ts.tv_sec * 1000ULL) + ((uint64_t)ts.tv_nsec / 1000000ULL);
 }
 
-static int open_can_socket(const char* ifname) {
+static int open_can_socket(const char* ifname, uint8_t node_id) {
   int fd = socket(PF_CAN, SOCK_RAW, CAN_RAW);
   if (fd < 0) return -1;
 
@@ -110,6 +110,13 @@ static int open_can_socket(const char* ifname) {
   addr.can_ifindex = ifr.ifr_ifindex;
   const int nonblock = 1;
   if (ioctl(fd, FIONBIO, &nonblock) < 0) { close(fd); return -1; }
+  struct can_filter filter;
+  filter.can_id = (canid_t)(0x240u + (uint32_t)node_id);
+  filter.can_mask = CAN_SFF_MASK;
+  if (setsockopt(fd, SOL_CAN_RAW, CAN_RAW_FILTER, &filter, (socklen_t)sizeof(filter)) < 0) {
+    close(fd);
+    return -1;
+  }
 
   if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     close(fd);
@@ -119,8 +126,17 @@ static int open_can_socket(const char* ifname) {
   return fd;
 }
 
+static int socket_for_node(struct motion_backend* b, uint8_t node_id) {
+  if (!b || node_id == 0) return -1;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (b->cfg.axis_node_id[axis] == node_id) return b->can_socket[axis];
+  }
+  return -1;
+}
+
 static int send_myact_cmd(struct motion_backend* b, uint8_t node_id, uint8_t cmd, uint16_t speed_dps, int32_t value) {
-  if (!b || b->can_socket < 0 || node_id == 0) return -1;
+  const int fd = socket_for_node(b, node_id);
+  if (fd < 0) return -1;
 
   struct can_frame f;
   memset(&f, 0, sizeof(f));
@@ -134,7 +150,7 @@ static int send_myact_cmd(struct motion_backend* b, uint8_t node_id, uint8_t cmd
   f.data[6] = (uint8_t)((value >> 16) & 0xFF);
   f.data[7] = (uint8_t)((value >> 24) & 0xFF);
 
-  return (write(b->can_socket, &f, sizeof(f)) == (ssize_t)sizeof(f)) ? 0 : -1;
+  return (write(fd, &f, sizeof(f)) == (ssize_t)sizeof(f)) ? 0 : -1;
 }
 
 static int32_t local_axis_deg_to_counts(const axis_cfg_t* cfg, double deg) {
@@ -171,11 +187,13 @@ static int send_myact_read(struct motion_backend* b, uint8_t node_id, uint8_t cm
 
 static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t expected_cmd, struct can_frame* out, int timeout_ms) {
   if (!b || !out) return -1;
+  const int fd = socket_for_node(b, node_id);
+  if (fd < 0) return -1;
   const canid_t expected_id = (canid_t)(MYACT_CAN_BASE + (uint32_t)node_id);
   const uint64_t deadline = now_ms() + (uint64_t)((timeout_ms > 0) ? timeout_ms : 50);
   while (now_ms() <= deadline) {
     struct can_frame f;
-    const ssize_t r = read(b->can_socket, &f, sizeof(f));
+    const ssize_t r = read(fd, &f, sizeof(f));
     if (r == (ssize_t)sizeof(f)) {
       const canid_t rx_id = f.can_id & CAN_SFF_MASK;
       if (f.can_dlc < 1 || rx_id != expected_id) continue;
@@ -330,25 +348,25 @@ static void normalize_snapshot_from_feedback(struct motion_backend* b, size_t ax
 }
 
 static void refresh_feedback_locked(struct motion_backend* b, uint64_t t_ms) {
-  struct can_frame f;
-  while (read(b->can_socket, &f, sizeof(f)) == (ssize_t)sizeof(f)) {
-    if (f.can_dlc < 8 || f.can_id < MYACT_CAN_BASE) continue;
-    const uint8_t node_id = (uint8_t)(f.can_id - MYACT_CAN_BASE);
-    size_t axis;
-    for (axis = 0; axis < STC_AXIS_COUNT; axis++) if (b->cfg.axis_node_id[axis] == node_id) break;
-    if (axis >= STC_AXIS_COUNT) continue;
-    if (f.data[0] == MYACT_CMD_READ_STATUS1) {
-      const uint16_t error_flags = (uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8);
-      b->snap.status_word[axis] = error_flags;
-      b->snap.last_rx_ms[axis] = t_ms;
-      continue;
-    }
-    if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS || f.data[0] == MYACT_CMD_POS_INC) {
-      const int16_t iq_0p01a = (int16_t)((uint16_t)f.data[2] | ((uint16_t)f.data[3] << 8));
-      const int16_t speed_dps = (int16_t)((uint16_t)f.data[4] | ((uint16_t)f.data[5] << 8));
-      const int16_t angle_deg = (int16_t)((uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8));
-      normalize_snapshot_from_feedback(b, axis, iq_0p01a, speed_dps, angle_deg, t_ms);
-      if (f.data[0] == MYACT_CMD_POS_ABS) b->native_abs_validated[axis] = 1;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    const int fd = b->can_socket[axis];
+    if (fd < 0) continue;
+    struct can_frame f;
+    while (read(fd, &f, sizeof(f)) == (ssize_t)sizeof(f)) {
+      if (f.can_dlc < 8 || f.can_id < MYACT_CAN_BASE) continue;
+      if (f.data[0] == MYACT_CMD_READ_STATUS1) {
+        const uint16_t error_flags = (uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8);
+        b->snap.status_word[axis] = error_flags;
+        b->snap.last_rx_ms[axis] = t_ms;
+        continue;
+      }
+      if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS || f.data[0] == MYACT_CMD_POS_INC) {
+        const int16_t iq_0p01a = (int16_t)((uint16_t)f.data[2] | ((uint16_t)f.data[3] << 8));
+        const int16_t speed_dps = (int16_t)((uint16_t)f.data[4] | ((uint16_t)f.data[5] << 8));
+        const int16_t angle_deg = (int16_t)((uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8));
+        normalize_snapshot_from_feedback(b, axis, iq_0p01a, speed_dps, angle_deg, t_ms);
+        if (f.data[0] == MYACT_CMD_POS_ABS) b->native_abs_validated[axis] = 1;
+      }
     }
   }
 }
@@ -553,13 +571,19 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
   b->next_seq = 1;
   pthread_mutex_init(&b->lock, NULL);
   pthread_cond_init(&b->wake, NULL);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) b->can_socket[axis] = -1;
 
-  b->can_socket = open_can_socket(cfg->can_if);
-  if (b->can_socket < 0) {
-    pthread_cond_destroy(&b->wake);
-    pthread_mutex_destroy(&b->lock);
-    free(b);
-    return -1;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    const uint8_t node_id = cfg->axis_node_id[axis];
+    if (!node_id) continue;
+    b->can_socket[axis] = open_can_socket(cfg->can_if, node_id);
+    if (b->can_socket[axis] < 0) {
+      for (size_t i = 0; i < STC_AXIS_COUNT; i++) if (b->can_socket[i] >= 0) close(b->can_socket[i]);
+      pthread_cond_destroy(&b->wake);
+      pthread_mutex_destroy(&b->lock);
+      free(b);
+      return -1;
+    }
   }
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -580,7 +604,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
 
   b->running = 1;
   if (pthread_create(&b->worker, NULL, backend_loop, b) != 0) {
-    close(b->can_socket);
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) if (b->can_socket[axis] >= 0) close(b->can_socket[axis]);
     pthread_cond_destroy(&b->wake);
     pthread_mutex_destroy(&b->lock);
     free(b);
@@ -603,7 +627,7 @@ void myact_motion_backend_stop(motion_backend_t* backend) {
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) axis_stop_locked(b, axis, now_ms(), 1);
 
-  close(b->can_socket);
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) if (b->can_socket[axis] >= 0) close(b->can_socket[axis]);
   pthread_cond_destroy(&b->wake);
   pthread_mutex_destroy(&b->lock);
   free(b);
