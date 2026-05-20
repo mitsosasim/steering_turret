@@ -444,7 +444,7 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void updateTcpStatusLabel() {
-    tcpStatusLabel_->setText(QString("CU TCP: %1").arg(tcpConnected_ ? "CONNECTED" : "DISCONNECTED"));
+    tcpStatusLabel_->setText(QString("CU TCP: %1").arg(tcpConnected_ ? "Connected" : "Disconnected"));
   }
 
   void ensureTcpConnected() {
@@ -497,14 +497,6 @@ class DiagnosticsWindow : public QMainWindow {
 
       const bool ack = rsp.result == STC_RSP_ACK;
       const QString errText = nackErrToString(rsp.err_code);
-      ackLabel_->setText(QString("Last ACK/NACK: %1 | %2 (0x%3) seq=%4 | err_code=%5 (%6) | payload=%7B")
-                           .arg(ack ? "ACK" : "NACK")
-                           .arg(commandName(rsp.cmd_id))
-                           .arg(rsp.cmd_id, 4, 16, QChar('0'))
-                           .arg(rsp.seq)
-                           .arg(rsp.err_code)
-                           .arg(errText)
-                           .arg(rsp.payload_size));
       const QString sentText = pendingCommands_.contains(rsp.seq)
                                 ? pendingCommands_.take(rsp.seq)
                                 : QString("cmd=0x%1").arg(rsp.cmd_id, 4, 16, QChar('0'));
@@ -521,7 +513,6 @@ class DiagnosticsWindow : public QMainWindow {
       if (ack && rsp.cmd_id == STC_CMD_REQ_HW_INFO && rsp.payload_size > 0) {
         const QString hwInfo = QString::fromUtf8(reinterpret_cast<const char*>(rsp.payload), rsp.payload_size).trimmed();
         updateConfigFromHwInfoPayload(hwInfo);
-        hwInfoSummaryLabel_->setText(QString("HW summary: %1").arg(hwInfo.isEmpty() ? "<empty>" : hwInfo));
         updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
       }
     }
@@ -849,14 +840,7 @@ class DiagnosticsWindow : public QMainWindow {
         axisTable_->item(i, 2)->setText(QString::number(tlm.rates[i], 'f', 3));
         axisTable_->item(i, 3)->setText(QString::number(tlm.acceleration[i], 'f', 3));
       }
-      highSeqLabel_->setText(QString("High-rate seq: %1").arg(tlm.seq));
-      const qint64 ageMs = QDateTime::currentMSecsSinceEpoch() - static_cast<qint64>(tlm.timestamp_ms);
-      telemetryStatusLabel_->setText(QString("Telemetry: LIVE | age %1 ms").arg(ageMs));
-      angleLiveLabel_->setText(QString("Angle: az=%1 deg el=%2 deg").arg(tlm.position[0],0,'f',3).arg(tlm.position[1],0,'f',3));
-      speedLiveLabel_->setText(QString("Speed: az=%1 deg/s el=%2 deg/s").arg(tlm.rates[0],0,'f',3).arg(tlm.rates[1],0,'f',3));
-      currentLiveLabel_->setText("Current: N/A in ICD telemetry path");
-      voltageLiveLabel_->setText("Voltage: N/A in ICD telemetry path");
-      saturationLiveLabel_->setText(QString("Saturation: inferred %1").arg((tlm.acceleration[0]==0.0f && tlm.acceleration[1]==0.0f)?"clear":"active"));
+      highSeqLabel_->setText(QString("TLMH sequence number: %1").arg(tlm.seq));
       tlmhPanel_->setPlainText(QString("seq=%1\nts=%2\naxis0 pos=%3 vel=%4 acc=%5\naxis1 pos=%6 vel=%7 acc=%8")
                                  .arg(tlm.seq)
                                  .arg(tlm.timestamp_ms)
@@ -879,14 +863,13 @@ class DiagnosticsWindow : public QMainWindow {
         appendLog(QString("Telemetry parse error: malformed TLML datagram size=%1B").arg(packet.size()));
         continue;
       }
-      stateLabel_->setText(QString("State: %1").arg(stateToString(tlm.state)));
-      errorLiveLabel_->setText(QString("Error: count=%1").arg(tlm.error_count));
+      stateLabel_->setText(QString("State: %1 (%2)").arg(stateToString(tlm.state)).arg(tlm.state));
       currentState_ = tlm.state;
-      lowSeqLabel_->setText(QString("Low-rate seq: %1").arg(tlm.seq));
-      envLabel_->setText(QString("Temp %1 C, Hum %2 %%, Press %3 hPa")
-                          .arg(tlm.temperature_c, 0, 'f', 1)
-                          .arg(tlm.humidity_pct, 0, 'f', 1)
-                          .arg(tlm.pressure_hpa, 0, 'f', 1));
+      lowSeqLabel_->setText(QString("TLML sequence number: %1").arg(tlm.seq));
+      tempLabel_->setText(QString("Temperature: %1 °C").arg(tlm.temperature_c, 0, 'f', 1));
+      humidityLabel_->setText(QString("Humidity: %1 %").arg(tlm.humidity_pct, 0, 'f', 1));
+      pressureLabel_->setText(QString("Pressure: %1 hPa").arg(tlm.pressure_hpa, 0, 'f', 1));
+      uptimeLabel_->setText(QString("Uptime: %1 s").arg(tlm.uptime_sec));
 
       QStringList laserStates;
       int laserOnCount = 0;
@@ -895,21 +878,20 @@ class DiagnosticsWindow : public QMainWindow {
         if (on) ++laserOnCount;
         laserStates << QString("SUT%1 laser:%2").arg(i + 1).arg(on ? "ON" : "OFF");
       }
-      connectionLabel_->setText(QString("Laser status (%1/%2 ON) | %3")
-                                  .arg(laserOnCount)
-                                  .arg(STC_ICD_LASER_COUNT)
-                                  .arg(laserStates.join(", ")));
+      lasersLabel_->setText(QString("Lasers: (%1/%2 ON) | %3")
+                              .arg(laserOnCount)
+                              .arg(STC_ICD_LASER_COUNT)
+                              .arg(laserStates.join(", ")));
+      QStringList errors;
+      for (int i = 0; i < static_cast<int>(tlm.error_count); ++i) {
+        errors << QString("0x%1").arg(tlm.errors[i], 8, 16, QChar('0'));
+      }
+      tlmlErrorsLabel_->setText(QString("TLML errors matrix:\n%1").arg(errors.isEmpty() ? "none" : errors.join(", ")));
 
       updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
       updateCommandAvailability();
 
       tlmlPanel_->setPlainText(decodeTlmlDiag(tlm));
-      const qint64 lowAgeMs = QDateTime::currentMSecsSinceEpoch() - static_cast<qint64>(tlm.timestamp_ms);
-      axis0BenchLabel_->setText(QString("Axis0 bench: pos=%1 deg speed=%2 deg/s fresh=%3 ms err=%4")
-                                  .arg(axisTable_->item(0, 1)->text())
-                                  .arg(axisTable_->item(0, 2)->text())
-                                  .arg(lowAgeMs)
-                                  .arg(tlm.error_count));
       updateMotionControlsEnabled();
     }
   }
@@ -966,13 +948,6 @@ class DiagnosticsWindow : public QMainWindow {
       mirrorIdBox_->setEnabled(mirrorSelectable);
     }
 
-    availabilityLabel_->setText(QString("Command selectable (mapping/bench): turret %1 (%2 axis map), mirror IDs %3, SUT %4 | HW connected now: turret axes %5, discovered nodes %6")
-                                  .arg(turretSelectable ? "yes" : "no")
-                                  .arg(configuredTurretAxes)
-                                  .arg(selectableMirrorIds.empty() ? QString("none") : QString::number(selectableMirrorIds.size()))
-                                  .arg(availableSut)
-                                  .arg(qMin(connectedDevices, 2))
-                                  .arg(discoveredDevices));
     QStringList drivers;
     for (int i = 0; i < kAxisCount; ++i) {
       if (axisDriverNames_[i] != "-") drivers << QString("axis%1=%2").arg(i).arg(axisDriverNames_[i]);
@@ -1009,7 +984,7 @@ class DiagnosticsWindow : public QMainWindow {
   void bringUpCanAndConnect() {
     if (simModeBox_->isChecked()) {
       appendLog("CAN rediscovery skipped in simulation mode.");
-      ackLabel_->setText("CAN rediscovery: skipped (simulation mode)");
+      appendLog("CAN rediscovery: skipped (simulation mode).");
       return;
     }
 
@@ -1137,10 +1112,10 @@ class DiagnosticsWindow : public QMainWindow {
 
     const QString detailsJoined = details.join(" || ");
     if (success) {
-      ackLabel_->setText("CAN rediscovery: SUCCESS");
+      appendLog("CAN rediscovery: SUCCESS");
       appendLog(QString("CAN rediscovery success: %1").arg(detailsJoined));
     } else {
-      ackLabel_->setText("CAN rediscovery: FAILED");
+      appendLog("CAN rediscovery: FAILED");
       appendLog(QString("CAN rediscovery failed: %1").arg(detailsJoined));
     }
   }
@@ -1164,13 +1139,10 @@ class DiagnosticsWindow : public QMainWindow {
     const int capA2 = extractInt("native_a2_speed", -1);
     const int capAbs = extractInt("native_absolute_position", -1);
 
-    const QString modeText = (mode == 0) ? "profile-position/speed translation" : (mode == 1 ? "native-speed capable path" : "unknown");
-    const QString transportText = (transport == 1) ? "CAN transport online" : (transport == 0 ? "transport offline" : "transport unknown");
-    backendModeLabel_->setText(QString("Backend mode: %1 (code %2)").arg(modeText).arg(mode));
-    pathLabel_->setText(QString("Transport: %1 | Capabilities: native A2 speed=%2, native absolute position=%3")
-                          .arg(transportText)
-                          .arg(capA2 == 1 ? "yes" : (capA2 == 0 ? "no" : "unknown"))
-                          .arg(capAbs == 1 ? "yes" : (capAbs == 0 ? "no" : "unknown")));
+    Q_UNUSED(mode);
+    Q_UNUSED(transport);
+    Q_UNUSED(capA2);
+    Q_UNUSED(capAbs);
   }
 
   void runCapabilityStartupCheck() {
@@ -1357,6 +1329,8 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow("TLM high UDP", tlmHighPortSpin_);
     cmdForm->addRow("TLM low UDP", tlmLowPortSpin_);
     cmdForm->addRow("Controller ID", controllerIdSpin_);
+    simModeBox_ = new QCheckBox("Simulation mode", cmdGroup);
+    cmdForm->addRow(simModeBox_);
     cmdForm->addRow("Command", commandBox_);
     cmdForm->addRow("Payload", payloadStack_);
     cmdForm->addRow(sendButton_);
@@ -1383,56 +1357,37 @@ class DiagnosticsWindow : public QMainWindow {
     leftColumnLayout->addWidget(cmdGroup);
 
     auto *statusGroup = new QGroupBox("Status", leftColumn);
-    auto *statusLayout = new QGridLayout(statusGroup);
-    statusLayout->setHorizontalSpacing(20);
-    statusLayout->setVerticalSpacing(8);
-    stateLabel_ = new QLabel("State: UNKNOWN", statusGroup);
+    auto *statusLayout = new QVBoxLayout(statusGroup);
+    statusLayout->setSpacing(6);
+    tcpStatusLabel_ = new QLabel("CU TCP: Disconnected", statusGroup);
+    stateLabel_ = new QLabel("State: UNKNOWN (0)", statusGroup);
     modeLabel_ = new QLabel("Server mode: Hardware/CAN", statusGroup);
-    inventoryLabel_ = new QLabel("Inventory: discovered -, connected -, SUT -", statusGroup);
-    highSeqLabel_ = new QLabel("High-rate seq: -", statusGroup);
-    lowSeqLabel_ = new QLabel("Low-rate seq: -", statusGroup);
-    envLabel_ = new QLabel("Temp -, Hum -, Press -", statusGroup);
-    tcpStatusLabel_ = new QLabel("CU TCP: DISCONNECTED", statusGroup);
-    connectionLabel_ = new QLabel("Laser status -", statusGroup);
-    availabilityLabel_ = new QLabel("Selectable devices: turret -, SUT -", statusGroup);
-    ackLabel_ = new QLabel("Last ACK/NACK: -", statusGroup);
-    hwInfoSummaryLabel_ = new QLabel("HW summary: pending REQ_HW_INFO", statusGroup);
-    axis0BenchLabel_ = new QLabel("Axis0 bench: -", statusGroup);
-    telemetryStatusLabel_ = new QLabel("Telemetry: waiting", statusGroup);
-    angleLiveLabel_ = new QLabel("Angle: -", statusGroup);
-    speedLiveLabel_ = new QLabel("Speed: -", statusGroup);
-    currentLiveLabel_ = new QLabel("Current: -", statusGroup);
-    voltageLiveLabel_ = new QLabel("Voltage: -", statusGroup);
-    errorLiveLabel_ = new QLabel("Error: -", statusGroup);
-    saturationLiveLabel_ = new QLabel("Saturation: -", statusGroup);
-    backendModeLabel_ = new QLabel("Backend mode: application/server path", statusGroup);
-    pathLabel_ = new QLabel("Simulation path: via STC server sim mode | Real hardware path: via STC server hardware backend", statusGroup);
-    simModeBox_ = new QCheckBox("Simulation mode", statusGroup);
+    inventoryLabel_ = new QLabel("Inventory: Connected motors = 0 | disabled", statusGroup);
+    lasersLabel_ = new QLabel("Lasers: -", statusGroup);
+    tempLabel_ = new QLabel("Temperature: - °C", statusGroup);
+    humidityLabel_ = new QLabel("Humidity: - %", statusGroup);
+    pressureLabel_ = new QLabel("Pressure: - hPa", statusGroup);
+    highSeqLabel_ = new QLabel("TLMH sequence number: -", statusGroup);
+    lowSeqLabel_ = new QLabel("TLML sequence number: -", statusGroup);
+    uptimeLabel_ = new QLabel("Uptime: - s", statusGroup);
+    tlmlErrorsLabel_ = new QLabel("TLML errors matrix:\n-", statusGroup);
 
-    for (QLabel *label : {stateLabel_, modeLabel_, inventoryLabel_, highSeqLabel_, lowSeqLabel_, envLabel_,
-                          tcpStatusLabel_, connectionLabel_, availabilityLabel_, ackLabel_, hwInfoSummaryLabel_, axis0BenchLabel_, telemetryStatusLabel_, angleLiveLabel_, speedLiveLabel_, currentLiveLabel_, voltageLiveLabel_, errorLiveLabel_, saturationLiveLabel_, backendModeLabel_, pathLabel_}) {
+    for (QLabel *label : {tcpStatusLabel_, stateLabel_, modeLabel_, inventoryLabel_, lasersLabel_, tempLabel_,
+                          humidityLabel_, pressureLabel_, highSeqLabel_, lowSeqLabel_, uptimeLabel_, tlmlErrorsLabel_}) {
       label->setWordWrap(true);
     }
-
-    statusLayout->addWidget(stateLabel_, 0, 0);
-    statusLayout->addWidget(modeLabel_, 0, 1);
-    statusLayout->addWidget(inventoryLabel_, 1, 0);
-    statusLayout->addWidget(availabilityLabel_, 1, 1);
-    statusLayout->addWidget(highSeqLabel_, 2, 0);
-    statusLayout->addWidget(lowSeqLabel_, 2, 1);
-    statusLayout->addWidget(envLabel_, 3, 0);
-    statusLayout->addWidget(connectionLabel_, 3, 1);
-    statusLayout->addWidget(tcpStatusLabel_, 4, 0);
-    statusLayout->addWidget(ackLabel_, 4, 1);
-    statusLayout->addWidget(hwInfoSummaryLabel_, 5, 0, 1, 2);
-    statusLayout->addWidget(axis0BenchLabel_, 6, 0, 1, 2);
-    statusLayout->addWidget(simModeBox_, 7, 0, 1, 2);
-    statusLayout->addWidget(telemetryStatusLabel_, 8, 0, 1, 2);
-    statusLayout->addWidget(angleLiveLabel_, 9, 0); statusLayout->addWidget(speedLiveLabel_, 9, 1);
-    statusLayout->addWidget(currentLiveLabel_, 10, 0); statusLayout->addWidget(voltageLiveLabel_, 10, 1);
-    statusLayout->addWidget(errorLiveLabel_, 11, 0); statusLayout->addWidget(saturationLiveLabel_, 11, 1);
-    statusLayout->addWidget(backendModeLabel_, 12, 0, 1, 2);
-    statusLayout->addWidget(pathLabel_, 13, 0, 1, 2);
+    statusLayout->addWidget(tcpStatusLabel_);
+    statusLayout->addWidget(stateLabel_);
+    statusLayout->addWidget(modeLabel_);
+    statusLayout->addWidget(inventoryLabel_);
+    statusLayout->addWidget(lasersLabel_);
+    statusLayout->addWidget(tempLabel_);
+    statusLayout->addWidget(humidityLabel_);
+    statusLayout->addWidget(pressureLabel_);
+    statusLayout->addWidget(highSeqLabel_);
+    statusLayout->addWidget(lowSeqLabel_);
+    statusLayout->addWidget(uptimeLabel_);
+    statusLayout->addWidget(tlmlErrorsLabel_);
 
     leftColumnLayout->addWidget(statusGroup);
     const bool devRaw = !QString::fromLocal8Bit(qgetenv(kDevRawPanelEnv)).trimmed().isEmpty();
@@ -1696,22 +1651,13 @@ class DiagnosticsWindow : public QMainWindow {
   QLabel *inventoryLabel_{};
   QLabel *highSeqLabel_{};
   QLabel *lowSeqLabel_{};
-  QLabel *envLabel_{};
   QLabel *tcpStatusLabel_{};
-  QLabel *connectionLabel_{};
-  QLabel *availabilityLabel_{};
-  QLabel *ackLabel_{};
-  QLabel *hwInfoSummaryLabel_{};
-  QLabel *axis0BenchLabel_{};
-  QLabel *telemetryStatusLabel_{};
-  QLabel *angleLiveLabel_{};
-  QLabel *speedLiveLabel_{};
-  QLabel *currentLiveLabel_{};
-  QLabel *voltageLiveLabel_{};
-  QLabel *errorLiveLabel_{};
-  QLabel *saturationLiveLabel_{};
-  QLabel *backendModeLabel_{};
-  QLabel *pathLabel_{};
+  QLabel *lasersLabel_{};
+  QLabel *tempLabel_{};
+  QLabel *humidityLabel_{};
+  QLabel *pressureLabel_{};
+  QLabel *uptimeLabel_{};
+  QLabel *tlmlErrorsLabel_{};
   QCheckBox *simModeBox_{};
 
   QPlainTextEdit *tlmhPanel_{};
