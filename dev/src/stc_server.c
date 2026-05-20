@@ -3346,7 +3346,7 @@ int main(int argc, char** argv) {
         int written = snprintf(hw_info + off, sizeof(hw_info) - off, "STC_HW_INFO;");
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
-        const char* mode = sh.simulation_mode ? "Simulation" : "Hardware/CAN";
+        const char* mode = (parsed_cfg.runtime_backend == STC_RUNTIME_BACKEND_SIMULATOR) ? "Simulation" : "Hardware/CAN";
         written = snprintf(hw_info + off, sizeof(hw_info) - off, "mode=%s;", mode);
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
@@ -3405,7 +3405,7 @@ int main(int argc, char** argv) {
           off += (size_t)written;
         }
         if (off < sizeof(hw_info)) hw_info[off++] = ';';
-        if (off < sizeof(hw_info)) hw_info[off] = ' ';
+        if (off < sizeof(hw_info)) hw_info[off] = '\0';
 
         size_t n = strnlen(hw_info, sizeof(hw_info) - 1);
         memcpy(rsp.payload, hw_info, n + 1);
