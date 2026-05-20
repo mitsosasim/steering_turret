@@ -254,13 +254,18 @@ class DiagnosticsWindow : public QMainWindow {
     simTimer_->setInterval(20);
     connect(simTimer_, &QTimer::timeout, this, &DiagnosticsWindow::tickSimulation);
 
+    applyingCommandAvailability_ = true;
     onCommandSelectionChanged(commandBox_->currentIndex());
+    applyingCommandAvailability_ = false;
     appendLog("Diagnostics GUI initialized.");
     runCapabilityStartupCheck();
   }
 
  private:
   void onCommandSelectionChanged(int index) {
+    if (!applyingCommandAvailability_) {
+      userSelectedCommand_ = true;
+    }
     payloadStack_->setCurrentIndex(index);
     updateCommandAvailability();
   }
@@ -913,10 +918,6 @@ class DiagnosticsWindow : public QMainWindow {
     setUiCommandEnabled(UiCommand::Turret, turretSelectable);
     setUiCommandEnabled(UiCommand::Mirror, mirrorSelectable);
     setUiCommandEnabled(UiCommand::Sut, sutSelectable);
-    if (!simModeBox_->isChecked() && !turretSelectable && mirrorSelectable && availableSut == 0 && currentUiCommand() != UiCommand::Mirror) {
-      const int mirrorIdx = commandBox_->findData(static_cast<int>(UiCommand::Mirror));
-      if (mirrorIdx >= 0) commandBox_->setCurrentIndex(mirrorIdx);
-    }
   }
 
   void onSimModeChanged(bool enabled) {
@@ -1163,9 +1164,31 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void updateCommandAvailability() {
+    if (!commandBox_ || !sendButton_) return;
+    applyingCommandAvailability_ = true;
+    const bool hadUserSelection = userSelectedCommand_;
+    if (!hadUserSelection) {
+      const std::array<UiCommand, 5> startupDefaultOrder{
+        UiCommand::CuState, UiCommand::ReqHwInfo, UiCommand::Mirror, UiCommand::Turret, UiCommand::Sut
+      };
+      for (const UiCommand cmd : startupDefaultOrder) {
+        const int candidateIdx = commandBox_->findData(static_cast<int>(cmd));
+        if (candidateIdx >= 0 && commandBox_->isItemEnabled(candidateIdx)) {
+          if (commandBox_->currentIndex() != candidateIdx) {
+            commandBox_->setCurrentIndex(candidateIdx);
+          }
+          break;
+        }
+      }
+    }
+
     const int idx = commandBox_->currentIndex();
-    if (idx < 0) return;
+    if (idx < 0) {
+      applyingCommandAvailability_ = false;
+      return;
+    }
     const UiCommand c = currentUiCommand();
+    const bool commandEnabledByMapping = commandBox_->isItemEnabled(idx);
     bool allowed = true;
     const bool isOper = currentState_ == 3;
     if (c == UiCommand::Turret || c == UiCommand::Mirror || c == UiCommand::Sut) {
@@ -1174,7 +1197,14 @@ class DiagnosticsWindow : public QMainWindow {
     if (c == UiCommand::Config) {
       allowed = false;
     }
+    if (!commandEnabledByMapping) {
+      allowed = false;
+      sendButton_->setToolTip("Selected command unavailable for current axis mapping");
+    } else {
+      sendButton_->setToolTip("");
+    }
     sendButton_->setEnabled(allowed);
+    applyingCommandAvailability_ = false;
   }
 
   void setUiCommandEnabled(UiCommand cmd, bool enabled) {
@@ -1577,6 +1607,8 @@ class DiagnosticsWindow : public QMainWindow {
   int preferredSutId_{0xFF};
   int lastConnectedDevices_{0};
   int lastDiscoveredDevices_{0};
+  bool userSelectedCommand_{false};
+  bool applyingCommandAvailability_{false};
   std::vector<int> configuredTurretAxes_{};
   std::vector<int> configuredMirrorIds_{};
   std::array<QString, kAxisCount> axisDriverNames_{};
