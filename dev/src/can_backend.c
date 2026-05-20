@@ -104,11 +104,12 @@ static int myact_axis_move_abs(void* driver_ctx, double target_deg, double speed
   return myact_position_abs((myact_ctx_t*)driver_ctx, (uint16_t)llround(speed_deg_s), myact_deg_to_raw_0p01(target_deg), &fb);
 }
 static int myact_axis_move_rel(void* driver_ctx, double delta_deg, double speed_deg_s) {
-  return myact_position_inc_send_raw((myact_ctx_t*)driver_ctx, (uint16_t)llround(speed_deg_s), myact_deg_to_raw_0p01(delta_deg));
+  myact_basic_feedback_t fb;
+  return myact_position_inc((myact_ctx_t*)driver_ctx, (uint16_t)llround(speed_deg_s), myact_deg_to_raw_0p01(delta_deg), &fb);
 }
 static int myact_axis_speed(void* driver_ctx, double speed_deg_s) {
   myact_basic_feedback_t fb;
-  return myact_speed((myact_ctx_t*)driver_ctx, myact_deg_to_raw_0p01(speed_deg_s), &fb);
+  return myact_speed((myact_ctx_t*)driver_ctx, myact_speed_dps_to_raw(speed_deg_s), &fb);
 }
 
 static const stc_axis_driver_ops_t pd4c_ops = {
@@ -636,6 +637,98 @@ int can_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask
     b->axis_cmd_ack_pending[axis] = 1u;
   }
   return 0;
+}
+
+int can_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]) {
+  struct motion_backend* b = (struct motion_backend*)backend;
+  if (!b || !kind || !values_deg_or_dps || !speed_limit_deg_s) return -1;
+
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!axis_selected(axes_mask, axis)) continue;
+    if (!axis_ready_for_motion(b, axis)) return -1;
+  }
+
+  uint32_t touched_mask = 0u;
+  int sent_count = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!axis_selected(axes_mask, axis)) continue;
+    int rc = -1;
+
+    if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
+      myact_basic_feedback_t fb;
+      memset(&fb, 0, sizeof(fb));
+      const uint8_t node = b->cfg.axis_node_id[axis];
+      switch (kind[axis]) {
+        case STC_AXIS_MOTION_REL: {
+          const double delta_motor_deg = axis_output_to_motor_deg(b, axis, values_deg_or_dps[axis]);
+          const double max_speed_motor_dps = fabs(axis_output_to_motor_deg(b, axis, speed_limit_deg_s[axis]));
+          const int32_t raw_delta = myact_deg_to_raw_0p01(delta_motor_deg);
+          const uint16_t max_speed_dps = (uint16_t)llround(max_speed_motor_dps);
+          STC_LOG_INFO("MYACT axis%zu node=%u mirror1 relative delta=%.3f deg max_speed=%.3f deg/s raw_delta=%d",
+            axis, node, values_deg_or_dps[axis], speed_limit_deg_s[axis], raw_delta);
+          rc = myact_position_inc(&b->axis[axis].u.x8.ctx, max_speed_dps, raw_delta, &fb);
+          break;
+        }
+        case STC_AXIS_MOTION_SPEED: {
+          const double speed_motor_dps = axis_output_to_motor_deg(b, axis, values_deg_or_dps[axis]);
+          const int32_t raw_speed = myact_speed_dps_to_raw(speed_motor_dps);
+          STC_LOG_INFO("MYACT axis%zu node=%u speed target=%.3f deg/s raw_speed=%d",
+            axis, node, values_deg_or_dps[axis], raw_speed);
+          rc = myact_speed(&b->axis[axis].u.x8.ctx, raw_speed, &fb);
+          break;
+        }
+        case STC_AXIS_MOTION_ABS:
+        default: {
+          const double abs_motor_deg = axis_output_to_motor_deg(b, axis, values_deg_or_dps[axis]);
+          const double max_speed_motor_dps = fabs(axis_output_to_motor_deg(b, axis, speed_limit_deg_s[axis]));
+          const int32_t raw_abs = myact_deg_to_raw_0p01(abs_motor_deg);
+          const uint16_t max_speed_dps = (uint16_t)llround(max_speed_motor_dps);
+          STC_LOG_INFO("MYACT axis%zu node=%u absolute target=%.3f deg max_speed=%.3f deg/s raw_target=%d",
+            axis, node, values_deg_or_dps[axis], speed_limit_deg_s[axis], raw_abs);
+          rc = myact_position_abs(&b->axis[axis].u.x8.ctx, max_speed_dps, raw_abs, &fb);
+          break;
+        }
+      }
+      if (rc != MYACT_OK) {
+        STC_LOG_ERROR("MYACT axis%zu node=%u command failed rc=%d (%s)", axis, node, rc, myact_strerror(rc));
+        (void)stop_touched_axes(b, touched_mask);
+        return -1;
+      }
+      const uint16_t err_flags = b->axis[axis].u.x8.ctx.cache.status1.valid ? b->axis[axis].u.x8.ctx.cache.status1.error_flags : 0u;
+      STC_LOG_INFO("MYACT axis%zu command OK feedback_pos=%d feedback_vel=%d temp=%d err_flags=0x%04x",
+        axis, fb.angle_deg, fb.speed_dps, fb.motor_temp_c, (unsigned)err_flags);
+      b->axis_last_cmd_pos_raw[axis] = myact_deg_to_raw_0p01((double)fb.angle_deg);
+      b->axis_last_cmd_vel_raw[axis] = fb.speed_dps;
+    } else if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) {
+      switch (kind[axis]) {
+        case STC_AXIS_MOTION_SPEED: {
+          double speed_cmd[STC_AXIS_COUNT] = {0};
+          speed_cmd[axis] = values_deg_or_dps[axis];
+          rc = can_motion_backend_apply_speed(backend, (1u << axis), speed_cmd);
+          break;
+        }
+        case STC_AXIS_MOTION_REL:
+        case STC_AXIS_MOTION_ABS:
+        default: {
+          double target_cmd[STC_AXIS_COUNT] = {0};
+          target_cmd[axis] = (kind[axis] == STC_AXIS_MOTION_REL) ? ((double)b->snap.pos_raw[axis] + values_deg_or_dps[axis]) : values_deg_or_dps[axis];
+          rc = can_motion_backend_apply_pp_move(backend, (1u << axis), target_cmd);
+          break;
+        }
+      }
+      if (rc != 0) return -1;
+    } else {
+      return -1;
+    }
+
+    touched_mask |= (1u << axis);
+    sent_count++;
+    const uint64_t tms = mono_ms();
+    b->axis[axis].last_rx_ms = tms;
+    b->axis[axis].last_cmd_ms = tms;
+    b->axis_cmd_ack_pending[axis] = 1u;
+  }
+  return (sent_count > 0) ? 0 : -1;
 }
 
 int can_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) {

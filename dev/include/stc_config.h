@@ -95,6 +95,7 @@ typedef struct stc_config_s {
   int axis_vel_raw_mode[STC_AXIS_COUNT];
   double axis_min_deg[STC_AXIS_COUNT];
   double axis_max_deg[STC_AXIS_COUNT];
+  /** Per-axis speed cap (deg/s) used as motion speed_limit for ABS/REL commands. */
   double axis_max_speed_deg_s[STC_AXIS_COUNT];
   double axis_storage_deg[STC_AXIS_COUNT];
   int axis_brake_release_timeout_ms[STC_AXIS_COUNT];

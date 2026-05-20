@@ -217,7 +217,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
     cfg->axis_vel_raw_mode[i] = 0;
     cfg->axis_min_deg[i] = 0.0;
     cfg->axis_max_deg[i] = 0.0;
-    cfg->axis_max_speed_deg_s[i] = 0.0;
+    cfg->axis_max_speed_deg_s[i] = 50.0;
     cfg->axis_storage_deg[i] = 0.0;
     cfg->axis_pp_profile_vel[i] = 0;
     cfg->axis_brake_release_timeout_ms[i] = 0;
