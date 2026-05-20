@@ -45,5 +45,6 @@ void stc_axis_cfg_from_config(const stc_config_t* cfg, int axis, axis_cfg_t* out
   out_cfg->vel_raw_mode = cfg->axis_vel_raw_mode[axis];
   out_cfg->pp_profile_vel = cfg->axis_pp_profile_vel[axis];
 
-  if (out_axis_expected) *out_axis_expected = (cfg->axis_enabled[axis] && cfg->axis_node_id[axis] > 0) ? 1u : 0u;
+  if (out_axis_expected) *out_axis_expected = (cfg->axis_enabled[axis] &&
+                                               cfg->axis_driver[axis] != STC_AXIS_DRIVER_DISABLED) ? 1u : 0u;
 }
