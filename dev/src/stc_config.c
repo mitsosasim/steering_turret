@@ -542,6 +542,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
         /* accepted metadata */
       } else if (strcmp(key, "pp_profile_vel") == 0) {
         if (parse_u16(value, &cfg->axis_pp_profile_vel[axis_idx]) != 0) goto parse_error;
+      } else if (strcmp(key, "pp_profile_vel_deg_s") == 0) {
+        double dps = 0.0;
+        if (parse_double(value, &dps) != 0) goto parse_error;
+        if (dps < 0.0 || dps > 6553.5) goto parse_error;
+        cfg->axis_pp_profile_vel[axis_idx] = (uint16_t)lround(dps * 10.0);
       } else if (strcmp(key, "diag_cat") == 0) {
         if (parse_u8(value, &cfg->axis_diag_cat[axis_idx]) != 0) goto parse_error;
         seen_diag_cat[axis_idx] = 1;

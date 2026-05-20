@@ -191,7 +191,7 @@ static void usage(const char* prog) {
     "  storage\n"
     "  laser <id(1-8)> <0|1>\n"
     "  turret <rel|abs|speed> <az> <el>\n"
-    "  mirror <id|all(255)> <rel|abs|speed> <elev>\n"
+    "  mirror <id|all(255)> <rel|abs|speed> <elev_or_speed>\n"
     "  sut <id|all(255)> <rel|abs|speed> <az> <el>\n"
     "  reset | factory | shutdown\n"
     "  manualpos <lat> <lon> <alt> <heading>\n"
@@ -240,6 +240,12 @@ int main(int argc, char** argv) {
   const char* host = argv[1];
   const char* port = argv[2];
   const char* cmdn = argv[3];
+
+  if (!strcmp(cmdn, "mirror") && argc != 7) {
+    fprintf(stderr, "mirror command takes exactly 3 payload arguments: id, motion, value\n");
+    usage(argv[0]);
+    return 2;
+  }
 
   int fd = tcp_connect(host, port);
   if (fd < 0) { perror("connect"); return 1; }
@@ -462,7 +468,11 @@ int main(int argc, char** argv) {
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
     if (read_rsp_and_print(fd, &cfg) != 0) return 1;
   } else if (!strcmp(cmdn, "mirror")) {
-    if (argc < 7) { usage(argv[0]); return 2; }
+    if (argc != 7) {
+      fprintf(stderr, "mirror command takes exactly 3 payload arguments: id, motion, value\n");
+      usage(argv[0]);
+      return 2;
+    }
     INIT_CMD(STC_CMD_MIRROR);
     c.u.mirror.mirror_id = (uint8_t)atoi(argv[4]); // 255=all
     c.u.mirror.motion_type = (uint8_t)parse_motion(argv[5]);
