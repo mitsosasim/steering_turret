@@ -41,6 +41,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QHash>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QTime>
 #include <QtCore/QTimer>
 #include <QtCore/QProcess>
@@ -219,7 +220,7 @@ class DiagnosticsWindow : public QMainWindow {
     connect(tlmHighPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(tlmLowPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(mirrorIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-      if (!mirrorIdBox_) return;
+      if (!mirrorIdBox_ || mirrorIdBox_->signalsBlocked()) return;
       preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
     });
     connect(sutIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
@@ -894,6 +895,7 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     if (mirrorIdBox_) {
+      QSignalBlocker block(mirrorIdBox_);
       int desired = preferredMirrorId_;
       if (desired < 0) desired = mirrorIdBox_->currentData().toInt();
       mirrorIdBox_->clear();
@@ -904,7 +906,6 @@ class DiagnosticsWindow : public QMainWindow {
       int idx = mirrorIdBox_->findData(desired);
       if (idx < 0) idx = 0;
       mirrorIdBox_->setCurrentIndex(idx);
-      preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
       mirrorIdBox_->setEnabled(mirrorSelectable);
     }
 
