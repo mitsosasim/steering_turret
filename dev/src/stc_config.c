@@ -21,6 +21,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sched.h>
+#include <math.h>
 
 static void trim_inplace(char* s) {
   if (!s) return;
@@ -207,7 +208,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
 
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
     cfg->axis_enabled[i] = 0;
-    cfg->axis_driver[i] = STC_AXIS_DRIVER_PD4C;
+    cfg->axis_driver[i] = STC_AXIS_DRIVER_DISABLED;
     cfg->axis_node_id[i] = 0;
     cfg->axis_command_sign[i] = 1.0;
     cfg->axis_telemetry_sign[i] = 1.0;
@@ -259,6 +260,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
   int max_axis_seen = -1;
   int seen_diag_cat[STC_AXIS_COUNT] = {0};
   int seen_diag_subcat[STC_AXIS_COUNT] = {0};
+  int seen_axis_driver[STC_AXIS_COUNT] = {0};
 
   char line[512];
   int line_no = 0;
@@ -503,6 +505,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
           fclose(f);
           return false;
         }
+        seen_axis_driver[axis_idx] = 1;
       } else if (strcmp(key, "node_id") == 0) {
         if (parse_int(value, &cfg->axis_node_id[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "counts_per_rev") == 0) {
@@ -695,6 +698,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
       return false;
     }
     if (cfg->axis_enabled[i]) {
+      if (!seen_axis_driver[i]) {
+        STC_LOG_ERROR("%s: axis %d is enabled but has no explicit driver", path, i);
+        return false;
+      }
       if (cfg->axis_driver[i] != STC_AXIS_DRIVER_PD4C && cfg->axis_driver[i] != STC_AXIS_DRIVER_MYACT_X8_25) {
         STC_LOG_ERROR("%s: axis %d is enabled but has invalid driver", path, i);
         return false;
