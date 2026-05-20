@@ -34,6 +34,56 @@ static void check_pthread(int rc, const char* what) {
   }
 }
 
+static void init_backend_cfg_for_test(stc_config_t* cfg) {
+  memset(cfg, 0, sizeof(*cfg));
+  snprintf(cfg->backend, sizeof(cfg->backend), "%s", "simulator");
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    cfg->axis_enabled[axis] = 0;
+    cfg->axis_driver[axis] = STC_AXIS_DRIVER_DISABLED;
+  }
+}
+
+static void test_runtime_backend_and_driver_selection(void) {
+  stc_config_t cfg;
+  stc_runtime_backend_t runtime_backend = STC_RUNTIME_BACKEND_SIMULATOR;
+
+  init_backend_cfg_for_test(&cfg);
+  snprintf(cfg.backend, sizeof(cfg.backend), "%s", "can");
+  cfg.axis_enabled[0] = 1;
+  cfg.axis_driver[0] = STC_AXIS_DRIVER_PD4C;
+  assert(select_runtime_backend(&cfg, &runtime_backend) == 0);
+  assert(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN);
+  assert(cfg.axis_driver[0] == STC_AXIS_DRIVER_PD4C);
+
+  init_backend_cfg_for_test(&cfg);
+  snprintf(cfg.backend, sizeof(cfg.backend), "%s", "can");
+  cfg.axis_enabled[1] = 1;
+  cfg.axis_driver[1] = STC_AXIS_DRIVER_MYACT_X8_25;
+  assert(select_runtime_backend(&cfg, &runtime_backend) == 0);
+  assert(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN);
+  assert(cfg.axis_driver[1] == STC_AXIS_DRIVER_MYACT_X8_25);
+
+  init_backend_cfg_for_test(&cfg);
+  snprintf(cfg.backend, sizeof(cfg.backend), "%s", "can");
+  cfg.axis_enabled[2] = 0;
+  cfg.axis_driver[2] = STC_AXIS_DRIVER_DISABLED;
+  assert(select_runtime_backend(&cfg, &runtime_backend) == 0);
+  assert(runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN);
+  assert(cfg.axis_driver[2] == STC_AXIS_DRIVER_DISABLED);
+
+  init_backend_cfg_for_test(&cfg);
+  snprintf(cfg.backend, sizeof(cfg.backend), "%s", "myactuator");
+  cfg.axis_enabled[0] = 1;
+  cfg.axis_driver[0] = STC_AXIS_DRIVER_MYACT_X8_25;
+  assert(select_runtime_backend(&cfg, &runtime_backend) != 0);
+
+  init_backend_cfg_for_test(&cfg);
+  snprintf(cfg.backend, sizeof(cfg.backend), "%s", "pd4c");
+  cfg.axis_enabled[0] = 1;
+  cfg.axis_driver[0] = STC_AXIS_DRIVER_PD4C;
+  assert(select_runtime_backend(&cfg, &runtime_backend) != 0);
+}
+
 static void* action_producer_thread(void* arg) {
   stress_ctx_t* ctx = (stress_ctx_t*)arg;
   for (int i = 0; i < 20000; i++) {
@@ -84,6 +134,7 @@ static void* telemetry_updater_thread(void* arg) {
 }
 
 int main(void) {
+  test_runtime_backend_and_driver_selection();
   shared_t sh;
   memset(&sh, 0, sizeof(sh));
   pthread_mutex_init(&sh.mtx, NULL);

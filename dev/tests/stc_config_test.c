@@ -294,6 +294,20 @@ static void test_accept_mixed_can_axis_drivers(void) {
       "diag_cat = 0x06\n"
       "diag_subcat = 0x3F\n"
       "\n"
+      "[Axis2]\n"
+      "enabled = 0\n"
+      "driver = disabled\n"
+      "node_id = 0\n"
+      "counts_per_rev = 4096\n"
+      "gear_ratio = 1\n"
+      "min_deg = -180\n"
+      "max_deg = 180\n"
+      "max_speed_deg_s = 90\n"
+      "storage_deg = 0\n"
+      "pp_profile_vel = 500\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n"
+      "\n"
       "[Turret]\n"
       "az_axis = 0\n"
       "el_axis = 1\n"
@@ -310,6 +324,7 @@ static void test_accept_mixed_can_axis_drivers(void) {
   expect_true(load_config(path, &cfg), "expected mixed PD4C/MyActuator axis drivers to parse");
   expect_true(cfg.axis_driver[0] == STC_AXIS_DRIVER_PD4C, "expected Axis0 driver pd4c");
   expect_true(cfg.axis_driver[1] == STC_AXIS_DRIVER_MYACT_X8_25, "expected Axis1 driver myact_x8_25");
+  expect_true(cfg.axis_driver[2] == STC_AXIS_DRIVER_DISABLED, "expected Axis2 driver disabled");
   unlink(path);
 }
 
