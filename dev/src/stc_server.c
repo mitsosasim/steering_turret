@@ -2046,7 +2046,7 @@ static void* tlml_tx_thread(void* arg) {
 static void print_usage(FILE* out, const char* p) {
   fprintf(out, "Usage: %s [--tcp-port 7000] [--can can0] [--node 1] [--can-bitrate 1000] [--can-restart-ms 100]\n"
           "          [--can-scan-max-node 32]\n"
-          "          [--config dev/config/stc_default.ini]\n"
+          "          [--config dev/config/stc_default.ini] [--backend simulator|sim|hardware|can]\n"
           "          [--counts-per-rev N] [--gear-ratio N] [--vel-scale N]\n"
           "          [--az-min DEG] [--az-max DEG] [--max-speed-deg-s X]\n"
           "          [--speed-watchdog-ms MS] [--pp-profile-vel U16]\n"
@@ -2228,7 +2228,7 @@ static void log_enabled_axis_drivers(const stc_config_t* cfg) {
   if (!cfg) return;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!cfg->axis_enabled[axis]) continue;
-    STC_LOG_INFO("axis[%zu] driver=%s node_id=%d", axis, axis_driver_to_string(cfg->axis_driver[axis]), cfg->axis_node_id[axis]);
+    STC_LOG_INFO("axis%zu driver=%s node=%d", axis, axis_driver_to_string(cfg->axis_driver[axis]), cfg->axis_node_id[axis]);
   }
 }
 
@@ -2241,35 +2241,57 @@ static int has_invalid_enabled_axis_driver(const stc_config_t* cfg) {
   return 0;
 }
 
-static const char* select_backend_name(const stc_config_t* cfg) {
-  if (!cfg) return NULL;
+static int parse_runtime_backend(const char* value, stc_runtime_backend_t* out_backend) {
+  if (!value || !out_backend) return -1;
+  if (strcmp(value, "simulator") == 0 || strcmp(value, "sim") == 0) {
+    *out_backend = STC_RUNTIME_BACKEND_SIMULATOR;
+    return 0;
+  }
+  if (strcmp(value, "hardware") == 0 || strcmp(value, "can") == 0) {
+    *out_backend = STC_RUNTIME_BACKEND_HARDWARE_CAN;
+    return 0;
+  }
+  return -1;
+}
+
+static int select_runtime_backend(const stc_config_t* cfg, stc_runtime_backend_t* out_backend) {
+  if (!cfg || !out_backend) return -1;
 
   const int has_pd4c = config_has_enabled_driver(cfg, STC_AXIS_DRIVER_PD4C);
   const int has_myact = config_has_enabled_driver(cfg, STC_AXIS_DRIVER_MYACT_X8_25);
 
-  if (strcmp(cfg->backend, "simulator") == 0) {
+  if (strcmp(cfg->backend, "pd4c") == 0) {
+    STC_LOG_ERROR("invalid backend='%s': use --backend can and set [AxisN].driver=pd4c", cfg->backend);
+    return -1;
+  }
+  if (strcmp(cfg->backend, "myactuator") == 0) {
+    STC_LOG_ERROR("invalid backend='%s': use --backend can and set [AxisN].driver=myact_x8_25", cfg->backend);
+    return -1;
+  }
+
+  if (parse_runtime_backend(cfg->backend, out_backend) != 0) {
+    STC_LOG_ERROR("invalid backend='%s' (expected simulator|sim|hardware|can)", cfg->backend);
+    return -1;
+  }
+
+  if (*out_backend == STC_RUNTIME_BACKEND_SIMULATOR) {
 #ifdef SIMULATION
-    return "simulator";
+    return 0;
 #else
     STC_LOG_ERROR("backend='simulator' requested but binary is not built with SIMULATION");
-    return NULL;
+    return -1;
 #endif
   }
 
-  if (strcmp(cfg->backend, "pd4c") == 0 || strcmp(cfg->backend, "myactuator") == 0 || strcmp(cfg->backend, "can") == 0) {
-    if (has_invalid_enabled_axis_driver(cfg)) {
-      STC_LOG_ERROR("invalid axis configuration: enabled axis cannot use driver=disabled");
-      log_enabled_axis_drivers(cfg);
-      return NULL;
-    }
-    if (!has_pd4c && !has_myact) {
-      STC_LOG_WARN("backend='%s' requested but no enabled CAN-capable axes found", cfg->backend);
-    }
-    return "pd4c";
+  if (has_invalid_enabled_axis_driver(cfg)) {
+    STC_LOG_ERROR("invalid axis configuration: enabled axis cannot use driver=disabled");
+    log_enabled_axis_drivers(cfg);
+    return -1;
   }
-
-  STC_LOG_ERROR("invalid backend='%s' (expected simulator|can|pd4c|myactuator)", cfg->backend);
-  return NULL;
+  if (!has_pd4c && !has_myact) {
+    STC_LOG_WARN("backend='%s' requested but no enabled CAN-capable axes found", cfg->backend);
+  }
+  return 0;
 }
 
 /** Process entrypoint: startup/config, thread bring-up, TCP command loop, orderly shutdown. */
@@ -2384,6 +2406,7 @@ int main(int argc, char** argv) {
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--config") && i + 1 < argc) config_path = argv[++i];
+    else if (!strcmp(argv[i], "--backend") && i + 1 < argc) snprintf(parsed_cfg.backend, sizeof(parsed_cfg.backend), "%s", argv[++i]);
     else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) {
       sh.d.cfg[0].counts_per_rev = atof(argv[++i]);
       legacy_cli_mode = 1;
@@ -2637,13 +2660,14 @@ int main(int argc, char** argv) {
   actionq_t q;
   actionq_init(&q);
 
-  const char* backend_name = select_backend_name(&parsed_cfg);
-  if (!backend_name) {
+  stc_runtime_backend_t runtime_backend = STC_RUNTIME_BACKEND_SIMULATOR;
+  if (select_runtime_backend(&parsed_cfg, &runtime_backend) != 0) {
     STC_LOG_ERROR("failed to select motion backend (requested=%s)", parsed_cfg.backend);
     exit_code = 1;
     goto cleanup;
   }
-  STC_LOG_INFO("backend_requested=%s backend_effective=%s", parsed_cfg.backend, backend_name);
+  const char* backend_name = (runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN) ? "pd4c" : "simulator";
+  STC_LOG_INFO("runtime_backend=%s", runtime_backend_to_string(runtime_backend));
   log_enabled_axis_drivers(&parsed_cfg);
 
   // CAN worker thread

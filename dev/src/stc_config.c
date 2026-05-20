@@ -109,7 +109,6 @@ static int parse_axis_driver(const char* value, stc_axis_driver_t* out) {
   if (strcmp(value, "disabled") == 0) *out = STC_AXIS_DRIVER_DISABLED;
   else if (strcmp(value, "pd4c") == 0) *out = STC_AXIS_DRIVER_PD4C;
   else if (strcmp(value, "myact_x8_25") == 0) *out = STC_AXIS_DRIVER_MYACT_X8_25;
-  else if (strcmp(value, "sim") == 0) *out = STC_AXIS_DRIVER_SIM;
   else return -1;
   return 0;
 }
