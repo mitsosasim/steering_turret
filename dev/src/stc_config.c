@@ -202,48 +202,30 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->mirror_count = 0;
 
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
-    cfg->axis_enabled[i] = 1;
-    cfg->axis_driver[i] = STC_AXIS_DRIVER_PD4C;
-    cfg->axis_node_id[i] = (int)(i + 1);
+    cfg->axis_enabled[i] = 0;
+    cfg->axis_driver[i] = STC_AXIS_DRIVER_DISABLED;
+    cfg->axis_node_id[i] = 0;
     cfg->axis_command_sign[i] = 1.0;
     cfg->axis_telemetry_sign[i] = 1.0;
     cfg->axis_zero_physical_deg[i] = 0.0;
     cfg->axis_zero_raw_deg[i] = 0.0;
     cfg->axis_zero_on_start[i] = 0;
-    cfg->axis_counts_per_rev[i] = 4096.0;
-    cfg->axis_vel_scale[i] = 1.0;
+    cfg->axis_counts_per_rev[i] = 0.0;
+    cfg->axis_gear_ratio[i] = 0.0;
+    cfg->axis_vel_scale[i] = 0.0;
     cfg->axis_vel_raw_mode[i] = 0;
+    cfg->axis_min_deg[i] = 0.0;
+    cfg->axis_max_deg[i] = 0.0;
+    cfg->axis_max_speed_deg_s[i] = 0.0;
     cfg->axis_storage_deg[i] = 0.0;
-    cfg->axis_pp_profile_vel[i] = 500;
-    cfg->axis_brake_release_timeout_ms[i] = 3000;
-    cfg->axis_brake_poll_ms[i] = 50;
+    cfg->axis_pp_profile_vel[i] = 0;
+    cfg->axis_brake_release_timeout_ms[i] = 0;
+    cfg->axis_brake_poll_ms[i] = 0;
     cfg->axis_active_status2_enable[i] = 0;
-    cfg->axis_active_status2_interval_ms[i] = 50;
-    cfg->axis_feedback_timeout_ms[i] = 500;
-    cfg->axis_diag_cat[i] = 0x06;
-    cfg->axis_diag_subcat[i] = 0x3F;
-
-    if (i == 0) {
-      cfg->axis_gear_ratio[i] = 100.0;
-      cfg->axis_min_deg[i] = -140.0;
-      cfg->axis_max_deg[i] = 140.0;
-      cfg->axis_max_speed_deg_s[i] = 45.0;
-    } else if (i == 1) {
-      cfg->axis_gear_ratio[i] = 20.0;
-      cfg->axis_min_deg[i] = -5.0;
-      cfg->axis_max_deg[i] = 180.0;
-      cfg->axis_max_speed_deg_s[i] = 45.0;
-    } else if (i < 10) {
-      cfg->axis_gear_ratio[i] = 20.0;
-      cfg->axis_min_deg[i] = -35.0;
-      cfg->axis_max_deg[i] = 35.0;
-      cfg->axis_max_speed_deg_s[i] = 45.0;
-    } else {
-      cfg->axis_gear_ratio[i] = 20.0;
-      cfg->axis_min_deg[i] = -12.5;
-      cfg->axis_max_deg[i] = 18.5;
-      cfg->axis_max_speed_deg_s[i] = 45.0;
-    }
+    cfg->axis_active_status2_interval_ms[i] = 0;
+    cfg->axis_feedback_timeout_ms[i] = 0;
+    cfg->axis_diag_cat[i] = 0x00;
+    cfg->axis_diag_subcat[i] = 0x00;
   }
 
   for (size_t i = 0; i < STC_MAX_SUT; i++) {

@@ -77,7 +77,7 @@ typedef struct stc_config_s {
   // 0 (default): allow compatibility controller_id 0x01 + legacy ICD IDs; 1: legacy IDs only.
   int controller_id_strict_legacy;
 
-  /** Number of declared logical axes in use (<= STC_AXIS_COUNT). */
+  /** Number of declared logical axes in use (<= STC_AXIS_COUNT). Defaults keep all axes disabled until explicit [AxisN] entries. */
   int num_axes;
   int axis_enabled[STC_AXIS_COUNT];
   /** Per-axis driver selection parsed from aliases (pd4c/nanotec/myact...). */
