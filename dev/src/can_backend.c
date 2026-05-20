@@ -400,6 +400,7 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
         b->axis[axis].last_healthcheck_ms = b->axis[axis].last_rx_ms;
         b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
         STC_LOG_INFO("axis%zu driver=pd4c node=%u connected", axis, node_id);
+        STC_LOG_INFO("axis%zu pd4c init OK", axis);
       } break;
       case STC_AXIS_DRIVER_MYACT_X8_25: {
         int rc = myact_socketcan_open(&b->axis[axis].u.x8.io, cfg->can_if, node_id);
@@ -411,13 +412,20 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
         char model[8] = {0};
         uint32_t ver = 0, runtime = 0;
         myact_status1_t status1;
+        myact_status3_t status3;
         int32_t angle_raw_0p01 = 0;
         const int model_rc = myact_read_model(&b->axis[axis].u.x8.ctx, model);
         const int ver_rc = myact_read_version_date(&b->axis[axis].u.x8.ctx, &ver);
         const int run_rc = myact_read_runtime(&b->axis[axis].u.x8.ctx, &runtime);
         const int st_rc = myact_read_status1(&b->axis[axis].u.x8.ctx, &status1);
         const int ang_rc = myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
-        if (model_rc == MYACT_OK && st_rc == MYACT_OK && ang_rc == MYACT_OK) {
+        const int status3_rc = myact_read_status3(&b->axis[axis].u.x8.ctx, &status3);
+        if (model_rc == MYACT_OK &&
+            ver_rc == MYACT_OK &&
+            run_rc == MYACT_OK &&
+            st_rc == MYACT_OK &&
+            ang_rc == MYACT_OK &&
+            status3_rc == MYACT_OK) {
           b->axis[axis].connected = 1;
           b->axis[axis].last_rx_ms = mono_ms();
           b->axis[axis].last_healthcheck_ms = b->axis[axis].last_rx_ms;
@@ -435,11 +443,12 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
             STC_LOG_INFO("axis%zu active_reply 9C enabled interval_ms=%u", axis, (unsigned)(interval_10ms * 10u));
           }
           STC_LOG_INFO("axis%zu driver=myact_x8_25 node=%u connected model=%s ver=%u runtime_ms=%u", axis, node_id, model, ver, runtime);
+          STC_LOG_INFO("axis%zu myact init OK", axis);
         } else {
           myact_socketcan_close(&b->axis[axis].u.x8.io);
         }
-        (void)ver_rc;
-        (void)run_rc;
+        (void)status1;
+        (void)status3;
       } break;
       case STC_AXIS_DRIVER_DISABLED:
       default:
