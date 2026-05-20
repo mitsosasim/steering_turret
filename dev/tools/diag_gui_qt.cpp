@@ -735,6 +735,29 @@ class DiagnosticsWindow : public QMainWindow {
       return;
     }
 
+    if (cmd.cmd_id == STC_CMD_MIRROR) {
+      const uint8_t id = cmd.u.mirror.mirror_id;
+      const char *mode = cmd.u.mirror.motion_type == STC_MOTION_RELATIVE ? "relative"
+                         : cmd.u.mirror.motion_type == STC_MOTION_ABSOLUTE ? "absolute"
+                         : cmd.u.mirror.motion_type == STC_MOTION_SPEED ? "speed"
+                         : "unknown";
+      appendLog(QString("Sending MIRROR id=%1 mode=%2 value=%3 deg")
+                  .arg(id == 0xFF ? QString("all") : QString::number(id))
+                  .arg(mode)
+                  .arg(cmd.u.mirror.elevation, 0, 'f', 3));
+    } else if (cmd.cmd_id == STC_CMD_TURRET) {
+      appendLog(QString("Sending TURRET mode=%1 az=%2 el=%3")
+                  .arg(cmd.u.turret.motion_type)
+                  .arg(cmd.u.turret.az, 0, 'f', 3)
+                  .arg(cmd.u.turret.el, 0, 'f', 3));
+    } else if (cmd.cmd_id == STC_CMD_SUT) {
+      appendLog(QString("Sending SUT id=%1 mode=%2 az=%3 el=%4")
+                  .arg(cmd.u.sut.id == 0xFF ? QString("all") : QString::number(cmd.u.sut.id))
+                  .arg(cmd.u.sut.motion_type)
+                  .arg(cmd.u.sut.az, 0, 'f', 3)
+                  .arg(cmd.u.sut.el, 0, 'f', 3));
+    }
+
     if (simModeBox_->isChecked()) {
       applySimulationCommand(cmd);
       appendLog(QString("Simulation apply id=0x%1 seq=%2")
@@ -893,7 +916,7 @@ class DiagnosticsWindow : public QMainWindow {
 
   void updateDeviceSelectors(int connectedDevices, int discoveredDevices) {
     const int availableSut = qBound(0, connectedDevices > 2 ? (connectedDevices - 2) / 2 : 0, 8);
-    const int configuredTurretAxes = configuredTurretAxes_.empty() ? 2 : static_cast<int>(configuredTurretAxes_.size());
+    const int configuredTurretAxes = static_cast<int>(configuredTurretAxes_.size());
     const bool turretSelectable = simModeBox_->isChecked() || configuredTurretAxes >= 1;
 
     std::vector<int> selectableMirrorIds = configuredMirrorIds_;
@@ -901,6 +924,7 @@ class DiagnosticsWindow : public QMainWindow {
       for (int id = 1; id <= 8; ++id) selectableMirrorIds.push_back(id);
     }
     const bool mirrorSelectable = simModeBox_->isChecked() || !selectableMirrorIds.empty();
+    const bool sutSelectable = simModeBox_->isChecked() || availableSut > 0;
 
     if (sutIdBox_) {
       int desired = preferredSutId_;
@@ -956,6 +980,13 @@ class DiagnosticsWindow : public QMainWindow {
     inventoryLabel_->setText(QString("Inventory: Connected motors = %1 | %2")
                                .arg(connectedDevices)
                                .arg(drivers.isEmpty() ? "disabled" : drivers.join(", ")));
+    setUiCommandEnabled(UiCommand::Turret, turretSelectable);
+    setUiCommandEnabled(UiCommand::Mirror, mirrorSelectable);
+    setUiCommandEnabled(UiCommand::Sut, sutSelectable);
+    if (!simModeBox_->isChecked() && !turretSelectable && mirrorSelectable && availableSut == 0 && currentUiCommand() != UiCommand::Mirror) {
+      const int mirrorIdx = commandBox_->findData(static_cast<int>(UiCommand::Mirror));
+      if (mirrorIdx >= 0) commandBox_->setCurrentIndex(mirrorIdx);
+    }
   }
 
   void onSimModeChanged(bool enabled) {
@@ -1217,6 +1248,12 @@ class DiagnosticsWindow : public QMainWindow {
       allowed = false;
     }
     sendButton_->setEnabled(allowed);
+  }
+
+  void setUiCommandEnabled(UiCommand cmd, bool enabled) {
+    const int idx = commandBox_->findData(static_cast<int>(cmd));
+    if (idx < 0) return;
+    commandBox_->setItemData(idx, enabled ? QVariant() : QVariant(0), Qt::UserRole - 1);
   }
 
 
