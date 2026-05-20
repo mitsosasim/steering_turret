@@ -334,6 +334,8 @@ typedef struct shared_data {
   tx_timing_stats_t tlml_timing;
   cmd_timing_stats_t cmd_timing;
   uint64_t action_queue_depth_peak;
+  uint64_t can_worker_action_success_count;
+  uint64_t can_worker_action_failed_count;
   uint64_t obs_last_log_ms;
 
   // --- active CU telemetry destination (authoritative while connected)
@@ -654,6 +656,25 @@ static void log_axis_final_status(shared_t* sh, int axis) {
                0u,
                (unsigned)(telem.status_word & 0xFFFFu),
                stale);
+}
+
+static void emit_backend_execution_failure(shared_t* sh,
+                                           const stc_action_t* act,
+                                           const char* backend_call,
+                                           int rc) {
+  pthread_mutex_lock(&sh->mtx);
+  sh->d.can_worker_action_failed_count++;
+  pthread_mutex_unlock(&sh->mtx);
+  STC_LOG_ERROR("TLML error: backend execution failed cmd=%d axes_mask=0x%08x backend=%s rc=%d",
+                (int)act->type,
+                (unsigned)act->axes_mask,
+                backend_call,
+                rc);
+  STC_LOG_ERROR("GUI RED: backend execution failed cmd=%d axes_mask=0x%08x backend=%s rc=%d",
+                (int)act->type,
+                (unsigned)act->axes_mask,
+                backend_call,
+                rc);
 }
 
 /** Check axis index against compiled model and configured runtime axis count. */
@@ -1324,16 +1345,24 @@ static void* can_worker_thread(void* arg) {
         cmd_timing_update(&a->sh->d.cmd_timing, act.obs_tcp_rx_ns, act.obs_queued_ns, exec_start_ns);
         pthread_mutex_unlock(&a->sh->mtx);
       }
+      int action_ok = 1;
       switch (act.type) {
         case ACTION_PP_MOVE:
-          (void)motion_backend_apply_pp_move(backend, act.axes_mask, act.u.target_deg);
+          if (motion_backend_apply_pp_move(backend, act.axes_mask, act.u.target_deg) != 0) {
+            action_ok = 0;
+            emit_backend_execution_failure(a->sh, &act, "motion_backend_apply_pp_move", -1);
+          }
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if (act.axes_mask & (1u << axis)) axis_enabled[axis] = 1;
           }
           break;
         case ACTION_MOTION:
-          if (motion_backend_apply_motion(backend, act.axes_mask, act.u.motion.kind, act.u.motion.value_deg_or_dps, act.u.motion.speed_limit_deg_s) != 0) {
-            STC_LOG_ERROR("motion_backend_apply_motion failed; command dropped without PP fallback");
+          {
+            const int motion_rc = motion_backend_apply_motion(backend, act.axes_mask, act.u.motion.kind, act.u.motion.value_deg_or_dps, act.u.motion.speed_limit_deg_s);
+            if (motion_rc != 0) {
+              action_ok = 0;
+              emit_backend_execution_failure(a->sh, &act, "motion_backend_apply_motion", motion_rc);
+            }
           }
           for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
             if (act.axes_mask & (1u << axis)) axis_enabled[axis] = 1;
@@ -1435,10 +1464,15 @@ static void* can_worker_thread(void* arg) {
         default:
           break;
       }
-      for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-        if (act.axes_mask & (1u << axis)) {
-          STC_LOG_INFO("CAN action complete: axis%zu target reached/processed", axis);
-          log_axis_final_status(a->sh, (int)axis);
+      if (action_ok) {
+        pthread_mutex_lock(&a->sh->mtx);
+        a->sh->d.can_worker_action_success_count++;
+        pthread_mutex_unlock(&a->sh->mtx);
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+          if (act.axes_mask & (1u << axis)) {
+            STC_LOG_INFO("CAN action complete: axis%zu target reached/processed", axis);
+            log_axis_final_status(a->sh, (int)axis);
+          }
         }
       }
       if (!actionq_drop_head(a->q)) break;
@@ -3321,6 +3355,7 @@ int main(int argc, char** argv) {
       rsp.version = cfg.protocol_version_default;
       rsp.cmd_id = cmd.cmd_id;
       rsp.seq = cmd.seq;
+      const int ack_is_queued = (v == STC_ERR_NO_ERROR && has_action);
 
       if (v == STC_ERR_NO_ERROR) {
         rsp.result = STC_RSP_ACK;
@@ -3425,7 +3460,11 @@ int main(int argc, char** argv) {
         break;
       }
       if (rsp.result == STC_RSP_ACK) {
-        STC_LOG_INFO("TCP ACK sent: command accepted cmd=0x%02X seq=%u", rsp.cmd_id, rsp.seq);
+        if (ack_is_queued) {
+          STC_LOG_INFO("TCP ACK sent: command queued cmd=0x%02X seq=%u", rsp.cmd_id, rsp.seq);
+        } else {
+          STC_LOG_INFO("TCP ACK sent: command accepted cmd=0x%02X seq=%u", rsp.cmd_id, rsp.seq);
+        }
       }
     }
 
