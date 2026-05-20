@@ -63,6 +63,10 @@ void actionq_init(actionq_t* q) {
 }
 
 int actionq_push(actionq_t* q, const stc_action_t* action) {
+  /* Important semantics:
+   * - success => action accepted into queue for deferred worker execution
+   * - success does NOT imply backend completion
+   */
   pthread_mutex_lock(&q->mtx);
 
   if (action->type == ACTION_STREAM_SPEED) {

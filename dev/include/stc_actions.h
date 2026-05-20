@@ -81,7 +81,9 @@ typedef struct {
 
 /** Initialize queue state and create eventfd wakeup handle for CAN worker poll loop. */
 void actionq_init(actionq_t* q);
-/** Push action into queue (or coalesce stream-speed actions); wakes worker via eventfd. */
+/** Push action into queue (or coalesce stream-speed actions); wakes worker via eventfd.
+ *  Queue admission means "valid + queued", not execution success.
+ */
 int actionq_push(actionq_t* q, const stc_action_t* action);
 /** Peek current head action without removal; returns non-zero if queue is empty. */
 int actionq_try_peek(actionq_t* q, stc_action_t* out);
