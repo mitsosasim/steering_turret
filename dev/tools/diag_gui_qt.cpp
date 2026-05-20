@@ -590,6 +590,18 @@ class DiagnosticsWindow : public QMainWindow {
           if (!ok || axis < 0 || axis >= kAxisCount) continue;
           axisDriverNames_[axis] = pair[1].trimmed();
         }
+      } else if (key == "axis_connected") {
+        axisConnected_.fill(0);
+        for (const QString &entry : value.split(',', Qt::SkipEmptyParts)) {
+          const QStringList pair = entry.split(':');
+          if (pair.size() != 2) continue;
+          bool axisOk = false;
+          bool connectedOk = false;
+          const int axis = pair[0].trimmed().toInt(&axisOk);
+          const int connected = pair[1].trimmed().toInt(&connectedOk);
+          if (!axisOk || !connectedOk || axis < 0 || axis >= kAxisCount) continue;
+          axisConnected_[axis] = connected != 0 ? 1 : 0;
+        }
       } else if (key == "motor_status_map") {
         axisMotorStatusMap_.fill(-1);
         for (const QString &entry : value.split(',', Qt::SkipEmptyParts)) {
@@ -842,16 +854,20 @@ class DiagnosticsWindow : public QMainWindow {
     const bool missingLow = (lastLowTelemetryMs_ <= 0) || (nowMs - lastLowTelemetryMs_ > 3000);
     const bool telemetryMissing = missingHigh || missingLow;
     for (int axis = 0; axis < kAxisCount; ++axis) {
-      QString status = "Disabled";
+      QString status = "Unknown";
+      const bool driverDisabled = axisDriverNames_[axis].compare("disabled", Qt::CaseInsensitive) == 0;
       const int statusIndex = axisMotorStatusMap_[axis];
-      if (statusIndex >= 0) {
-        if (!haveLowTelemetry_) {
-          status = "Unknown";
-        } else {
-          uint8_t bits = lastMotorStatus_[statusIndex];
-          if (telemetryMissing) bits |= 0x04;
-          status = decodeMotorStatusLabels(bits);
-        }
+      bool axisEnabled = false;
+      if (haveLowTelemetry_ && statusIndex >= 0 && statusIndex < static_cast<int>(lastMotorStatus_.size())) {
+        uint8_t bits = lastMotorStatus_[statusIndex];
+        axisEnabled = (bits & 0x01) != 0;
+        if (telemetryMissing) bits |= 0x04;
+        status = decodeMotorStatusLabels(bits);
+      } else if (axisConnected_[axis]) {
+        status = "Connected";
+      }
+      if (driverDisabled || (!axisConnected_[axis] && !axisEnabled)) {
+        status = "Disabled";
       }
       axisTable_->item(axis, 4)->setText(status);
     }
@@ -1613,6 +1629,7 @@ class DiagnosticsWindow : public QMainWindow {
   std::vector<int> configuredTurretAxes_{};
   std::vector<int> configuredMirrorIds_{};
   std::array<QString, kAxisCount> axisDriverNames_{};
+  std::array<int, kAxisCount> axisConnected_{};
   std::array<int, kAxisCount> axisMotorStatusMap_{};
   std::array<uint8_t, 8> lastMotorStatus_{};
   bool haveLowTelemetry_{false};
