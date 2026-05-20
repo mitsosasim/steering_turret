@@ -2358,7 +2358,7 @@ int main(int argc, char** argv) {
     .can_if = "can0",
     .can_bitrate = 1000,
     .can_restart_ms = 100,
-    .can_scan_max_node = 32,
+    .can_scan_max_node = 0,
     .can_discovery_enabled = 0,
     .can_timeout_ms = 1000,
     .node_id = 1,

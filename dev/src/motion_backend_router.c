@@ -73,8 +73,24 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
     return -1;
   }
 
-  STC_LOG_INFO("backend_transport=%s can_if=%s node_id=%u tx=0x%03x rx=0x%03x watchdog_ms=%d telem_interval_ms=%d native_speed_mode=%d",
-    g_backend.type,cfg->can_if?cfg->can_if:"",cfg->primary_node_id,cfg->primary_tx_id,cfg->primary_rx_id,cfg->speed_watchdog_ms,cfg->telemetry_interval_ms,cfg->experimental_native_speed_mode);
+  if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) {
+    STC_LOG_INFO("backend_transport=%s can_if=%s watchdog_ms=%d telem_interval_ms=%d native_speed_mode=%d",
+      g_backend.type,
+      cfg->can_if ? cfg->can_if : "",
+      cfg->speed_watchdog_ms,
+      cfg->telemetry_interval_ms,
+      cfg->experimental_native_speed_mode);
+  } else {
+    STC_LOG_INFO("backend_transport=%s can_if=%s node_id=%u tx=0x%03x rx=0x%03x watchdog_ms=%d telem_interval_ms=%d native_speed_mode=%d",
+      g_backend.type,
+      cfg->can_if ? cfg->can_if : "",
+      cfg->primary_node_id,
+      cfg->primary_tx_id,
+      cfg->primary_rx_id,
+      cfg->speed_watchdog_ms,
+      cfg->telemetry_interval_ms,
+      cfg->experimental_native_speed_mode);
+  }
 
   if (rc == 0) *out_backend = g_backend.impl;
   return rc;
