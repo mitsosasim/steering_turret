@@ -32,6 +32,7 @@ typedef struct stc_config_s {
   /** TCP command socket bind port for CMD/RSP control traffic. */
   int tcp_port;
   char backend[32];
+  stc_runtime_backend_t runtime_backend;
   char can_if[16];
   int primary_node_id;
   int primary_tx_id;
