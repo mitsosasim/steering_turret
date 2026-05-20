@@ -159,6 +159,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
 #else
   cfg->runtime_backend = STC_RUNTIME_BACKEND_HARDWARE_CAN;
 #endif
+  cfg->runtime_backend_explicitly_set = 0;
   snprintf(cfg->can_if, sizeof(cfg->can_if), "%s", "can0");
   cfg->primary_node_id = 1;
   cfg->primary_tx_id = 0x141; cfg->primary_rx_id = 0x241;
@@ -339,6 +340,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
           fclose(f);
           return false;
         }
+        cfg->runtime_backend_explicitly_set = 1;
         snprintf(cfg->backend, sizeof(cfg->backend), "%s", runtime_backend_to_string(cfg->runtime_backend));
       }
       else if (strcmp(key, "can_if") == 0) { if (strlen(value) >= sizeof(cfg->can_if)) goto parse_error; strcpy(cfg->can_if, value); }
@@ -452,6 +454,7 @@ bool load_config(const char* path, stc_config_t* cfg) {
           fclose(f);
           return false;
         }
+        cfg->runtime_backend_explicitly_set = 1;
         snprintf(cfg->backend, sizeof(cfg->backend), "%s", runtime_backend_to_string(cfg->runtime_backend));
       } else if (strcmp(key, "rt_enabled") == 0) {
         if (parse_int(value, &cfg->rt_enabled) != 0) goto parse_error;
