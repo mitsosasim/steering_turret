@@ -45,6 +45,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QProcess>
 #include <QtCore/QSet>
+#include <QtCore/QStringList>
 
 #include <array>
 #include <cstdint>
@@ -110,22 +111,17 @@ QString nackErrToString(uint16_t errCode) {
   }
 }
 
-
-QString decodeTlmlDiag(const stc_tlml_t &tlm) {
-  QStringList lines;
-  lines << QString("State: %1 (%2)").arg(stateToString(tlm.state)).arg(tlm.state);
-  lines << QString("Uptime: %1 s").arg(tlm.uptime_sec);
-  lines << QString("Position source: lat=%1 lon=%2 alt=%3m heading=%4deg")
-           .arg(tlm.lat, 0, 'f', 6).arg(tlm.lon, 0, 'f', 6).arg(tlm.alt_m, 0, 'f', 2).arg(tlm.heading_deg, 0, 'f', 2);
-  lines << QString("Environment: %1 C, %2 %%, %3 hPa").arg(tlm.temperature_c, 0, 'f', 1).arg(tlm.humidity_pct, 0, 'f', 1).arg(tlm.pressure_hpa, 0, 'f', 1);
-  QStringList laser;
-  for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) laser << QString("SUT%1=%2").arg(static_cast<int>(i) + 1).arg(tlm.laser_status[i] ? "ON" : "OFF");
-  lines << QString("Lasers: %1").arg(laser.join(", "));
-  QStringList errors;
-  for (int i = 0; i < static_cast<int>(tlm.error_count); ++i) errors << QString("0x%1").arg(tlm.errors[i], 8, 16, QChar('0'));
-  lines << QString("Errors(%1): %2").arg(tlm.error_count).arg(errors.isEmpty() ? "none" : errors.join(", "));
-  return lines.join('\n');
+QString decodeMotorStatusLabels(uint8_t statusBits) {
+  if (statusBits == 0x00) return "Healthy";
+  QStringList labels;
+  if (statusBits & 0x01) labels << "Enabled";
+  if (statusBits & 0x02) labels << "Fault";
+  if (statusBits & 0x04) labels << "Stale";
+  if (statusBits & 0x08) labels << "Limited";
+  return labels.isEmpty() ? QString("Unknown(0x%1)").arg(statusBits, 2, 16, QChar('0')) : labels.join(" | ");
 }
+
+
 enum class UiCommand {
   CuState,
   SelfLev,
@@ -197,7 +193,7 @@ class DiagnosticsWindow : public QMainWindow {
     // Main operator layout:
     //  - top panel: connection controls, command/state panels, telemetry widgets
     //  - bottom panel: status + log stream for protocol/debug visibility
-    root->addWidget(buildTopPanel(), 3);
+    root->addWidget(buildTopPanel(), 2);
     root->addWidget(buildLogPanel(), 1);
     setCentralWidget(central);
 
@@ -596,6 +592,18 @@ class DiagnosticsWindow : public QMainWindow {
           if (!ok || axis < 0 || axis >= kAxisCount) continue;
           axisDriverNames_[axis] = pair[1].trimmed();
         }
+      } else if (key == "motor_status_map") {
+        axisMotorStatusMap_.fill(-1);
+        for (const QString &entry : value.split(',', Qt::SkipEmptyParts)) {
+          const QStringList pair = entry.split(':');
+          if (pair.size() != 2) continue;
+          bool axisOk = false;
+          bool idxOk = false;
+          const int axis = pair[0].trimmed().toInt(&axisOk);
+          const int statusIdx = pair[1].trimmed().toInt(&idxOk);
+          if (!axisOk || !idxOk || axis < 0 || axis >= kAxisCount || statusIdx < 0 || statusIdx >= 8) continue;
+          axisMotorStatusMap_[axis] = statusIdx;
+        }
       }
     }
 
@@ -840,16 +848,9 @@ class DiagnosticsWindow : public QMainWindow {
         axisTable_->item(i, 2)->setText(QString::number(tlm.rates[i], 'f', 3));
         axisTable_->item(i, 3)->setText(QString::number(tlm.acceleration[i], 'f', 3));
       }
+      lastHighTelemetryMs_ = QDateTime::currentMSecsSinceEpoch();
       highSeqLabel_->setText(QString("TLMH sequence number: %1").arg(tlm.seq));
-      tlmhPanel_->setPlainText(QString("seq=%1\nts=%2\naxis0 pos=%3 vel=%4 acc=%5\naxis1 pos=%6 vel=%7 acc=%8")
-                                 .arg(tlm.seq)
-                                 .arg(tlm.timestamp_ms)
-                                 .arg(tlm.position[0], 0, 'f', 3)
-                                 .arg(tlm.rates[0], 0, 'f', 3)
-                                 .arg(tlm.acceleration[0], 0, 'f', 3)
-                                 .arg(tlm.position[1], 0, 'f', 3)
-                                 .arg(tlm.rates[1], 0, 'f', 3)
-                                 .arg(tlm.acceleration[1], 0, 'f', 3));
+      updateAxisStatusColumn();
     }
   }
 
@@ -891,8 +892,32 @@ class DiagnosticsWindow : public QMainWindow {
       updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
       updateCommandAvailability();
 
-      tlmlPanel_->setPlainText(decodeTlmlDiag(tlm));
+      std::memcpy(lastMotorStatus_.data(), tlm.motor_status, sizeof(tlm.motor_status));
+      haveLowTelemetry_ = true;
+      lastLowTelemetryMs_ = QDateTime::currentMSecsSinceEpoch();
+      updateAxisStatusColumn();
       updateMotionControlsEnabled();
+    }
+  }
+
+  void updateAxisStatusColumn() {
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const bool missingHigh = (lastHighTelemetryMs_ <= 0) || (nowMs - lastHighTelemetryMs_ > 3000);
+    const bool missingLow = (lastLowTelemetryMs_ <= 0) || (nowMs - lastLowTelemetryMs_ > 3000);
+    const bool telemetryMissing = missingHigh || missingLow;
+    for (int axis = 0; axis < kAxisCount; ++axis) {
+      QString status = "Disabled";
+      const int statusIndex = axisMotorStatusMap_[axis];
+      if (statusIndex >= 0) {
+        if (!haveLowTelemetry_) {
+          status = "Unknown";
+        } else {
+          uint8_t bits = lastMotorStatus_[statusIndex];
+          if (telemetryMissing) bits |= 0x04;
+          status = decodeMotorStatusLabels(bits);
+        }
+      }
+      axisTable_->item(axis, 4)->setText(status);
     }
   }
 
@@ -1530,29 +1555,16 @@ class DiagnosticsWindow : public QMainWindow {
     auto *group = new QGroupBox("Telemetry", this);
     auto *layout = new QVBoxLayout(group);
 
-    auto *split = new QVBoxLayout();
-    auto *highGroup = new QGroupBox("TLMH (high-rate)", group);
-    auto *highLayout = new QVBoxLayout(highGroup);
-    tlmhPanel_ = new QPlainTextEdit(highGroup);
-    tlmhPanel_->setReadOnly(true);
-    tlmhPanel_->setMinimumHeight(100);
-    highLayout->addWidget(tlmhPanel_);
-
-    auto *lowGroup = new QGroupBox("TLML (low-rate)", group);
-    auto *lowLayout = new QVBoxLayout(lowGroup);
-    tlmlPanel_ = new QPlainTextEdit(lowGroup);
-    tlmlPanel_->setReadOnly(true);
-    tlmlPanel_->setMinimumHeight(100);
-    lowLayout->addWidget(tlmlPanel_);
-
-    split->addWidget(highGroup);
-    split->addWidget(lowGroup);
-    layout->addLayout(split);
-
     axisTable_ = new QTableWidget(group);
     axisTable_->setColumnCount(5);
-    axisTable_->setHorizontalHeaderLabels({"Axis", "Position", "Velocity", "Target", "Type"});
-    axisTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    axisTable_->setHorizontalHeaderLabels({"Axis", "Position", "Velocity", "Acceleration", "Status"});
+    axisTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    axisTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    axisTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    axisTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    axisTable_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    axisTable_->setMinimumHeight(460);
+    axisTable_->setMaximumWidth(760);
     layout->addWidget(axisTable_);
     return group;
   }
@@ -1562,6 +1574,7 @@ class DiagnosticsWindow : public QMainWindow {
     auto *layout = new QVBoxLayout(group);
     logEdit_ = new QPlainTextEdit(group);
     logEdit_->setReadOnly(true);
+    logEdit_->setMinimumHeight(260);
     layout->addWidget(logEdit_);
     return group;
   }
@@ -1573,13 +1586,16 @@ class DiagnosticsWindow : public QMainWindow {
       axisTable_->setItem(i, 1, new QTableWidgetItem("0.000"));
       axisTable_->setItem(i, 2, new QTableWidgetItem("0.000"));
       axisTable_->setItem(i, 3, new QTableWidgetItem("0.000"));
-      axisTable_->setItem(i, 4, new QTableWidgetItem("HW"));
+      axisTable_->setItem(i, 4, new QTableWidgetItem("Unknown"));
     }
     simPos_.fill(0.0);
     simVel_.fill(0.0);
     simTargetVel_.fill(0.0);
-    tlmhPanel_->setPlainText("Waiting for TLMH...");
-    tlmlPanel_->setPlainText("Waiting for TLML...");
+    axisMotorStatusMap_.fill(-1);
+    haveLowTelemetry_ = false;
+    lastHighTelemetryMs_ = -1;
+    lastLowTelemetryMs_ = -1;
+    updateAxisStatusColumn();
     updateMotionControlsEnabled();
   }
 
@@ -1660,8 +1676,6 @@ class DiagnosticsWindow : public QMainWindow {
   QLabel *tlmlErrorsLabel_{};
   QCheckBox *simModeBox_{};
 
-  QPlainTextEdit *tlmhPanel_{};
-  QPlainTextEdit *tlmlPanel_{};
   QTableWidget *axisTable_{};
   QPlainTextEdit *logEdit_{};
 
@@ -1683,6 +1697,11 @@ class DiagnosticsWindow : public QMainWindow {
   std::vector<int> configuredTurretAxes_{};
   std::vector<int> configuredMirrorIds_{};
   std::array<QString, kAxisCount> axisDriverNames_{};
+  std::array<int, kAxisCount> axisMotorStatusMap_{};
+  std::array<uint8_t, 8> lastMotorStatus_{};
+  bool haveLowTelemetry_{false};
+  qint64 lastHighTelemetryMs_{-1};
+  qint64 lastLowTelemetryMs_{-1};
 
   std::array<double, kAxisCount> simPos_{};
   std::array<double, kAxisCount> simVel_{};
