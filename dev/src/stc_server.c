@@ -1252,11 +1252,13 @@ static void* can_worker_thread(void* arg) {
 
       if (expected && driver == STC_AXIS_DRIVER_PD4C) {
         any_expected_pd4 = 1;
-        axis_fault = stc_detect_ds402_fault(a->sh->d.telem[axis].status_word) ? 1 : 0;
-      } else if (expected && driver == STC_AXIS_DRIVER_MYACT_X8_25) {
-        /* MYACT status_word is populated from 0x9A error_flags in backend. */
-        axis_fault = (a->sh->d.telem[axis].status_word != 0u) ? 1 : 0;
       }
+      /*
+       * Per-driver fault health is computed in the backend and exported via
+       * snapshot.fault_active[] (DS402/EMCY/transport errors for PD4C,
+       * MYACT error_flags/timeout/feedback/brake checks for X8).
+       */
+      axis_fault = a->sh->d.axis_fault_active[axis] ? 1 : 0;
       if (!in_startup_grace && can_timeout_ms > 0) {
         const int timed_out = elapsed_ms_nonnegative(now, a->sh->d.last_rx_ms[axis]) > can_timeout_ms;
         stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
@@ -1995,7 +1997,8 @@ static void* tlml_tx_thread(void* arg) {
       if (stale && m.error_count < STC_ICD_MAX_ERRORS) {
         m.errors[m.error_count++] = stc_diag_encode(diag_cat[i], diag_subcat[i], STC_DIAG_ERR_AXIS_STALE);
       }
-      if (m.error_count < STC_ICD_MAX_ERRORS) {
+      if (m.error_count < STC_ICD_MAX_ERRORS &&
+          a->sh->d.cfg[i].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
         const uint16_t myact_flags = (uint16_t)(a->sh->d.telem[i].status_word & 0xFFFFu);
         const uint16_t myact_code = stc_diag_myact_primary_error_code(myact_flags);
         if (myact_code != 0u) {
