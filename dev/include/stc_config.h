@@ -78,6 +78,7 @@ typedef struct stc_config_s {
   /** Number of declared logical axes in use (<= STC_AXIS_COUNT). */
   int num_axes;
   int axis_enabled[STC_AXIS_COUNT];
+  /** Per-axis driver selection parsed from aliases (pd4c/nanotec/myact...). */
   stc_axis_driver_t axis_driver[STC_AXIS_COUNT];
   int axis_node_id[STC_AXIS_COUNT];
   double axis_command_sign[STC_AXIS_COUNT];

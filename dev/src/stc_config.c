@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <strings.h>
 #include <sched.h>
 
 static void trim_inplace(char* s) {
@@ -105,12 +106,25 @@ static int parse_bool(const char* value, int* out) {
   return -1;
 }
 
-static int parse_axis_driver(const char* value, stc_axis_driver_t* out) {
-  if (strcmp(value, "disabled") == 0) *out = STC_AXIS_DRIVER_DISABLED;
-  else if (strcmp(value, "pd4c") == 0) *out = STC_AXIS_DRIVER_PD4C;
-  else if (strcmp(value, "myact_x8_25") == 0) *out = STC_AXIS_DRIVER_MYACT_X8_25;
-  else return -1;
-  return 0;
+static int parse_axis_driver(const char* s, stc_axis_driver_t* out) {
+  if (!s || !out) return -1;
+
+  if (strcasecmp(s, "disabled") == 0 || strcasecmp(s, "none") == 0) {
+    *out = STC_AXIS_DRIVER_DISABLED;
+    return 0;
+  }
+
+  if (strcasecmp(s, "pd4c") == 0 || strcasecmp(s, "nanotec") == 0 || strcasecmp(s, "nanotec_pd4c") == 0) {
+    *out = STC_AXIS_DRIVER_PD4C;
+    return 0;
+  }
+
+  if (strcasecmp(s, "myact") == 0 || strcasecmp(s, "myactuator") == 0 || strcasecmp(s, "myact_x8_25") == 0 || strcasecmp(s, "x8_25") == 0) {
+    *out = STC_AXIS_DRIVER_MYACT_X8_25;
+    return 0;
+  }
+
+  return -1;
 }
 /** Initialize deterministic baseline defaults before user INI overrides. */
 void stc_config_set_defaults(stc_config_t* cfg) {
@@ -451,7 +465,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
       if (strcmp(key, "enabled") == 0) {
         if (parse_bool(value, &cfg->axis_enabled[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "driver") == 0) {
-        if (parse_axis_driver(value, &cfg->axis_driver[axis_idx]) != 0) goto parse_error;
+        if (parse_axis_driver(value, &cfg->axis_driver[axis_idx]) != 0) {
+          STC_LOG_ERROR("%s:%d: unknown axis driver '%s'", path, line_no, value);
+          fclose(f);
+          return false;
+        }
       } else if (strcmp(key, "node_id") == 0) {
         if (parse_int(value, &cfg->axis_node_id[axis_idx]) != 0) goto parse_error;
       } else if (strcmp(key, "counts_per_rev") == 0) {
@@ -638,13 +656,19 @@ bool load_config(const char* path, stc_config_t* cfg) {
       STC_LOG_ERROR("%s: missing diagnostic category/subcategory for axis %d", path, i);
       return false;
     }
-    if (cfg->axis_node_id[i] <= 0) {
-      STC_LOG_ERROR("%s: axis %d has invalid node_id (%d)", path, i, cfg->axis_node_id[i]);
-      return false;
-    }
-    if (cfg->axis_min_deg[i] > cfg->axis_max_deg[i]) {
-      STC_LOG_ERROR("%s: axis %d has min_deg > max_deg", path, i);
-      return false;
+    if (cfg->axis_enabled[i]) {
+      if (cfg->axis_driver[i] != STC_AXIS_DRIVER_PD4C && cfg->axis_driver[i] != STC_AXIS_DRIVER_MYACT_X8_25) {
+        STC_LOG_ERROR("%s: axis %d is enabled but has invalid driver", path, i);
+        return false;
+      }
+      if (cfg->axis_node_id[i] <= 0) {
+        STC_LOG_ERROR("%s: axis %d has invalid node_id (%d)", path, i, cfg->axis_node_id[i]);
+        return false;
+      }
+      if (cfg->axis_min_deg[i] > cfg->axis_max_deg[i]) {
+        STC_LOG_ERROR("%s: axis %d has min_deg > max_deg", path, i);
+        return false;
+      }
     }
     if (cfg->axis_active_status2_enable[i] && cfg->axis_active_status2_interval_ms[i] <= 0) {
       STC_LOG_ERROR("%s: axis %d has invalid active_status2_interval_ms", path, i);
