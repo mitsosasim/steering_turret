@@ -80,6 +80,12 @@ target_compile_options(tlm_rx_udp PRIVATE -Wall -Wextra)
 target_link_libraries(stc_server PRIVATE pthread m)
 
 if(USE_SIMULATOR)
+  target_compile_definitions(stc_server PRIVATE STC_USE_SIMULATOR=1)
+else()
+  target_compile_definitions(stc_server PRIVATE STC_USE_SIMULATOR=0)
+endif()
+
+if(USE_SIMULATOR)
   target_compile_definitions(stc_server PRIVATE SIMULATION)
   target_link_libraries(stc_server PRIVATE simulator)
 else()

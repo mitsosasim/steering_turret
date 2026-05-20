@@ -2271,7 +2271,7 @@ static int parse_runtime_backend(const char* value, stc_runtime_backend_t* out_b
     *out_backend = STC_RUNTIME_BACKEND_SIMULATOR;
     return 0;
   }
-  if (strcmp(value, "hardware") == 0 || strcmp(value, "can") == 0) {
+  if (strcmp(value, "hardware") == 0 || strcmp(value, "can") == 0 || strcmp(value, "hardware_can") == 0) {
     *out_backend = STC_RUNTIME_BACKEND_HARDWARE_CAN;
     return 0;
   }
@@ -2299,7 +2299,7 @@ static int select_runtime_backend(const stc_config_t* cfg, stc_runtime_backend_t
   }
 
   if (*out_backend == STC_RUNTIME_BACKEND_SIMULATOR) {
-#ifdef SIMULATION
+#if STC_USE_SIMULATOR
     return 0;
 #else
     STC_LOG_ERROR("ERROR: simulator backend requested but this build was compiled with USE_SIMULATOR=OFF");
@@ -2368,6 +2368,7 @@ int main(int argc, char** argv) {
   };
   const char* config_path = NULL;
   int legacy_cli_mode = 0;
+  const char* cli_backend_override = NULL;
   cli_override_flags_t cli_overrides;
   memset(&cli_overrides, 0, sizeof(cli_overrides));
 
@@ -2430,7 +2431,7 @@ int main(int argc, char** argv) {
       legacy_cli_mode = 1;
     }
     else if (!strcmp(argv[i], "--config") && i + 1 < argc) config_path = argv[++i];
-    else if (!strcmp(argv[i], "--backend") && i + 1 < argc) snprintf(parsed_cfg.backend, sizeof(parsed_cfg.backend), "%s", argv[++i]);
+    else if (!strcmp(argv[i], "--backend") && i + 1 < argc) cli_backend_override = argv[++i];
     else if (!strcmp(argv[i], "--counts-per-rev") && i + 1 < argc) {
       sh.d.cfg[0].counts_per_rev = atof(argv[++i]);
       legacy_cli_mode = 1;
@@ -2649,6 +2650,10 @@ int main(int argc, char** argv) {
     apply_config_to_shared(&sh, &parsed_cfg);
   }
 
+  if (cli_backend_override) {
+    snprintf(parsed_cfg.backend, sizeof(parsed_cfg.backend), "%s", cli_backend_override);
+  }
+
   char binary_hint[PATH_MAX];
   const char* binary_path = resolve_binary_hint(binary_hint, sizeof(binary_hint), argv[0]);
   if (enforce_rt_startup_policy(&net.sched, binary_path) != 0) {
@@ -2684,14 +2689,13 @@ int main(int argc, char** argv) {
   actionq_t q;
   actionq_init(&q);
 
-  stc_runtime_backend_t runtime_backend = STC_RUNTIME_BACKEND_SIMULATOR;
-  if (select_runtime_backend(&parsed_cfg, &runtime_backend) != 0) {
+  if (select_runtime_backend(&parsed_cfg, &parsed_cfg.runtime_backend) != 0) {
     STC_LOG_ERROR("failed to select motion backend (requested=%s)", parsed_cfg.backend);
     exit_code = 1;
     goto cleanup;
   }
-  const char* backend_name = (runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN) ? "hardware_can_backend" : "simulator";
-  STC_LOG_INFO("runtime_backend=%s", runtime_backend_to_string(runtime_backend));
+  const char* backend_name = (parsed_cfg.runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN) ? "hardware_can_backend" : "simulator";
+  STC_LOG_INFO("runtime_backend=%s", runtime_backend_to_string(parsed_cfg.runtime_backend));
   log_enabled_axis_drivers(&parsed_cfg);
 
   // CAN worker thread

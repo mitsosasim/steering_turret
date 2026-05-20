@@ -154,7 +154,11 @@ void stc_config_set_defaults(stc_config_t* cfg) {
 
   cfg->tcp_port = 7000;
   snprintf(cfg->backend, sizeof(cfg->backend), "%s", "simulator");
+#if STC_USE_SIMULATOR
   cfg->runtime_backend = STC_RUNTIME_BACKEND_SIMULATOR;
+#else
+  cfg->runtime_backend = STC_RUNTIME_BACKEND_HARDWARE_CAN;
+#endif
   snprintf(cfg->can_if, sizeof(cfg->can_if), "%s", "can0");
   cfg->primary_node_id = 1;
   cfg->primary_tx_id = 0x141; cfg->primary_rx_id = 0x241;
