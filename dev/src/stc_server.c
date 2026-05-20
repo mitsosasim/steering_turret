@@ -2291,7 +2291,7 @@ static int select_runtime_backend(const stc_config_t* cfg, stc_runtime_backend_t
 #ifdef SIMULATION
     return 0;
 #else
-    STC_LOG_ERROR("backend='simulator' requested but binary is not built with SIMULATION");
+    STC_LOG_ERROR("ERROR: simulator backend requested but this build was compiled with USE_SIMULATOR=OFF");
     return -1;
 #endif
   }
@@ -2679,7 +2679,7 @@ int main(int argc, char** argv) {
     exit_code = 1;
     goto cleanup;
   }
-  const char* backend_name = (runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN) ? "pd4c" : "simulator";
+  const char* backend_name = (runtime_backend == STC_RUNTIME_BACKEND_HARDWARE_CAN) ? "hardware_can_backend" : "simulator";
   STC_LOG_INFO("runtime_backend=%s", runtime_backend_to_string(runtime_backend));
   log_enabled_axis_drivers(&parsed_cfg);
 

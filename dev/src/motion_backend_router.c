@@ -65,9 +65,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
   if (strcmp(g_backend.type, "simulator") == 0) {
     g_backend.family = BACKEND_FAMILY_SIMULATOR;
     rc = sim_motion_backend_start(cfg, &g_backend.impl);
-  } else if (strcmp(g_backend.type, "hardware_can_backend") == 0 ||
-             strcmp(g_backend.type, "pd4c") == 0 ||
-             strcmp(g_backend.type, "myactuator") == 0) {
+  } else if (strcmp(g_backend.type, "hardware_can_backend") == 0) {
     g_backend.family = BACKEND_FAMILY_HARDWARE_CAN;
     rc = can_motion_backend_start(cfg, &g_backend.impl);
   } else {
