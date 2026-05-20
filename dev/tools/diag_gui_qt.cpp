@@ -566,6 +566,58 @@ class DiagnosticsWindow : public QMainWindow {
   void updateConfigFromHwInfoPayload(const QString &hwInfo) {
     if (hwInfo.isEmpty()) return;
 
+    QString modeFromPayload;
+    int connectedFromPayload = -1;
+
+    const QStringList fields = hwInfo.split(';', Qt::SkipEmptyParts);
+    for (const QString &rawField : fields) {
+      const QString field = rawField.trimmed();
+      const int eq = field.indexOf('=');
+      if (eq <= 0) continue;
+      const QString key = field.left(eq).trimmed().toLower();
+      const QString value = field.mid(eq + 1).trimmed();
+
+      if (key == "mode") {
+        modeFromPayload = value;
+      } else if (key == "connected") {
+        bool ok = false;
+        const int parsed = value.toInt(&ok);
+        if (ok) connectedFromPayload = parsed;
+      } else if (key == "turret_axes") {
+        const auto parsed = parseIdList(value, 0, kAxisCount - 1);
+        if (!parsed.empty()) configuredTurretAxes_ = parsed;
+      } else if (key == "mirror_ids") {
+        const auto parsed = parseIdList(value, 1, 255);
+        if (!parsed.empty()) configuredMirrorIds_ = parsed;
+      } else if (key == "mirror_count") {
+        bool ok = false;
+        const int count = value.toInt(&ok);
+        if (ok && count > 0 && configuredMirrorIds_.empty()) {
+          for (int id = 1; id <= qMin(count, 255); ++id) configuredMirrorIds_.push_back(id);
+        }
+      } else if (key == "axis_drivers") {
+        axisDriverNames_.fill("-");
+        for (const QString &entry : value.split(',', Qt::SkipEmptyParts)) {
+          const QStringList pair = entry.split(':');
+          if (pair.size() != 2) continue;
+          bool ok = false;
+          const int axis = pair[0].trimmed().toInt(&ok);
+          if (!ok || axis < 0 || axis >= kAxisCount) continue;
+          axisDriverNames_[axis] = pair[1].trimmed();
+        }
+      }
+    }
+
+    if (!modeFromPayload.isEmpty()) {
+      modeLabel_->setText(QString("Server mode: %1").arg(modeFromPayload));
+    }
+
+    if (connectedFromPayload >= 0) {
+      lastConnectedDevices_ = connectedFromPayload;
+      lastDiscoveredDevices_ = qMax(lastDiscoveredDevices_, connectedFromPayload);
+    }
+
+    // Backward-compatible fallback parser for legacy free-text HW info payloads.
     const QRegularExpression turretRx("turret_axes\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
     const QRegularExpression mirrorRx("mirror_ids\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
     const QRegularExpression mirrorCountRx("mirror_count\\s*=\\s*(\\d+)", QRegularExpression::CaseInsensitiveOption);
@@ -585,19 +637,26 @@ class DiagnosticsWindow : public QMainWindow {
       if (countMatch.hasMatch()) {
         bool ok = false;
         const int count = countMatch.captured(1).toInt(&ok);
-        if (ok && count > 0) {
-          configuredMirrorIds_.clear();
+        if (ok && count > 0 && configuredMirrorIds_.empty()) {
           for (int id = 1; id <= qMin(count, 255); ++id) configuredMirrorIds_.push_back(id);
         }
       }
     }
-    axisDriverNames_.fill("-");
-    for (int i = 0; i < kAxisCount; ++i) {
-      const QRegularExpression rx(QString("axis%1[^\\n,;]*driver\\s*=\\s*([A-Za-z0-9_\\-]+)").arg(i), QRegularExpression::CaseInsensitiveOption);
-      const auto m = rx.match(hwInfo);
-      if (m.hasMatch()) axisDriverNames_[i] = m.captured(1).trimmed();
+
+    bool haveMappedDrivers = false;
+    for (const QString &name : axisDriverNames_) {
+      if (name != "-") { haveMappedDrivers = true; break; }
+    }
+    if (!haveMappedDrivers) {
+      axisDriverNames_.fill("-");
+      for (int i = 0; i < kAxisCount; ++i) {
+        const QRegularExpression rx(QString("axis%1[^\\n,;]*driver\\s*=\\s*([A-Za-z0-9_\\-]+)").arg(i), QRegularExpression::CaseInsensitiveOption);
+        const auto m = rx.match(hwInfo);
+        if (m.hasMatch()) axisDriverNames_[i] = m.captured(1).trimmed();
+      }
     }
   }
+
 
   void applySimulationCommand(const stc_icd_cmd_t &cmd) {
     if (cmd.cmd_id == STC_CMD_TURRET) {
@@ -894,16 +953,14 @@ class DiagnosticsWindow : public QMainWindow {
     for (int i = 0; i < kAxisCount; ++i) {
       if (axisDriverNames_[i] != "-") drivers << QString("axis%1=%2").arg(i).arg(axisDriverNames_[i]);
     }
-    inventoryLabel_->setText(QString("Inventory: discovered=%1, connected=%2, SUT=%3 | drivers: %4")
-                               .arg(discoveredDevices)
+    inventoryLabel_->setText(QString("Inventory: Connected motors = %1 | %2")
                                .arg(connectedDevices)
-                               .arg(availableSut)
-                               .arg(drivers.isEmpty() ? "n/a" : drivers.join(", ")));
+                               .arg(drivers.isEmpty() ? "disabled" : drivers.join(", ")));
   }
 
   void onSimModeChanged(bool enabled) {
     for (int i = 0; i < kAxisCount; ++i) {
-      axisTable_->item(i, 4)->setText(enabled ? "SIM" : "HW");
+      axisTable_->item(i, 4)->setText(enabled ? "Simulation" : "Hardware/CAN");
     }
     if (enabled) {
       simTimer_->start();
@@ -914,7 +971,7 @@ class DiagnosticsWindow : public QMainWindow {
       appendLog("Simulation mode OFF.");
       ensureTcpConnected();
     }
-    modeLabel_->setText(QString("Server mode: %1").arg(enabled ? "SIM" : "HW"));
+    modeLabel_->setText(QString("Server mode: %1").arg(enabled ? "Simulation" : "Hardware/CAN"));
     updateCommandAvailability();
   }
 
@@ -1293,7 +1350,7 @@ class DiagnosticsWindow : public QMainWindow {
     statusLayout->setHorizontalSpacing(20);
     statusLayout->setVerticalSpacing(8);
     stateLabel_ = new QLabel("State: UNKNOWN", statusGroup);
-    modeLabel_ = new QLabel("Server mode: HW", statusGroup);
+    modeLabel_ = new QLabel("Server mode: Hardware/CAN", statusGroup);
     inventoryLabel_ = new QLabel("Inventory: discovered -, connected -, SUT -", statusGroup);
     highSeqLabel_ = new QLabel("High-rate seq: -", statusGroup);
     lowSeqLabel_ = new QLabel("Low-rate seq: -", statusGroup);

@@ -3341,11 +3341,72 @@ int main(int argc, char** argv) {
         memcpy(rsp.payload, &uptime, sizeof(uptime));
         rsp.payload_size = (uint16_t)sizeof(uptime);
       } else if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_HW_INFO) {
-        char hw_info[96];
-        snprintf(hw_info,
-                 sizeof(hw_info),
-                 "STC v%s; axis0 driver=myact_x8_25 node=1 model=X8-PRO- can=can0",
-                 STC_SW_VERSION);
+        char hw_info[STC_ICD_MAX_PAYLOAD] = {0};
+        size_t off = 0;
+        int written = snprintf(hw_info + off, sizeof(hw_info) - off, "STC_HW_INFO;");
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+
+        const char* mode = sh.simulation_mode ? "Simulation" : "Hardware/CAN";
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mode=%s;", mode);
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+
+        int connected = 0;
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+          if (sh.d.axis_available[axis]) connected++;
+        }
+        written = snprintf(hw_info + off, sizeof(hw_info) - off,
+                           "connected=%d;axis_count=%zu;",
+                           connected,
+                           (size_t)STC_AXIS_COUNT);
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+
+        const char* sep = "";
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "axis_drivers=");
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        for (size_t axis = 0; axis < STC_AXIS_COUNT && off < sizeof(hw_info); axis++) {
+          written = snprintf(hw_info + off, sizeof(hw_info) - off,
+                             "%s%zu:%s",
+                             sep,
+                             axis,
+                             axis_driver_to_string(sh.d.cfg[axis].driver));
+          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
+          off += (size_t)written;
+          sep = ",";
+        }
+        if (off < sizeof(hw_info)) hw_info[off++] = ';';
+
+        sep = "";
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "axis_connected=");
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        for (size_t axis = 0; axis < STC_AXIS_COUNT && off < sizeof(hw_info); axis++) {
+          written = snprintf(hw_info + off, sizeof(hw_info) - off,
+                             "%s%zu:%u",
+                             sep,
+                             axis,
+                             sh.d.axis_available[axis] ? 1u : 0u);
+          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
+          off += (size_t)written;
+          sep = ",";
+        }
+        if (off < sizeof(hw_info)) hw_info[off++] = ';';
+
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "turret_axes=%d,%d;", 0, 1);
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_ids=1;mirror_axes=1:0;mirror_count=1;sut_count=%d;", sh.d.sut_count);
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "motor_status_map=");
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        for (size_t axis = 0; axis < STC_AXIS_COUNT && off < sizeof(hw_info); axis++) {
+          const int status = sh.d.axis_available[axis] ? 0 : -1;
+          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d", axis == 0 ? "" : ",", status);
+          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
+          off += (size_t)written;
+        }
+        if (off < sizeof(hw_info)) hw_info[off++] = ';';
+        if (off < sizeof(hw_info)) hw_info[off] = ' ';
+
         size_t n = strnlen(hw_info, sizeof(hw_info) - 1);
         memcpy(rsp.payload, hw_info, n + 1);
         rsp.payload_size = (uint16_t)(n + 1);
