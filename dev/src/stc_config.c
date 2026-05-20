@@ -106,6 +106,27 @@ static int parse_bool(const char* value, int* out) {
   return -1;
 }
 
+static int parse_runtime_backend(const char* s, stc_runtime_backend_t* out) {
+  if (!s || !out) {
+    return -1;
+  }
+
+  if (strcasecmp(s, "can") == 0 ||
+      strcasecmp(s, "hardware") == 0 ||
+      strcasecmp(s, "hardware_can") == 0) {
+    *out = STC_RUNTIME_BACKEND_HARDWARE_CAN;
+    return 0;
+  }
+
+  if (strcasecmp(s, "sim") == 0 ||
+      strcasecmp(s, "simulator") == 0) {
+    *out = STC_RUNTIME_BACKEND_SIMULATOR;
+    return 0;
+  }
+
+  return -1;
+}
+
 static int parse_axis_driver(const char* s, stc_axis_driver_t* out) {
   if (!s || !out) return -1;
 
@@ -133,6 +154,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
 
   cfg->tcp_port = 7000;
   snprintf(cfg->backend, sizeof(cfg->backend), "%s", "simulator");
+  cfg->runtime_backend = STC_RUNTIME_BACKEND_SIMULATOR;
   snprintf(cfg->can_if, sizeof(cfg->can_if), "%s", "can0");
   cfg->primary_node_id = 1;
   cfg->primary_tx_id = 0x141; cfg->primary_rx_id = 0x241;
@@ -307,7 +329,14 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
     if (strcmp(section, "Backend") == 0) {
       bool recognized = true;
-      if (strcmp(key, "backend") == 0) { if (strlen(value) >= sizeof(cfg->backend)) goto parse_error; strcpy(cfg->backend, value); }
+      if (strcmp(key, "backend") == 0) {
+        if (parse_runtime_backend(value, &cfg->runtime_backend) != 0) {
+          STC_LOG_ERROR("%s:%d: backend selects simulator or CAN hardware only; motor driver belongs in [AxisN].driver", path, line_no);
+          fclose(f);
+          return false;
+        }
+        snprintf(cfg->backend, sizeof(cfg->backend), "%s", runtime_backend_to_string(cfg->runtime_backend));
+      }
       else if (strcmp(key, "can_if") == 0) { if (strlen(value) >= sizeof(cfg->can_if)) goto parse_error; strcpy(cfg->can_if, value); }
       else if (strcmp(key, "node_id") == 0) { if (parse_int(value, &cfg->primary_node_id) != 0) goto parse_error; }
       else if (strcmp(key, "tx_id") == 0) { if (parse_int(value, &cfg->primary_tx_id) != 0) goto parse_error; }
@@ -413,7 +442,14 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
     if (strcmp(section, "Runtime") == 0) {
       bool recognized = true;
-      if (strcmp(key, "rt_enabled") == 0) {
+      if (strcmp(key, "backend") == 0) {
+        if (parse_runtime_backend(value, &cfg->runtime_backend) != 0) {
+          STC_LOG_ERROR("%s:%d: backend selects simulator or CAN hardware only; motor driver belongs in [AxisN].driver", path, line_no);
+          fclose(f);
+          return false;
+        }
+        snprintf(cfg->backend, sizeof(cfg->backend), "%s", runtime_backend_to_string(cfg->runtime_backend));
+      } else if (strcmp(key, "rt_enabled") == 0) {
         if (parse_int(value, &cfg->rt_enabled) != 0) goto parse_error;
       } else if (strcmp(key, "rt_strict") == 0) {
         if (parse_int(value, &cfg->rt_strict) != 0) goto parse_error;
