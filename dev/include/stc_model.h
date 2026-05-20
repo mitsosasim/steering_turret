@@ -29,13 +29,18 @@ typedef enum axis_vel_raw_units_e {
   AXIS_VEL_RAW_DEG_PER_SEC = 0
 } axis_vel_raw_units_t;
 
+typedef enum stc_runtime_backend_e {
+  STC_RUNTIME_BACKEND_SIMULATOR = 0,
+  STC_RUNTIME_BACKEND_HARDWARE_CAN
+} stc_runtime_backend_t;
+
 typedef enum stc_axis_driver_e {
   STC_AXIS_DRIVER_DISABLED = 0,
   STC_AXIS_DRIVER_PD4C,
-  STC_AXIS_DRIVER_MYACT_X8_25,
-  STC_AXIS_DRIVER_SIM
+  STC_AXIS_DRIVER_MYACT_X8_25
 } stc_axis_driver_t;
 
+const char* runtime_backend_to_string(stc_runtime_backend_t backend);
 const char* axis_driver_to_string(stc_axis_driver_t driver);
 
 /** Per-axis configuration with units, limits, and protocol/driver mapping data. */

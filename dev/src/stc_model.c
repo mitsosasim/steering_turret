@@ -37,7 +37,14 @@ const char* axis_driver_to_string(stc_axis_driver_t driver) {
     case STC_AXIS_DRIVER_DISABLED: return "disabled";
     case STC_AXIS_DRIVER_PD4C: return "pd4c";
     case STC_AXIS_DRIVER_MYACT_X8_25: return "myact_x8_25";
-    case STC_AXIS_DRIVER_SIM: return "sim";
+    default: return "unknown";
+  }
+}
+
+const char* runtime_backend_to_string(stc_runtime_backend_t backend) {
+  switch (backend) {
+    case STC_RUNTIME_BACKEND_SIMULATOR: return "simulator";
+    case STC_RUNTIME_BACKEND_HARDWARE_CAN: return "hardware_can";
     default: return "unknown";
   }
 }
