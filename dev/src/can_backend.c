@@ -188,6 +188,29 @@ static void refresh_can_status(struct motion_backend* b) {
   b->snap.transport_status = 1;
 }
 
+static int axis_selected(uint32_t axes_mask, size_t axis) {
+  return (axes_mask & (1u << axis)) != 0u;
+}
+
+static int axis_ready_for_motion(const struct motion_backend* b, size_t axis) {
+  if (!b) return 0;
+  return b->axis[axis].connected && b->axis[axis].ops && axis_driver_ctx((axis_rt_t*)&b->axis[axis]);
+}
+
+static int stop_touched_axes(struct motion_backend* b, uint32_t touched_mask) {
+  if (!b) return -1;
+  int stop_rc = 0;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!axis_selected(touched_mask, axis)) continue;
+    if (!axis_ready_for_motion(b, axis)) continue;
+    if (b->axis[axis].ops->stop && b->axis[axis].ops->stop(axis_driver_ctx(&b->axis[axis])) != 0) {
+      stop_rc = -1;
+    }
+    if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) b->axis[axis].enabled = 0;
+  }
+  return stop_rc;
+}
+
 static int node_in_discovery_list(const motion_snapshot_t* snap, uint8_t node_id) {
   if (!snap || node_id == 0) return 0;
   const int discovered = (int)snap->can_discovered_devices;
@@ -505,19 +528,32 @@ int can_motion_backend_discover(motion_backend_t* backend) {
 int can_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !targets_deg) return -1;
+
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if ((axes_mask & (1u << axis)) == 0 || !b->axis[axis].connected || b->axis[axis].driver != STC_AXIS_DRIVER_PD4C) continue;
+    if (!axis_selected(axes_mask, axis)) continue;
+    if (!axis_ready_for_motion(b, axis) || b->axis[axis].driver != STC_AXIS_DRIVER_PD4C) return -1;
+  }
+
+  uint32_t touched_mask = 0u;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!axis_selected(axes_mask, axis)) continue;
     /* DS402 enable/operation mode must be active before profile-position target is sent. */
-    if (ensure_enabled(b, axis, MTR_MODE_PP) != PD4C_OK) continue;
+    if (ensure_enabled(b, axis, MTR_MODE_PP) != PD4C_OK) {
+      (void)stop_touched_axes(b, touched_mask);
+      return -1;
+    }
     int32_t target_counts = axis_deg_to_counts(&b->cfg.axis_cfg[axis], targets_deg[axis]);
     uint16_t pv = b->cfg.axis_cfg[axis].pp_profile_vel;
-    if (pd4c_pp_move(&b->axis[axis].u.pd4c.ctx, target_counts, pv, 0, b->cfg.ds402_timeout_ms) == PD4C_OK) {
-      const uint64_t tms = mono_ms();
-      b->axis[axis].last_rx_ms = tms;
-      b->axis[axis].last_cmd_ms = tms;
-      b->axis_last_cmd_pos_raw[axis] = target_counts;
-      b->axis_cmd_ack_pending[axis] = 1u;
+    if (pd4c_pp_move(&b->axis[axis].u.pd4c.ctx, target_counts, pv, 0, b->cfg.ds402_timeout_ms) != PD4C_OK) {
+      (void)stop_touched_axes(b, touched_mask);
+      return -1;
     }
+    touched_mask |= (1u << axis);
+    const uint64_t tms = mono_ms();
+    b->axis[axis].last_rx_ms = tms;
+    b->axis[axis].last_cmd_ms = tms;
+    b->axis_last_cmd_pos_raw[axis] = target_counts;
+    b->axis_cmd_ack_pending[axis] = 1u;
   }
   return 0;
 }
@@ -525,13 +561,22 @@ int can_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_ma
 int can_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !speeds_deg_s) return -1;
+
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if ((axes_mask & (1u << axis)) == 0 || !b->axis[axis].connected) continue;
+    if (!axis_selected(axes_mask, axis)) continue;
+    if (!axis_ready_for_motion(b, axis)) return -1;
+    if (b->axis[axis].driver != STC_AXIS_DRIVER_PD4C && b->axis[axis].driver != STC_AXIS_DRIVER_MYACT_X8_25) return -1;
+  }
+
+  uint32_t touched_mask = 0u;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!axis_selected(axes_mask, axis)) continue;
     if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) {
       /* Continuous speed stream relies on watchdog refresh from repeated commands. */
-      if (ensure_enabled(b, axis, MTR_MODE_PV) != PD4C_OK) continue;
-    } else if (b->axis[axis].driver != STC_AXIS_DRIVER_MYACT_X8_25) {
-      continue;
+      if (ensure_enabled(b, axis, MTR_MODE_PV) != PD4C_OK) {
+        (void)stop_touched_axes(b, touched_mask);
+        return -1;
+      }
     }
     int clipped = 0;
     int32_t tv_raw = axis_deg_s_to_target_vel_units(&b->cfg.axis_cfg[axis], speeds_deg_s[axis], &clipped);
@@ -541,13 +586,16 @@ int can_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask
     const int cmd_ok = (b->axis[axis].ops && b->axis[axis].ops->speed)
       ? (b->axis[axis].ops->speed(axis_driver_ctx(&b->axis[axis]), speed_cmd) == 0)
       : 0;
-    if (cmd_ok) {
-      const uint64_t tms = mono_ms();
-      b->axis[axis].last_rx_ms = tms;
-      b->axis[axis].last_cmd_ms = tms;
-      b->axis_last_cmd_vel_raw[axis] = tv_raw;
-      b->axis_cmd_ack_pending[axis] = 1u;
+    if (!cmd_ok) {
+      (void)stop_touched_axes(b, touched_mask);
+      return -1;
     }
+    touched_mask |= (1u << axis);
+    const uint64_t tms = mono_ms();
+    b->axis[axis].last_rx_ms = tms;
+    b->axis[axis].last_cmd_ms = tms;
+    b->axis_last_cmd_vel_raw[axis] = tv_raw;
+    b->axis_cmd_ack_pending[axis] = 1u;
   }
   return 0;
 }
