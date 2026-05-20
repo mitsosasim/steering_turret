@@ -575,6 +575,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     const uint8_t node_id = cfg->axis_node_id[axis];
+    if (!cfg->axis_enabled[axis] || cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!node_id) continue;
     b->can_socket[axis] = open_can_socket(cfg->can_if, node_id);
     if (b->can_socket[axis] < 0) {
@@ -587,6 +588,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
   }
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!cfg->axis_enabled[axis] || cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!cfg->axis_node_id[axis]) continue;
     b->snap.axis_available[axis] = 1;
     b->snap.can_connected_devices++;
@@ -598,6 +600,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
   b->snap.transport_status = 1;
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+    if (!cfg->axis_enabled[axis] || cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!cfg->axis_node_id[axis]) continue;
     (void)init_axis_feedback(b, axis);
   }
@@ -639,6 +642,7 @@ int myact_motion_backend_discover(motion_backend_t* backend) {
 
   int discovered = 0;
   for (size_t axis = 0; axis < STC_AXIS_COUNT && discovered < 16; axis++) {
+    if (!b->cfg.axis_enabled[axis] || b->cfg.axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!b->cfg.axis_node_id[axis]) continue;
     b->snap.can_discovered_nodes[discovered++] = b->cfg.axis_node_id[axis];
   }

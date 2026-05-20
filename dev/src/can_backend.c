@@ -169,7 +169,7 @@ static int compute_can_ok(const struct motion_backend* b) {
   int expected_axes = 0;
   int connected_expected_axes = 0;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if (b->cfg.axis_node_id[axis] == 0 || b->cfg.axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
+    if (!b->cfg.axis_enabled[axis] || b->cfg.axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     expected_axes++;
     if (b->axis[axis].connected) connected_expected_axes++;
   }
@@ -394,8 +394,8 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     uint8_t node_id = cfg->axis_node_id[axis];
     const stc_axis_driver_t driver = cfg->axis_cfg[axis].driver;
+    if (!cfg->axis_enabled[axis] || driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!node_id) continue;
-    if (driver == STC_AXIS_DRIVER_DISABLED) continue;
 
     if (driver == STC_AXIS_DRIVER_PD4C && !node_in_discovery_list(&b->snap, node_id)) {
       STC_LOG_WARN("Configured axis %zu node %u was not discovered as responsive; skipping connection.", axis, node_id);
