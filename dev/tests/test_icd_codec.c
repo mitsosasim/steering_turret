@@ -176,11 +176,11 @@ static void test_tlml_pack_parse(void) {
   tlm.lon = 24.456;
   tlm.alt_m = 120.0f;
   tlm.heading_deg = 270.0f;
-  for (int i = 0; i < STC_ICD_AXES_COUNT; ++i) {
+  for (size_t i = 0; i < STC_ICD_AXES_COUNT; ++i) {
     tlm.motor_status[i] = (uint8_t)i;
   }
 
-  for (int i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+  for (size_t i = 0; i < STC_ICD_LASER_COUNT; ++i) {
     tlm.laser_status[i] = (uint8_t)(0xA0u + i);
   }
   tlm.level_x = 0.1f;

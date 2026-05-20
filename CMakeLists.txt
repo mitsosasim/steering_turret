@@ -118,6 +118,16 @@ target_link_libraries(stc_state_test PRIVATE m)
 if(USE_SIMULATOR)
   target_compile_definitions(stc_state_test PRIVATE SIMULATION)
   target_link_libraries(stc_state_test PRIVATE simulator)
+else()
+  target_compile_definitions(stc_state_test PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
+  target_sources(stc_state_test PRIVATE
+    dev/src/pd4c.c
+    dev/src/x8_25.c
+    dev/src/myact_socketcan.c
+  )
 endif()
 
 add_executable(stc_diag_test
@@ -152,6 +162,17 @@ target_link_libraries(test_diag_codes PRIVATE m)
 if(USE_SIMULATOR)
   target_compile_definitions(test_diag_codes PRIVATE SIMULATION)
   target_link_libraries(test_diag_codes PRIVATE simulator)
+else()
+  target_compile_definitions(test_diag_codes PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
+  target_sources(test_diag_codes PRIVATE
+    dev/src/can_backend.c
+    dev/src/pd4c.c
+    dev/src/x8_25.c
+    dev/src/myact_socketcan.c
+  )
 endif()
 
 add_executable(test_diag_state_integration
@@ -199,6 +220,16 @@ target_link_libraries(stc_diag_test PRIVATE m)
 if(USE_SIMULATOR)
   target_compile_definitions(stc_diag_test PRIVATE SIMULATION)
   target_link_libraries(stc_diag_test PRIVATE simulator)
+else()
+  target_compile_definitions(stc_diag_test PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
+  target_sources(stc_diag_test PRIVATE
+    dev/src/pd4c.c
+    dev/src/x8_25.c
+    dev/src/myact_socketcan.c
+  )
 endif()
 target_include_directories(test_diag_state_integration PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(test_diag_state_integration PRIVATE -Wall -Wextra)
@@ -206,6 +237,17 @@ target_link_libraries(test_diag_state_integration PRIVATE m)
 if(USE_SIMULATOR)
   target_compile_definitions(test_diag_state_integration PRIVATE SIMULATION)
   target_link_libraries(test_diag_state_integration PRIVATE simulator)
+else()
+  target_compile_definitions(test_diag_state_integration PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
+  target_sources(test_diag_state_integration PRIVATE
+    dev/src/can_backend.c
+    dev/src/pd4c.c
+    dev/src/x8_25.c
+    dev/src/myact_socketcan.c
+  )
 endif()
 
 
@@ -249,6 +291,7 @@ add_executable(test_can_worker_concurrency
   dev/src/stc_faults.c
   dev/src/stc_diag.c
   dev/src/motion_backend_router.c
+  dev/src/stc_axis_cfg_map.c
   dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
@@ -262,6 +305,16 @@ target_link_libraries(test_can_worker_concurrency PRIVATE pthread m)
 if(USE_SIMULATOR)
   target_compile_definitions(test_can_worker_concurrency PRIVATE SIMULATION)
   target_link_libraries(test_can_worker_concurrency PRIVATE simulator)
+else()
+  target_compile_definitions(test_can_worker_concurrency PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
+  target_sources(test_can_worker_concurrency PRIVATE
+    dev/src/can_backend.c
+    dev/src/x8_25.c
+    dev/src/myact_socketcan.c
+  )
 endif()
 
 add_executable(test_can_worker_concurrency_tsan
@@ -277,6 +330,7 @@ add_executable(test_can_worker_concurrency_tsan
   dev/src/stc_faults.c
   dev/src/stc_diag.c
   dev/src/motion_backend_router.c
+  dev/src/stc_axis_cfg_map.c
   dev/src/pd4c_backend.c
   dev/src/myact_backend.c
 )
@@ -291,6 +345,16 @@ target_link_libraries(test_can_worker_concurrency_tsan PRIVATE pthread m)
 if(USE_SIMULATOR)
   target_compile_definitions(test_can_worker_concurrency_tsan PRIVATE SIMULATION)
   target_link_libraries(test_can_worker_concurrency_tsan PRIVATE simulator)
+else()
+  target_compile_definitions(test_can_worker_concurrency_tsan PRIVATE
+    _DEFAULT_SOURCE
+    _POSIX_C_SOURCE=200809L
+  )
+  target_sources(test_can_worker_concurrency_tsan PRIVATE
+    dev/src/can_backend.c
+    dev/src/x8_25.c
+    dev/src/myact_socketcan.c
+  )
 endif()
 
 

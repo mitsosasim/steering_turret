@@ -154,7 +154,7 @@ static uint64_t mono_ms(void) {
 }
 
 static int ensure_enabled(struct motion_backend* b, size_t axis, mtr_mode_t mode) {
-  if (b->axis[axis].enabled && b->axis[axis].u.pd4c.mode == mode) return PD4C_OK;
+  if (b->axis[axis].enabled && (mtr_mode_t)b->axis[axis].u.pd4c.mode == mode) return PD4C_OK;
   int rc = pd4c_ds402_enable_operation(&b->axis[axis].u.pd4c.ctx, (int8_t)mode, b->cfg.ds402_timeout_ms);
   if (rc == PD4C_OK) {
     b->axis[axis].last_rx_ms = mono_ms();
