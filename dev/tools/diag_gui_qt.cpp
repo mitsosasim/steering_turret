@@ -213,14 +213,6 @@ class DiagnosticsWindow : public QMainWindow {
       updateTcpStatusLabel();
       ensureTcpConnected();
     });
-    connect(clearErrorsButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendClearErrors);
-    connect(sendTargetButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendTargetPosition);
-    connect(jogPosButton_, &QPushButton::clicked, this, [this]() { sendRelativeStep(+1.0); });
-    connect(jogNegButton_, &QPushButton::clicked, this, [this]() { sendRelativeStep(-1.0); });
-    connect(jogSpeedPosButton_, &QPushButton::clicked, this, [this]() { sendJogSpeed(+1.0); });
-    connect(jogSpeedNegButton_, &QPushButton::clicked, this, [this]() { sendJogSpeed(-1.0); });
-    connect(holdEnableButton_, &QPushButton::clicked, this, &DiagnosticsWindow::toggleHoldEnable);
-    connect(estopButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendStopEstop);
     connect(safeButton_, &QPushButton::clicked, this, [this]() { sendStateControl(2, "SAFE state sent"); });
     connect(operButton_, &QPushButton::clicked, this, [this]() { sendStateControl(3, "OPER state sent"); });
     connect(resetStateButton_, &QPushButton::clicked, this, [this]() { sendStateControl(0xFF, "FAIL reset/RESET state sent"); });
@@ -280,7 +272,7 @@ class DiagnosticsWindow : public QMainWindow {
   void makeHeader(stc_icd_cmd_t *cmd) {
     std::memcpy(cmd->magic, cfg_.cmd_magic, sizeof(cmd->magic));
     cmd->version = cfg_.protocol_version_default;
-    cmd->controller_id = static_cast<uint8_t>(controllerIdSpin_->value());
+    cmd->controller_id = 11;
     cmd->seq = nextSeq_++;
     cmd->timestamp_ms = static_cast<uint64_t>(QDateTime::currentMSecsSinceEpoch());
   }
@@ -679,48 +671,6 @@ class DiagnosticsWindow : public QMainWindow {
     }
   }
 
-  void sendClearErrors() {
-    if (simModeBox_->isChecked()) {
-      appendLog("Simulation mode: clear errors skipped.");
-      return;
-    }
-    if (!tcpConnected_) {
-      appendLog("Clear errors not sent: CU TCP link is disconnected.");
-      ensureTcpConnected();
-      return;
-    }
-
-    stc_icd_cmd_t cmd{};
-    std::memcpy(cmd.magic, cfg_.cmd_magic, sizeof(cmd.magic));
-    cmd.version = cfg_.protocol_version_default;
-    cmd.controller_id = static_cast<uint8_t>(controllerIdSpin_->value());
-    cmd.cmd_id = STC_CMD_DELLOG;
-    cmd.seq = nextSeq_++;
-    cmd.timestamp_ms = static_cast<uint64_t>(QDateTime::currentMSecsSinceEpoch());
-    cmd.payload_size = 0;
-
-    uint8_t packet[20 + STC_ICD_MAX_PAYLOAD]{};
-    size_t packetLen = 0;
-    if (stc_icd_cmd_pack(&cfg_, &cmd, packet, sizeof(packet), &packetLen) != STC_ICD_OK) {
-      QMessageBox::warning(this, "Serialize error", "Failed to encode clear-errors command.");
-      return;
-    }
-
-    pendingCommands_.insert(cmd.seq, commandName(cmd.cmd_id));
-    const qint64 wrote = tcpSocket_->write(reinterpret_cast<const char*>(packet), static_cast<qint64>(packetLen));
-    if (wrote != static_cast<qint64>(packetLen)) {
-      appendLog(QString("TCP write failed: %1").arg(tcpSocket_->errorString()));
-      pendingCommands_.remove(cmd.seq);
-      return;
-    }
-
-    appendLog(QString("Command sent: name=%1 id=0x%2 seq=%3 payload=%4B frame=%5B")
-                .arg(commandName(cmd.cmd_id))
-                .arg(cmd.cmd_id, 4, 16, QChar('0'))
-                .arg(cmd.seq)
-                .arg(cmd.payload_size)
-                .arg(packetLen));
-  }
 
   void sendCommand() {
     if (!sendButton_->isEnabled()) {
@@ -813,25 +763,6 @@ class DiagnosticsWindow : public QMainWindow {
     return true;
   }
 
-  void sendTargetPosition() { sendTurretMotion(STC_MOTION_ABSOLUTE, targetPosSpin_->value(), 0.0f, "Target position command sent"); }
-  void sendRelativeStep(double sign) { sendTurretMotion(STC_MOTION_RELATIVE, sign * relativeStepSpin_->value(), 0.0f, "Relative jog command sent"); }
-  void sendJogSpeed(double sign) { sendTurretMotion(STC_MOTION_SPEED, sign * jogSpeedSpin_->value(), 0.0f, "Jog speed command sent"); }
-  void sendStopEstop() {
-    sendTurretMotion(STC_MOTION_SPEED, 0.0, 0.0, "STOP/E-STOP speed zero sent");
-    stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_CU_STATE; cmd.u.cu_state.state = 2; cmd.payload_size = 1;
-    sendPackedCommand(cmd, "STOP/E-STOP state SAFE sent");
-  }
-  void toggleHoldEnable() {
-    holdEnabled_ = !holdEnabled_;
-    holdEnableButton_->setText(holdEnabled_ ? "Hold/Enable: ENABLED" : "Hold/Enable: HOLD");
-    stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_CU_STATE; cmd.u.cu_state.state = holdEnabled_ ? 3 : 2; cmd.payload_size = 1;
-    sendPackedCommand(cmd, holdEnabled_ ? "Enable (OPER) sent" : "Hold (SAFE) sent");
-  }
-
-  void sendTurretMotion(uint8_t motionType, double az, double el, const QString &label) {
-    stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_TURRET; cmd.u.turret.motion_type = motionType; cmd.u.turret.az = static_cast<float>(az); cmd.u.turret.el = static_cast<float>(el); cmd.payload_size = 9;
-    sendPackedCommand(cmd, label);
-  }
 
   void processHighTelemetry() {
     while (udpHigh_->hasPendingDatagrams()) {
@@ -896,7 +827,6 @@ class DiagnosticsWindow : public QMainWindow {
       haveLowTelemetry_ = true;
       lastLowTelemetryMs_ = QDateTime::currentMSecsSinceEpoch();
       updateAxisStatusColumn();
-      updateMotionControlsEnabled();
     }
   }
 
@@ -1254,16 +1184,6 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
 
-  void updateMotionControlsEnabled() {
-    const bool oper = currentState_ == 3;
-    for (QWidget *w : {static_cast<QWidget*>(targetPosSpin_), static_cast<QWidget*>(relativeStepSpin_), static_cast<QWidget*>(jogSpeedSpin_),
-                       static_cast<QWidget*>(sendTargetButton_), static_cast<QWidget*>(jogPosButton_), static_cast<QWidget*>(jogNegButton_),
-                       static_cast<QWidget*>(jogSpeedPosButton_), static_cast<QWidget*>(jogSpeedNegButton_), static_cast<QWidget*>(holdEnableButton_),
-                       static_cast<QWidget*>(estopButton_)}) {
-      if (w) w->setEnabled(oper);
-    }
-  }
-
   void sendStateControl(uint8_t state, const QString &label) {
     stc_icd_cmd_t cmd{}; makeHeader(&cmd); cmd.payload_decoded = 1; cmd.cmd_id = STC_CMD_CU_STATE; cmd.u.cu_state.state = state; cmd.payload_size = 1;
     sendPackedCommand(cmd, label);
@@ -1310,11 +1230,6 @@ class DiagnosticsWindow : public QMainWindow {
     portSpin_->setValue(kDefaultControlPort);
     portSpin_->setMaximumWidth(kInputWidth);
 
-    controllerIdSpin_ = new QSpinBox(cmdGroup);
-    controllerIdSpin_->setRange(0, 255);
-    controllerIdSpin_->setValue(11);
-    controllerIdSpin_->setMaximumWidth(kInputWidth);
-
     commandBox_ = new QComboBox(cmdGroup);
     for (const auto &spec : kCommandSpecs) {
       commandBox_->addItem(spec.label, static_cast<int>(spec.ui));
@@ -1333,8 +1248,7 @@ class DiagnosticsWindow : public QMainWindow {
     sendButton_ = new QPushButton("Send", cmdGroup);
     reconnectButton_ = new QPushButton("Reconnect CU link", cmdGroup);
     canBringupButton_ = new QPushButton("Developer: rediscover/connect CAN devices", cmdGroup);
-    clearErrorsButton_ = new QPushButton("Clear motor faults (DELLOG)", cmdGroup);
-    for (QPushButton *button : {sendButton_, reconnectButton_, canBringupButton_, clearErrorsButton_}) {
+    for (QPushButton *button : {sendButton_, reconnectButton_, canBringupButton_}) {
       button->setMaximumWidth(kButtonWidth);
       button->setMinimumHeight(kButtonHeight);
       button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -1353,32 +1267,15 @@ class DiagnosticsWindow : public QMainWindow {
     cmdForm->addRow("Control Port", portSpin_);
     cmdForm->addRow("TLM high UDP", tlmHighPortSpin_);
     cmdForm->addRow("TLM low UDP", tlmLowPortSpin_);
-    cmdForm->addRow("Controller ID", controllerIdSpin_);
     simModeBox_ = new QCheckBox("Simulation mode", cmdGroup);
     cmdForm->addRow(simModeBox_);
     cmdForm->addRow("Command", commandBox_);
     cmdForm->addRow("Payload", payloadStack_);
     cmdForm->addRow(sendButton_);
-    cmdForm->addRow(new QLabel("Operator path (server-facing: turret/application commands)", cmdGroup));
-    targetPosSpin_ = new QDoubleSpinBox(cmdGroup); targetPosSpin_->setRange(-720.0,720.0); targetPosSpin_->setDecimals(3);
-    relativeStepSpin_ = new QDoubleSpinBox(cmdGroup); relativeStepSpin_->setRange(0.001,180.0); relativeStepSpin_->setValue(1.0); relativeStepSpin_->setDecimals(3);
-    jogSpeedSpin_ = new QDoubleSpinBox(cmdGroup); jogSpeedSpin_->setRange(0.001,360.0); jogSpeedSpin_->setValue(5.0); jogSpeedSpin_->setDecimals(3);
-    sendTargetButton_ = new QPushButton("Send Target Position", cmdGroup);
-    jogPosButton_ = new QPushButton("Jog +Step", cmdGroup); jogNegButton_ = new QPushButton("Jog -Step", cmdGroup);
-    jogSpeedPosButton_ = new QPushButton("Jog +Speed", cmdGroup); jogSpeedNegButton_ = new QPushButton("Jog -Speed", cmdGroup);
-    holdEnableButton_ = new QPushButton("Hold/Enable: HOLD", cmdGroup); estopButton_ = new QPushButton("STOP / E-STOP", cmdGroup);
-    safeButton_ = new QPushButton("SAFE", cmdGroup);
-    operButton_ = new QPushButton("OPER", cmdGroup);
-    resetStateButton_ = new QPushButton("FAIL reset / RESET", cmdGroup);
-    cmdForm->addRow("Target position (deg)", targetPosSpin_); cmdForm->addRow(sendTargetButton_);
-    cmdForm->addRow("Relative step (deg)", relativeStepSpin_); cmdForm->addRow(jogPosButton_, jogNegButton_);
-    cmdForm->addRow("Jog speed (deg/s)", jogSpeedSpin_); cmdForm->addRow(jogSpeedPosButton_, jogSpeedNegButton_);
-    cmdForm->addRow(holdEnableButton_); cmdForm->addRow(estopButton_);
     cmdForm->addRow(safeButton_, operButton_);
     cmdForm->addRow(resetStateButton_);
     cmdForm->addRow(reconnectButton_);
     cmdForm->addRow(canBringupButton_);
-    cmdForm->addRow(clearErrorsButton_);
     leftColumnLayout->addWidget(cmdGroup);
 
     auto *statusGroup = new QGroupBox("Status", leftColumn);
@@ -1463,7 +1360,7 @@ class DiagnosticsWindow : public QMainWindow {
         break;
       case UiCommand::Turret:
         turretTypeBox_ = new QComboBox(w);
-        turretTypeBox_->addItem("Relative", 0);
+        turretTypeBox_->addItem("Incremental", 0);
         turretTypeBox_->addItem("Absolute", 1);
         turretTypeBox_->addItem("Speed", 2);
         turretAzSpin_ = new QDoubleSpinBox(w);
@@ -1487,7 +1384,7 @@ class DiagnosticsWindow : public QMainWindow {
         mirrorIdBox_->addItem("All", 0xFF);
         for (int id = 1; id <= 8; ++id) mirrorIdBox_->addItem(QString::number(id), id);
         mirrorTypeBox_ = new QComboBox(w);
-        mirrorTypeBox_->addItem("Relative", 0);
+        mirrorTypeBox_->addItem("Incremental", 0);
         mirrorTypeBox_->addItem("Absolute", 1);
         mirrorTypeBox_->addItem("Speed", 2);
         mirrorElevationSpin_ = new QDoubleSpinBox(w);
@@ -1508,7 +1405,7 @@ class DiagnosticsWindow : public QMainWindow {
         sutIdBox_->addItem("All", 0xFF);
         for (int id = 1; id <= 8; ++id) sutIdBox_->addItem(QString::number(id), id);
         sutTypeBox_ = new QComboBox(w);
-        sutTypeBox_->addItem("Relative", 0);
+        sutTypeBox_->addItem("Incremental", 0);
         sutTypeBox_->addItem("Absolute", 1);
         sutTypeBox_->addItem("Speed", 2);
         sutAzSpin_ = new QDoubleSpinBox(w);
@@ -1596,7 +1493,6 @@ class DiagnosticsWindow : public QMainWindow {
     lastHighTelemetryMs_ = -1;
     lastLowTelemetryMs_ = -1;
     updateAxisStatusColumn();
-    updateMotionControlsEnabled();
   }
 
   void appendLog(const QString &line) {
@@ -1618,26 +1514,14 @@ class DiagnosticsWindow : public QMainWindow {
 
   QComboBox *serverIpBox_{};
   QSpinBox *portSpin_{};
-  QSpinBox *controllerIdSpin_{};
   QComboBox *commandBox_{};
   QStackedWidget *payloadStack_{};
   QPushButton *sendButton_{};
   QPushButton *reconnectButton_{};
   QPushButton *canBringupButton_{};
-  QPushButton *clearErrorsButton_{};
-  QPushButton *sendTargetButton_{};
-  QPushButton *jogPosButton_{};
-  QPushButton *jogNegButton_{};
-  QPushButton *jogSpeedPosButton_{};
-  QPushButton *jogSpeedNegButton_{};
-  QPushButton *holdEnableButton_{};
-  QPushButton *estopButton_{};
   QPushButton *safeButton_{};
   QPushButton *operButton_{};
   QPushButton *resetStateButton_{};
-  QDoubleSpinBox *targetPosSpin_{};
-  QDoubleSpinBox *relativeStepSpin_{};
-  QDoubleSpinBox *jogSpeedSpin_{};
 
   QComboBox *cuStateBox_{};
   QComboBox *selfLevActionBox_{};
@@ -1682,7 +1566,6 @@ class DiagnosticsWindow : public QMainWindow {
   stc_icd_cfg_t cfg_{};
   uint16_t nextSeq_ = 1;
   uint8_t currentState_ = 0;
-  bool holdEnabled_ = false;
   bool tcpConnected_ = false;
   bool startupCapabilityCheckDone_ = false;
   QByteArray rspBuffer_;
