@@ -50,6 +50,7 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <cstdio>
 #include <vector>
 
 #ifdef __linux__
@@ -255,9 +256,11 @@ class DiagnosticsWindow : public QMainWindow {
     diagPollTimer_->setInterval(1000);
     connect(diagPollTimer_, &QTimer::timeout, this, &DiagnosticsWindow::refreshBackendDiagnostics);
 
+    appendLog("GUI startup: initializing telemetry sockets and timers.");
     bindTelemetrySockets();
     connectTimer_->start();
     diagPollTimer_->start();
+    appendLog("GUI startup: TCP auto-connect and diagnostics polling timers started.");
 
     simTimer_ = new QTimer(this);
     simTimer_->setInterval(20);
@@ -421,10 +424,14 @@ class DiagnosticsWindow : public QMainWindow {
 
     const auto flags = QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint;
     if (!udpHigh_->bind(QHostAddress::AnyIPv4, highPort, flags)) {
-      appendLog(QString("Failed binding high telemetry socket on %1: %2").arg(highPort).arg(udpHigh_->errorString()));
+      appendLog(QString("UDP TLMH bind failed on %1: %2").arg(highPort).arg(udpHigh_->errorString()));
+    } else {
+      appendLog(QString("UDP TLMH bound on 0.0.0.0:%1").arg(highPort));
     }
     if (!udpLow_->bind(QHostAddress::AnyIPv4, lowPort, flags)) {
-      appendLog(QString("Failed binding low telemetry socket on %1: %2").arg(lowPort).arg(udpLow_->errorString()));
+      appendLog(QString("UDP TLML bind failed on %1: %2").arg(lowPort).arg(udpLow_->errorString()));
+    } else {
+      appendLog(QString("UDP TLML bound on 0.0.0.0:%1").arg(lowPort));
     }
 
   }
@@ -446,7 +453,9 @@ class DiagnosticsWindow : public QMainWindow {
     }
     const QString host = serverIpBox_->currentText().trimmed();
     if (host.isEmpty()) return;
-    tcpSocket_->connectToHost(host, static_cast<quint16>(portSpin_->value()));
+    const quint16 port = static_cast<quint16>(portSpin_->value());
+    appendLog(QString("TCP connect attempt to %1:%2").arg(host).arg(port));
+    tcpSocket_->connectToHost(host, port);
   }
 
   void onTcpConnected() {
@@ -458,7 +467,7 @@ class DiagnosticsWindow : public QMainWindow {
   void onTcpDisconnected() {
     tcpConnected_ = false;
     updateTcpStatusLabel();
-    appendLog("CU TCP disconnected.");
+    appendLog("CU TCP disconnected; reconnect timer will retry.");
   }
 
   void onTcpError(QAbstractSocket::SocketError) {
@@ -499,7 +508,15 @@ class DiagnosticsWindow : public QMainWindow {
       const QString sentText = pendingCommands_.contains(rsp.seq)
                                 ? pendingCommands_.take(rsp.seq)
                                 : QString("cmd=0x%1").arg(rsp.cmd_id, 4, 16, QChar('0'));
-      appendLog(QString("%1 seq=%2 (%3)").arg(ack ? "ACK" : "NACK").arg(rsp.seq).arg(sentText));
+      appendLog(QString("%1 received: cmd=%2 (0x%3) seq=%4 err=%5 (%6) payload=%7B (%8)")
+                .arg(ack ? "ACK" : "NACK")
+                .arg(commandName(rsp.cmd_id))
+                .arg(rsp.cmd_id, 4, 16, QChar('0'))
+                .arg(rsp.seq)
+                .arg(rsp.err_code)
+                .arg(errText)
+                .arg(rsp.payload_size)
+                .arg(sentText));
 
       if (ack && rsp.cmd_id == STC_CMD_REQ_HW_INFO && rsp.payload_size > 0) {
         const QString hwInfo = QString::fromUtf8(reinterpret_cast<const char*>(rsp.payload), rsp.payload_size).trimmed();
@@ -639,9 +656,12 @@ class DiagnosticsWindow : public QMainWindow {
       return;
     }
 
-    appendLog(QString("Sent clear-errors command id=0x%1 seq=%2")
+    appendLog(QString("Command sent: name=%1 id=0x%2 seq=%3 payload=%4B frame=%5B")
+                .arg(commandName(cmd.cmd_id))
                 .arg(cmd.cmd_id, 4, 16, QChar('0'))
-                .arg(cmd.seq));
+                .arg(cmd.seq)
+                .arg(cmd.payload_size)
+                .arg(packetLen));
   }
 
   void sendCommand() {
@@ -685,10 +705,11 @@ class DiagnosticsWindow : public QMainWindow {
       return;
     }
 
-    appendLog(QString("Sent command %1 id=0x%2 seq=%3 bytes=%4")
+    appendLog(QString("Command sent: name=%1 id=0x%2 seq=%3 payload=%4B frame=%5B")
                 .arg(commandName(cmd.cmd_id))
                 .arg(cmd.cmd_id, 4, 16, QChar('0'))
                 .arg(cmd.seq)
+                .arg(cmd.payload_size)
                 .arg(packetLen));
   }
 
@@ -701,7 +722,13 @@ class DiagnosticsWindow : public QMainWindow {
     pendingCommands_.insert(cmd.seq, commandName(cmd.cmd_id));
     const qint64 wrote = tcpSocket_->write(reinterpret_cast<const char*>(packet), static_cast<qint64>(packetLen));
     if (wrote != static_cast<qint64>(packetLen)) { pendingCommands_.remove(cmd.seq); return false; }
-    appendLog(QString("%1 seq=%2").arg(label).arg(cmd.seq));
+    appendLog(QString("Command sent: name=%1 id=0x%2 seq=%3 payload=%4B frame=%5B (%6)")
+              .arg(commandName(cmd.cmd_id))
+              .arg(cmd.cmd_id, 4, 16, QChar('0'))
+              .arg(cmd.seq)
+              .arg(cmd.payload_size)
+              .arg(packetLen)
+              .arg(label));
     return true;
   }
 
@@ -732,7 +759,7 @@ class DiagnosticsWindow : public QMainWindow {
       udpHigh_->readDatagram(packet.data(), packet.size());
       stc_tlmh_t tlm{};
       if (stc_icd_tlmh_parse(&cfg_, reinterpret_cast<const uint8_t*>(packet.constData()), static_cast<size_t>(packet.size()), &tlm) != STC_ICD_OK) {
-        appendLog("Dropped malformed TLMH datagram.");
+        appendLog(QString("Telemetry parse error: malformed TLMH datagram size=%1B").arg(packet.size()));
         continue;
       }
       for (int i = 0; i < kAxisCount; ++i) {
@@ -767,7 +794,7 @@ class DiagnosticsWindow : public QMainWindow {
       udpLow_->readDatagram(packet.data(), packet.size());
       stc_tlml_t tlm{};
       if (stc_icd_tlml_parse(&cfg_, reinterpret_cast<const uint8_t*>(packet.constData()), static_cast<size_t>(packet.size()), &tlm) != STC_ICD_OK) {
-        appendLog("Dropped malformed TLML datagram.");
+        appendLog(QString("Telemetry parse error: malformed TLML datagram size=%1B").arg(packet.size()));
         continue;
       }
       stateLabel_->setText(QString("State: %1").arg(stateToString(tlm.state)));
@@ -1508,9 +1535,13 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void appendLog(const QString &line) {
-    logEdit_->appendPlainText(QString("[%1] %2")
-                                .arg(QTime::currentTime().toString("HH:mm:ss.zzz"))
-                                .arg(line));
+    const QString stamped = QString("[%1] %2")
+                              .arg(QTime::currentTime().toString("HH:mm:ss.zzz"))
+                              .arg(line);
+    logEdit_->appendPlainText(stamped);
+    const QByteArray utf8 = (stamped + "\n").toUtf8();
+    std::fwrite(utf8.constData(), 1, static_cast<size_t>(utf8.size()), stderr);
+    std::fflush(stderr);
   }
 
   QTcpSocket *tcpSocket_{};
