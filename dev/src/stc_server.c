@@ -2235,6 +2235,11 @@ static int config_has_enabled_driver(const stc_config_t* cfg, stc_axis_driver_t 
   return 0;
 }
 
+static int config_has_enabled_hardware_axis(const stc_config_t* cfg) {
+  return config_has_enabled_driver(cfg, STC_AXIS_DRIVER_PD4C) ||
+         config_has_enabled_driver(cfg, STC_AXIS_DRIVER_MYACT_X8_25);
+}
+
 static const char* axis_protocol_from_driver(stc_axis_driver_t driver) {
   switch (driver) {
     case STC_AXIS_DRIVER_PD4C: return "canopen_ds402";
@@ -2652,6 +2657,27 @@ int main(int argc, char** argv) {
 
   if (cli_backend_override) {
     snprintf(parsed_cfg.backend, sizeof(parsed_cfg.backend), "%s", cli_backend_override);
+    parsed_cfg.runtime_backend_explicitly_set = 1;
+  }
+
+  if (parse_runtime_backend(parsed_cfg.backend, &parsed_cfg.runtime_backend) != 0) {
+    STC_LOG_ERROR("invalid backend='%s' (expected simulator|sim|hardware|can)", parsed_cfg.backend);
+    exit_code = 1;
+    goto cleanup;
+  }
+  if (parsed_cfg.runtime_backend == STC_RUNTIME_BACKEND_SIMULATOR &&
+      config_has_enabled_hardware_axis(&parsed_cfg) &&
+      !parsed_cfg.runtime_backend_explicitly_set) {
+    parsed_cfg.runtime_backend = STC_RUNTIME_BACKEND_HARDWARE_CAN;
+    snprintf(parsed_cfg.backend, sizeof(parsed_cfg.backend), "%s",
+             runtime_backend_to_string(parsed_cfg.runtime_backend));
+  }
+  if (parsed_cfg.runtime_backend == STC_RUNTIME_BACKEND_SIMULATOR &&
+      config_has_enabled_hardware_axis(&parsed_cfg) &&
+      parsed_cfg.runtime_backend_explicitly_set) {
+    STC_LOG_ERROR("simulator backend requested but config contains enabled hardware axes; disable axes or use backend=can");
+    exit_code = 1;
+    goto cleanup;
   }
 
   char binary_hint[PATH_MAX];
@@ -2690,7 +2716,7 @@ int main(int argc, char** argv) {
   actionq_init(&q);
 
   if (select_runtime_backend(&parsed_cfg, &parsed_cfg.runtime_backend) != 0) {
-    STC_LOG_ERROR("failed to select motion backend (requested=%s)", parsed_cfg.backend);
+    STC_LOG_ERROR("failed to select motion backend");
     exit_code = 1;
     goto cleanup;
   }

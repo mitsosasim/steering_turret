@@ -33,6 +33,7 @@ typedef struct stc_config_s {
   int tcp_port;
   char backend[32];
   stc_runtime_backend_t runtime_backend;
+  int runtime_backend_explicitly_set;
   char can_if[16];
   int primary_node_id;
   int primary_tx_id;
