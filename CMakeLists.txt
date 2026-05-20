@@ -106,8 +106,10 @@ add_executable(stc_state_test
   dev/src/stc_diag.c
   dev/src/stc_log.c
   dev/src/motion_backend_router.c
+  dev/src/can_backend.c
   dev/src/pd4c_backend.c
   dev/src/myact_backend.c
+  dev/src/stc_limits.c
 )
 
 target_include_directories(stc_state_test PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
@@ -124,6 +126,7 @@ add_executable(stc_diag_test
   dev/src/stc_diag.c
   dev/src/stc_log.c
   dev/src/motion_backend_router.c
+  dev/src/can_backend.c
   dev/src/pd4c_backend.c
   dev/src/myact_backend.c
   dev/src/stc_axis_cfg_map.c
@@ -160,6 +163,7 @@ add_executable(test_diag_state_integration
   dev/src/motion_backend_router.c
   dev/src/pd4c_backend.c
   dev/src/myact_backend.c
+  dev/src/stc_limits.c
 )
 
 add_executable(test_icd_codec
