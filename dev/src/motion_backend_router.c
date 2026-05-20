@@ -42,6 +42,7 @@ int can_motion_backend_start(const motion_backend_cfg_t*, motion_backend_t**);
 void can_motion_backend_stop(motion_backend_t*);
 int can_motion_backend_discover(motion_backend_t*);
 int can_motion_backend_apply_pp_move(motion_backend_t*, uint32_t, const double[STC_AXIS_COUNT]);
+__attribute__((weak)) int can_motion_backend_apply_motion(motion_backend_t*, uint32_t, const stc_axis_motion_kind_t[STC_AXIS_COUNT], const double[STC_AXIS_COUNT], const double[STC_AXIS_COUNT]);
 int can_motion_backend_apply_speed(motion_backend_t*, uint32_t, const double[STC_AXIS_COUNT]);
 int can_motion_backend_quick_stop(motion_backend_t*, uint32_t);
 int can_motion_backend_clear_faults(motion_backend_t*, uint32_t);
@@ -108,7 +109,10 @@ void motion_backend_stop(motion_backend_t* b){
 int motion_backend_discover(motion_backend_t* b){ (void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_discover(g_backend.impl); if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) return can_motion_backend_discover(g_backend.impl); STC_LOG_ERROR("motion_backend_discover: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_apply_pp_move(motion_backend_t* b,uint32_t m,const double t[STC_AXIS_COUNT]){ (void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_apply_pp_move(g_backend.impl,m,t); if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) return can_motion_backend_apply_pp_move(g_backend.impl,m,t); STC_LOG_ERROR("motion_backend_apply_pp_move: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_apply_motion(motion_backend_t* b,uint32_t m,const stc_axis_motion_kind_t k[STC_AXIS_COUNT],const double v[STC_AXIS_COUNT],const double s[STC_AXIS_COUNT]){
-  (void)b; (void)s;
+  (void)b;
+  if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN && can_motion_backend_apply_motion) {
+    return can_motion_backend_apply_motion(g_backend.impl, m, k, v, s);
+  }
   motion_snapshot_t snap;
   if(motion_backend_get_snapshot(g_backend.impl, &snap) != 0) return -1;
 
