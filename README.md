@@ -258,6 +258,38 @@ Telemetry logs:
 
 ```bash
 ./build/tlm_rx_udp 6010 --verbose \
+
+## Runtime backend vs axis motor driver
+
+The server has two layers:
+
+1. Runtime backend:
+   - `simulator`: no real hardware
+   - `hardware_can` / `can`: real CAN bus
+
+2. Per-axis motor driver:
+   - `pd4c`: Nanotec PD4-C CANopen/DS402
+   - `myact_x8_25`: MYACTUATOR X8 protocol
+   - `disabled`: unmapped axis
+
+`--backend can` means “use real CAN hardware.” It does not mean PD4C.
+The actual motor library and command semantics are selected per axis in `[AxisN].driver`.
+
+Mixed example:
+
+```ini
+[Axis0]
+enabled=true
+driver=pd4c
+node_id=1
+role=turret_az
+
+[Axis1]
+enabled=true
+driver=myact_x8_25
+node_id=2
+role=mirror1
+```
   2>&1 | tee "logs/server/tlmh_$(date +%F_%H%M%S).log"
 ./build/tlm_rx_udp 6020 --verbose \
   2>&1 | tee "logs/server/tlml_$(date +%F_%H%M%S).log"
