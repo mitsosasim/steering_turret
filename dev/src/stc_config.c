@@ -204,7 +204,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
 
   for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
     cfg->axis_enabled[i] = 0;
-    cfg->axis_driver[i] = STC_AXIS_DRIVER_DISABLED;
+    cfg->axis_driver[i] = STC_AXIS_DRIVER_PD4C;
     cfg->axis_node_id[i] = 0;
     cfg->axis_command_sign[i] = 1.0;
     cfg->axis_telemetry_sign[i] = 1.0;
@@ -687,10 +687,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
       return false;
     }
     if (cfg->axis_enabled[i]) {
-      if (cfg->axis_driver[i] == STC_AXIS_DRIVER_DISABLED) {
-        STC_LOG_ERROR("%s: Axis%d enabled but driver is missing", path, i);
-        return false;
-      }
       if (cfg->axis_driver[i] != STC_AXIS_DRIVER_PD4C && cfg->axis_driver[i] != STC_AXIS_DRIVER_MYACT_X8_25) {
         STC_LOG_ERROR("%s: axis %d is enabled but has invalid driver", path, i);
         return false;

@@ -97,15 +97,19 @@ static int pd4c_axis_speed(void* driver_ctx, double speed_deg_s) {
 
 static int myact_axis_init(void* driver_ctx, const stc_axis_cfg_t* cfg) { (void)driver_ctx; (void)cfg; return MYACT_OK; }
 static int myact_axis_poll(void* driver_ctx, stc_axis_telem_t* out) { (void)out; return myact_poll((myact_ctx_t*)driver_ctx, 0); }
-static int myact_axis_stop(void* driver_ctx) { return myact_stop_send((myact_ctx_t*)driver_ctx); }
+static int myact_axis_stop(void* driver_ctx) { return myact_stop((myact_ctx_t*)driver_ctx); }
 static int myact_axis_shutdown(void* driver_ctx) { return myact_shutdown_send((myact_ctx_t*)driver_ctx); }
 static int myact_axis_move_abs(void* driver_ctx, double target_deg, double speed_deg_s) {
-  return myact_position_abs_deg_send_raw((myact_ctx_t*)driver_ctx, target_deg, (uint16_t)llround(speed_deg_s));
+  myact_basic_feedback_t fb;
+  return myact_position_abs((myact_ctx_t*)driver_ctx, (uint16_t)llround(speed_deg_s), myact_deg_to_raw_0p01(target_deg), &fb);
 }
 static int myact_axis_move_rel(void* driver_ctx, double delta_deg, double speed_deg_s) {
   return myact_position_inc_send_raw((myact_ctx_t*)driver_ctx, (uint16_t)llround(speed_deg_s), myact_deg_to_raw_0p01(delta_deg));
 }
-static int myact_axis_speed(void* driver_ctx, double speed_deg_s) { return myact_speed_dps_send_raw((myact_ctx_t*)driver_ctx, speed_deg_s); }
+static int myact_axis_speed(void* driver_ctx, double speed_deg_s) {
+  myact_basic_feedback_t fb;
+  return myact_speed((myact_ctx_t*)driver_ctx, myact_deg_to_raw_0p01(speed_deg_s), &fb);
+}
 
 static const stc_axis_driver_ops_t pd4c_ops = {
     .name = "pd4c",
@@ -239,6 +243,16 @@ static int effective_scan_max(const motion_backend_cfg_t* cfg) {
 
   const int scan_max = (cfg->can_scan_max_node > axis_max_node) ? cfg->can_scan_max_node : axis_max_node;
   return bounded_scan_max(scan_max);
+}
+
+static double axis_gear_ratio_or_default(const struct motion_backend* b, size_t axis) {
+  if (!b) return MYACT_X8_25_GEAR_RATIO;
+  const double gr = b->cfg.axis_cfg[axis].gear_ratio;
+  return (gr > 0.0) ? gr : MYACT_X8_25_GEAR_RATIO;
+}
+
+static double axis_output_to_motor_deg(const struct motion_backend* b, size_t axis, double output_deg) {
+  return myact_output_deg_to_motor_deg(output_deg, axis_gear_ratio_or_default(b, axis));
 }
 
 static uint64_t mono_ms(void) {
@@ -542,28 +556,41 @@ int can_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_ma
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!axis_selected(axes_mask, axis)) continue;
-    if (!axis_ready_for_motion(b, axis) || b->axis[axis].driver != STC_AXIS_DRIVER_PD4C) return -1;
+    if (!axis_ready_for_motion(b, axis)) return -1;
+    if (b->axis[axis].driver != STC_AXIS_DRIVER_PD4C && b->axis[axis].driver != STC_AXIS_DRIVER_MYACT_X8_25) return -1;
   }
 
   uint32_t touched_mask = 0u;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!axis_selected(axes_mask, axis)) continue;
-    /* DS402 enable/operation mode must be active before profile-position target is sent. */
-    if (ensure_enabled(b, axis, MTR_MODE_PP) != PD4C_OK) {
-      (void)stop_touched_axes(b, touched_mask);
-      return -1;
+    if (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) {
+      if (ensure_enabled(b, axis, MTR_MODE_PP) != PD4C_OK) {
+        (void)stop_touched_axes(b, touched_mask);
+        return -1;
+      }
+      int32_t target_counts = axis_deg_to_counts(&b->cfg.axis_cfg[axis], targets_deg[axis]);
+      uint16_t pv = b->cfg.axis_cfg[axis].pp_profile_vel;
+      if (pd4c_pp_move(&b->axis[axis].u.pd4c.ctx, target_counts, pv, 0, b->cfg.ds402_timeout_ms) != PD4C_OK) {
+        (void)stop_touched_axes(b, touched_mask);
+        return -1;
+      }
+      b->axis_last_cmd_pos_raw[axis] = target_counts;
+    } else {
+      const double target_motor_deg = axis_output_to_motor_deg(b, axis, targets_deg[axis]);
+      const double max_speed_output_dps = (b->cfg.axis_cfg[axis].max_speed_deg_s > 0.0) ? b->cfg.axis_cfg[axis].max_speed_deg_s : 30.0;
+      const double max_speed_motor_dps = fabs(axis_output_to_motor_deg(b, axis, max_speed_output_dps));
+      if (!b->axis[axis].ops || !b->axis[axis].ops->move_abs ||
+          b->axis[axis].ops->move_abs(axis_driver_ctx(&b->axis[axis]), target_motor_deg, max_speed_motor_dps) != 0) {
+        (void)stop_touched_axes(b, touched_mask);
+        return -1;
+      }
+      b->axis_last_cmd_pos_raw[axis] = myact_deg_to_raw_0p01(target_motor_deg);
     }
-    int32_t target_counts = axis_deg_to_counts(&b->cfg.axis_cfg[axis], targets_deg[axis]);
-    uint16_t pv = b->cfg.axis_cfg[axis].pp_profile_vel;
-    if (pd4c_pp_move(&b->axis[axis].u.pd4c.ctx, target_counts, pv, 0, b->cfg.ds402_timeout_ms) != PD4C_OK) {
-      (void)stop_touched_axes(b, touched_mask);
-      return -1;
-    }
+
     touched_mask |= (1u << axis);
     const uint64_t tms = mono_ms();
     b->axis[axis].last_rx_ms = tms;
     b->axis[axis].last_cmd_ms = tms;
-    b->axis_last_cmd_pos_raw[axis] = target_counts;
     b->axis_cmd_ack_pending[axis] = 1u;
   }
   return 0;
@@ -593,7 +620,7 @@ int can_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask
     int32_t tv_raw = axis_deg_s_to_target_vel_units(&b->cfg.axis_cfg[axis], speeds_deg_s[axis], &clipped);
     if (tv_raw > INT16_MAX) tv_raw = INT16_MAX;
     if (tv_raw < INT16_MIN) tv_raw = INT16_MIN;
-    const double speed_cmd = (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) ? (double)tv_raw : speeds_deg_s[axis];
+    const double speed_cmd = (b->axis[axis].driver == STC_AXIS_DRIVER_PD4C) ? (double)tv_raw : axis_output_to_motor_deg(b, axis, speeds_deg_s[axis]);
     const int cmd_ok = (b->axis[axis].ops && b->axis[axis].ops->speed)
       ? (b->axis[axis].ops->speed(axis_driver_ctx(&b->axis[axis]), speed_cmd) == 0)
       : 0;
@@ -633,7 +660,13 @@ int can_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mas
   if (!b) return -1;
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if ((axes_mask & (1u << axis)) == 0 || !b->axis[axis].connected || b->axis[axis].driver != STC_AXIS_DRIVER_PD4C) continue;
+    if ((axes_mask & (1u << axis)) == 0 || !b->axis[axis].connected) continue;
+    if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
+      (void)myact_fault_clear(&b->axis[axis].u.x8.ctx);
+      b->axis[axis].last_rx_ms = mono_ms();
+      continue;
+    }
+    if (b->axis[axis].driver != STC_AXIS_DRIVER_PD4C) continue;
 
     const int8_t mode = (b->axis[axis].u.pd4c.mode != MTR_MODE_NONE)
       ? (int8_t)b->axis[axis].u.pd4c.mode
