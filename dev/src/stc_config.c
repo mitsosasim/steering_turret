@@ -135,12 +135,15 @@ static int parse_axis_driver(const char* s, stc_axis_driver_t* out) {
     return 0;
   }
 
-  if (strcasecmp(s, "pd4c") == 0 || strcasecmp(s, "nanotec") == 0 || strcasecmp(s, "nanotec_pd4c") == 0) {
+  if (strcasecmp(s, "pd4c") == 0 || strcasecmp(s, "pd4c-can") == 0 ||
+      strcasecmp(s, "nanotec") == 0 || strcasecmp(s, "nanotec_pd4c") == 0) {
     *out = STC_AXIS_DRIVER_PD4C;
     return 0;
   }
 
-  if (strcasecmp(s, "myact") == 0 || strcasecmp(s, "myactuator") == 0 || strcasecmp(s, "myact_x8_25") == 0 || strcasecmp(s, "x8_25") == 0) {
+  if (strcasecmp(s, "myact") == 0 || strcasecmp(s, "myactuator") == 0 ||
+      strcasecmp(s, "myactuator-can") == 0 || strcasecmp(s, "myact_x8_25") == 0 ||
+      strcasecmp(s, "x8_25") == 0) {
     *out = STC_AXIS_DRIVER_MYACT_X8_25;
     return 0;
   }
