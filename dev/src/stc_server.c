@@ -3430,10 +3430,10 @@ int main(int argc, char** argv) {
         }
         if (off < sizeof(hw_info)) hw_info[off++] = ';';
 
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "turret_axes=%d,%d;", 0, 1);
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "turret_axes=%d,%d;", -1, -1);
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_ids=1;mirror_axes=1:0;mirror_count=1;sut_count=%d;", sh.d.sut_count);
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_ids=1;mirror_axes=1:0;sut_count=0;");
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
         written = snprintf(hw_info + off, sizeof(hw_info) - off, "motor_status_map=");
