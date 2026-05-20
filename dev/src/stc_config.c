@@ -178,7 +178,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->tlml_interval_ms = 100;
   cfg->can_bitrate = 500000;
   cfg->can_restart_ms = 100;
-  cfg->can_scan_max_node = 32;
+  cfg->can_scan_max_node = 0;
   cfg->can_discovery_enabled = 0;
   cfg->can_timeout_ms = 1000;
   cfg->startup_feedback_grace_ms = 3000;
@@ -421,6 +421,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->can_restart_ms) != 0) goto parse_error;
       } else if (strcmp(key, "discovery_enabled") == 0) {
         if (parse_int(value, &cfg->can_discovery_enabled) != 0) goto parse_error;
+      } else if (strcmp(key, "scan_max_node") == 0) {
+        if (parse_int(value, &cfg->can_scan_max_node) != 0) goto parse_error;
       } else {
         recognized = false;
       }
