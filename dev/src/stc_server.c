@@ -2224,11 +2224,24 @@ static int config_has_enabled_driver(const stc_config_t* cfg, stc_axis_driver_t 
   return 0;
 }
 
+static const char* axis_protocol_from_driver(stc_axis_driver_t driver) {
+  switch (driver) {
+    case STC_AXIS_DRIVER_PD4C: return "canopen_ds402";
+    case STC_AXIS_DRIVER_MYACT_X8_25: return "myactuator";
+    case STC_AXIS_DRIVER_DISABLED:
+    default: return "disabled";
+  }
+}
+
 static void log_enabled_axis_drivers(const stc_config_t* cfg) {
   if (!cfg) return;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!cfg->axis_enabled[axis]) continue;
-    STC_LOG_INFO("axis%zu driver=%s node=%d", axis, axis_driver_to_string(cfg->axis_driver[axis]), cfg->axis_node_id[axis]);
+    STC_LOG_INFO("axis%zu driver=%s protocol=%s node=%d",
+                 axis,
+                 axis_driver_to_string(cfg->axis_driver[axis]),
+                 axis_protocol_from_driver(cfg->axis_driver[axis]),
+                 cfg->axis_node_id[axis]);
   }
 }
 
@@ -2763,7 +2776,7 @@ int main(int argc, char** argv) {
   }
   atomic_store(&g_listener_fd, srv);
 
-  STC_LOG_INFO("CAN worker on %s (multi-axis TPDO1/2/3 + RPDO1/2/3)", net.can_if);
+  STC_LOG_INFO("CAN worker on %s", net.can_if);
   STC_LOG_INFO("STC server listening on TCP port %d", net.tcp_port);
   if (static_telemetry_configured) {
     STC_LOG_INFO("UDP telemetry static destination: TLMH %s:%d @%dHz | TLML %s:%d @%dHz", net.tlmh_ip, net.tlmh_port, net.tlmh_hz, net.tlml_ip, net.tlml_port, net.tlml_hz);

@@ -8,7 +8,8 @@
  *   Adapts the generic motion backend API used by stc_server to real CAN hardware.
  *
  * Design notes:
- *   Bridges backend commands to PD4-C CANopen/DS402 nodes and MYACT nodes.
+ *   Generic CAN transport backend that dispatches axis commands to the
+ *   configured per-axis driver (PD4-C CANopen/DS402 or MYACTUATOR protocol).
  *   Performs node discovery and identity reads for diagnostics, then keeps
  *   expected-vs-responsive availability and CAN health in snapshot state.
  */
@@ -31,7 +32,7 @@
 
 typedef enum {
   MTR_MODE_NONE = 0,
-  /* RPDO3 maps to 0x6042 (Target Velocity), which PD4-C defines for mode 2. */
+  /* PD4-C velocity mode command path. */
   MTR_MODE_PV = PD4C_MODE_VELOCITY,
   MTR_MODE_PP = PD4C_MODE_PROFILE_POSITION
 } mtr_mode_t;
