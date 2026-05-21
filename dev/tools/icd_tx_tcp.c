@@ -144,7 +144,11 @@ static void print_hw_info_pretty(const char* payload) {
   kv_lookup(payload,"mirror_axes=",mirror,sizeof(mirror));
   kv_lookup(payload,"sut_axes=",sut,sizeof(sut));
 
-  printf("Hardware info\n-------------\nMode: %s\nState: %s\nPBIT: %s\nExpected motors: %s\nConnected motors: %s\n\n", mode, state, pbit, exp, conn);
+  const char* mode_pretty = mode;
+  if (strcmp(mode, "sim") == 0) mode_pretty = "Simulation";
+  else if (strcmp(mode, "can") == 0) mode_pretty = "Hardware/CAN";
+
+  printf("Hardware info\n-------------\nMode: %s (%s)\nState: %s\nPBIT: %s\nExpected motors: %s\nConnected motors: %s\n\n", mode_pretty, mode, state, pbit, exp, conn);
   printf("Axes:\n");
   char* save = NULL;
   char* tok = strtok_r(axes, ",", &save);
