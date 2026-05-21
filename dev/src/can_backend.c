@@ -102,6 +102,7 @@ typedef struct {
       uint16_t error_flags;
       double bus_voltage_v;
       int motor_temp_c;
+      int active_status2_enabled;
     } x8;
   } u;
 } axis_rt_t;
@@ -258,9 +259,24 @@ int myact_backend_discover_axis(motion_backend_t* backend, size_t axis, const ch
   char model[8] = {0};
   rc = myact_read_model(&b->axis[axis].u.x8.ctx, model);
   if (rc != MYACT_OK) {
-    STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_read_model expected_rx=0x%03X", axis, rc, (unsigned)(0x240u + node_id));
-    myact_socketcan_close(&b->axis[axis].u.x8.io);
-    return rc;
+    const int poll_rc = myact_poll(&b->axis[axis].u.x8.ctx, 0);
+    if (poll_rc >= 0) {
+      b->axis[axis].last_rx_ms = mono_ms();
+      b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
+    }
+    myact_status2_t st2;
+    memset(&st2, 0, sizeof(st2));
+    const int st2_rc = myact_read_status2(&b->axis[axis].u.x8.ctx, &st2);
+    int32_t angle_raw_0p01 = 0;
+    const int ang_rc = myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
+    if (st2_rc == MYACT_OK || ang_rc == MYACT_OK) {
+      STC_LOG_WARN("MYACT axis%zu model read timed out, but status2/angle replied; accepting configured myact_x8_25 node as connected", axis);
+      strncpy(model, "unknown", sizeof(model) - 1);
+    } else {
+      STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_read_model expected_rx=0x%03X", axis, rc, (unsigned)(0x240u + node_id));
+      myact_socketcan_close(&b->axis[axis].u.x8.io);
+      return rc;
+    }
   }
 
   STC_LOG_INFO("MYACT axis%zu discovery OK model=%s", axis, model);
@@ -542,8 +558,14 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
           }
           if (cfg->axis_cfg[axis].active_status2_enable) {
             const uint16_t interval_10ms = (uint16_t)((cfg->axis_cfg[axis].active_status2_interval_ms > 0 ? cfg->axis_cfg[axis].active_status2_interval_ms : 50) / 10);
-            (void)myact_active_reply_config(&b->axis[axis].u.x8.ctx, MYACT_CMD_STATUS2, true, interval_10ms);
-            STC_LOG_INFO("axis%zu active_reply 9C enabled interval_ms=%u", axis, (unsigned)(interval_10ms * 10u));
+            const int ar_rc = myact_active_reply_config(&b->axis[axis].u.x8.ctx, MYACT_CMD_STATUS2, true, interval_10ms);
+            if (ar_rc == MYACT_OK) {
+              b->axis[axis].u.x8.active_status2_enabled = 1;
+              STC_LOG_INFO("axis%zu active_reply 9C enabled interval_ms=%u", axis, (unsigned)(interval_10ms * 10u));
+            } else {
+              b->axis[axis].u.x8.active_status2_enabled = 0;
+              STC_LOG_WARN("axis%zu active_reply 9C enable failed; polling fallback active", axis);
+            }
           }
           STC_LOG_INFO("axis%zu driver=myact_x8_25 node=%u connected", axis, node_id);
           STC_LOG_INFO("axis%zu myact init OK", axis);
@@ -894,6 +916,21 @@ int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t
       }
       if (cache->status2.valid) {
         b->snap.vel_raw[axis] = cache->status2.speed_dps;
+      }
+      if (!b->axis[axis].u.x8.active_status2_enabled || !cache->status2.valid) {
+        myact_status2_t st2;
+        if (myact_read_status2(&b->axis[axis].u.x8.ctx, &st2) == MYACT_OK) {
+          b->snap.vel_raw[axis] = st2.speed_dps;
+          b->axis[axis].last_rx_ms = now;
+        }
+      }
+      if (!cache->angle_multi_valid) {
+        int32_t ang_0p01 = 0;
+        if (myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &ang_0p01) == MYACT_OK) {
+          b->snap.pos_raw[axis] = ang_0p01;
+          b->axis[axis].u.x8.last_raw_angle_deg = (double)ang_0p01 / 100.0;
+          b->axis[axis].last_rx_ms = now;
+        }
       }
       if (cache->status1.valid) {
         b->axis[axis].u.x8.error_flags = cache->status1.error_flags;

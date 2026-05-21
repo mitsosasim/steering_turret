@@ -631,6 +631,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
     }
     STC_LOG_INFO("MYACT axis%zu discovery: sending read_model", axis);
     char model[8] = {0};
+    int discovered = 0;
     if (send_myact_read(b, cfg->axis_node_id[axis], MYACT_CMD_READ_MODEL) == 0) {
       struct can_frame f;
       if (recv_myact_reply(b, cfg->axis_node_id[axis], MYACT_CMD_READ_MODEL, &f, 100) == 0) {
@@ -640,11 +641,21 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
         STC_LOG_INFO("axis%zu connected", axis);
         b->snap.axis_available[axis] = 1;
         b->snap.can_connected_devices++;
-        continue;
+        discovered = 1;
       }
     }
-    STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_read_model expected_rx=0x%03X", axis, -1, (unsigned)(MYACT_REPLY_BASE + cfg->axis_node_id[axis]));
-    b->snap.axis_available[axis] = 0;
+    if (!discovered) {
+      if (poll_axis_feedback_once(b, axis, cfg->axis_node_id[axis], MYACT_CMD_READ_STATUS2, 60) == 0 ||
+          poll_axis_feedback_once(b, axis, cfg->axis_node_id[axis], MYACT_CMD_READ_ANGLE, 60) == 0) {
+        STC_LOG_WARN("MYACT axis%zu model read timed out, but status2/angle replied; accepting configured myact_x8_25 node as connected", axis);
+        STC_LOG_INFO("axis%zu connected", axis);
+        b->snap.axis_available[axis] = 1;
+        b->snap.can_connected_devices++;
+        continue;
+      }
+      STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_read_model expected_rx=0x%03X", axis, -1, (unsigned)(MYACT_REPLY_BASE + cfg->axis_node_id[axis]));
+      b->snap.axis_available[axis] = 0;
+    }
   }
   b->snap.can_ok = (b->snap.can_connected_devices > 0);
   b->snap.capabilities.supports_native_a2_speed = 1;
