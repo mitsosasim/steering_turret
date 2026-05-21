@@ -166,6 +166,11 @@ int main(void) {
       .sh = &sh,
       .q = &q,
       .can_if = "vcan0",
+#ifdef SIMULATION
+      .backend_name = "simulator",
+#else
+      .backend_name = "mock",
+#endif
   };
 
   atomic_store(&g_stop, 0);
