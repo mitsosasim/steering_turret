@@ -85,5 +85,17 @@ int main(void) {
   stc_axis_cfg_from_config(&cfg, axis, &out, &expected);
   assert(expected == 0u);
 
+  cfg.axis_enabled[axis] = 1;
+  cfg.axis_driver[axis] = STC_AXIS_DRIVER_DISABLED;
+  cfg.axis_node_id[axis] = 11;
+  stc_axis_cfg_from_config(&cfg, axis, &out, &expected);
+  assert(expected == 0u);
+
+  stc_config_t empty_cfg;
+  memset(&empty_cfg, 0, sizeof(empty_cfg));
+  uint8_t empty_expected = 1u;
+  stc_axis_cfg_from_config(&empty_cfg, 0, &out, &empty_expected);
+  assert(empty_expected == 0u);
+
   return 0;
 }

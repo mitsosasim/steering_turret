@@ -158,10 +158,18 @@ static void test_count_configured_axes_counts_enabled_only(void) {
   assert_true(myact_count == 1, "myact init count is one for one-X8 config");
 }
 
-int main(void) {
-  test_abs_then_rel();
-  test_multiple_rel_accumulates();
-  test_speed_interleaved_no_target_reset();
+int main(int argc, char** argv) {
+  int no_sim = 0;
+  for (int i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "--no-sim") == 0) no_sim = 1;
+  }
+
+  if (!no_sim) {
+    test_abs_then_rel();
+    test_multiple_rel_accumulates();
+    test_speed_interleaved_no_target_reset();
+  }
+
   test_count_configured_axes_counts_enabled_only();
   puts("OK");
   return 0;
