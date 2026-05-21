@@ -112,13 +112,14 @@ typedef struct stc_config_s {
   int turret_az_axis;
   int turret_el_axis;
 
-  /** SUT logical-to-axis map and associated laser output IDs. */
+  /** Number of explicitly mapped SUT entries (both az/el mapped to real axes). */
   int sut_count;
   int sut_az_axis[STC_MAX_SUT];
   int sut_el_axis[STC_MAX_SUT];
+  int sut_mirror_axis[STC_MAX_SUT];
   uint8_t sut_laser_on[STC_MAX_SUT];
 
-  /** Mirror logical-to-axis map. */
+  /** Number of explicitly mapped mirror entries (axis mapped to a real axis). */
   int mirror_count;
   int mirror_axis[STC_MAX_MIRROR];
 } stc_config_t;

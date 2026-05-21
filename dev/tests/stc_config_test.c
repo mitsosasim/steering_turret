@@ -466,6 +466,36 @@ static void test_enabled_axis_requires_explicit_driver(void) {
   unlink(path);
 }
 
+static void test_bench_x8_25_mapping_defaults(void) {
+  stc_config_t cfg;
+  int expected_motors = 0;
+  const char* path = "dev/config/stc_bench_x8_25.ini";
+  FILE* f = fopen(path, "r");
+  if (!f) {
+    path = "../dev/config/stc_bench_x8_25.ini";
+    f = fopen(path, "r");
+  }
+  if (!f) {
+    path = "../../dev/config/stc_bench_x8_25.ini";
+    f = fopen(path, "r");
+  }
+  if (!f) die("failed to locate stc_bench_x8_25.ini");
+  fclose(f);
+
+  expect_true(load_config(path, &cfg), "expected stc_bench_x8_25.ini to parse");
+  for (size_t i = 0; i < STC_AXIS_COUNT; ++i) {
+    const int enabled = cfg.axis_enabled[i] == 1;
+    const int driver_active = cfg.axis_driver[i] != STC_AXIS_DRIVER_DISABLED;
+    const int node_mapped = cfg.axis_node_id[i] > 0;
+    if (enabled && driver_active && node_mapped) expected_motors++;
+  }
+
+  expect_true(expected_motors == 1, "expected stc_bench_x8_25.ini expected_motors == 1");
+  expect_true(cfg.sut_count == 0, "expected stc_bench_x8_25.ini sut_count == 0");
+  expect_true(cfg.turret_az_axis == -1 && cfg.turret_el_axis == -1, "expected stc_bench_x8_25.ini turret_axes == -1,-1");
+  expect_true(cfg.mirror_axis[0] == 0, "expected stc_bench_x8_25.ini mirror1_axis == 0");
+}
+
 int main(void) {
   test_reject_typoed_network_key();
   test_reject_typoed_section_name();
@@ -477,6 +507,7 @@ int main(void) {
   test_enabled_axis_requires_explicit_driver();
   test_runtime_backend_values();
   test_hardware_build_default_backend();
+  test_bench_x8_25_mapping_defaults();
   fprintf(stderr, "PASS: stc_config_test\n");
   return 0;
 }
