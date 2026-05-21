@@ -3640,14 +3640,31 @@ int main(int argc, char** argv) {
                         connected_axes,
                         connected_axes,
                         (size_t)STC_AXIS_COUNT);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axes=");
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+          if (axis > 0) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ",");
+          if (d->cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) {
+            append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%zu:disabled", axis);
+          } else {
+            const char* role = "none";
+            for (int i = 0; i < d->mirror_count; i++) {
+              if (d->mirror_axis[i] == (int)axis) { role = "mirror1"; break; }
+            }
+            append_hw_infof(hw_info, sizeof(hw_info), &off, &required,
+                            "%zu:%s:node%d:%s:%s",
+                            axis,
+                            axis_driver_to_string(d->cfg[axis].driver),
+                            d->cfg[axis].node_id,
+                            d->axis_available[axis] ? "connected" : "disconnected",
+                            role);
+          }
+        }
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";");
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axis_drivers=");
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%s", axis == 0 ? "" : ",", axis, axis_driver_to_string(d->cfg[axis].driver));
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";axis_connected=");
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%u", axis == 0 ? "" : ",", axis, d->axis_available[axis] ? 1u : 0u);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";turret_axes=%d,%d;mirror_count=%d;", d->turret_az_axis, d->turret_el_axis, d->mirror_count);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "mirror_ids=");
-        for (int i = 0; i < d->mirror_count; i++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%d", i == 0 ? "" : ",", i + 1);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";mirror_axes=");
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";turret_axes=%d,%d;mirror_count=%d;mirror_axes=", d->turret_az_axis, d->turret_el_axis, d->mirror_count);
         const char* sep = "";
         for (int i = 0; i < d->mirror_count; i++) {
           if (d->mirror_axis[i] < 0 || d->mirror_axis[i] >= (int)STC_AXIS_COUNT) continue;
