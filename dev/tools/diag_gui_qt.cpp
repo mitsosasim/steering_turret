@@ -47,6 +47,7 @@
 #include <QtCore/QProcess>
 #include <QtCore/QSet>
 #include <QtCore/QStringList>
+#include <QStandardItemModel>
 
 #include <array>
 #include <cstdint>
@@ -120,6 +121,34 @@ QString decodeMotorStatusLabels(uint8_t statusBits) {
   if (statusBits & 0x04) labels << "Stale";
   if (statusBits & 0x08) labels << "Limited";
   return labels.isEmpty() ? QString("Unknown(0x%1)").arg(statusBits, 2, 16, QChar('0')) : labels.join(" | ");
+}
+
+static QStandardItem* comboItem(QComboBox* box, int index) {
+  if (!box || index < 0) return nullptr;
+  auto* model = qobject_cast<QStandardItemModel*>(box->model());
+  if (!model) return nullptr;
+  return model->item(index);
+}
+
+static void setComboItemEnabled(QComboBox* box, int index, bool enabled) {
+  QStandardItem* item = comboItem(box, index);
+  if (!item) return;
+
+  Qt::ItemFlags flags = item->flags();
+  if (enabled) {
+    flags |= Qt::ItemIsEnabled;
+    flags |= Qt::ItemIsSelectable;
+  } else {
+    flags &= ~Qt::ItemIsEnabled;
+    flags &= ~Qt::ItemIsSelectable;
+  }
+  item->setFlags(flags);
+}
+
+static bool comboItemEnabled(QComboBox* box, int index) {
+  QStandardItem* item = comboItem(box, index);
+  if (!item) return false;
+  return item->flags().testFlag(Qt::ItemIsEnabled);
 }
 
 
@@ -1241,15 +1270,15 @@ class DiagnosticsWindow : public QMainWindow {
 
   void updateCommandAvailability() {
     if (!commandBox_ || !sendButton_) return;
+    QSignalBlocker block(commandBox_);
     applyingCommandAvailability_ = true;
-    const bool hadUserSelection = userSelectedCommand_;
-    if (!hadUserSelection) {
+    if (!userSelectedCommand_) {
       const std::array<UiCommand, 5> startupDefaultOrder{
         UiCommand::CuState, UiCommand::ReqHwInfo, UiCommand::Mirror, UiCommand::Turret, UiCommand::Sut
       };
       for (const UiCommand cmd : startupDefaultOrder) {
         const int candidateIdx = commandBox_->findData(static_cast<int>(cmd));
-        if (candidateIdx >= 0 && commandBox_->isItemEnabled(candidateIdx)) {
+        if (candidateIdx >= 0 && comboItemEnabled(commandBox_, candidateIdx)) {
           if (commandBox_->currentIndex() != candidateIdx) {
             commandBox_->setCurrentIndex(candidateIdx);
           }
@@ -1264,7 +1293,7 @@ class DiagnosticsWindow : public QMainWindow {
       return;
     }
     const UiCommand c = currentUiCommand();
-    const bool commandEnabledByMapping = commandBox_->isItemEnabled(idx);
+    const bool commandEnabledByMapping = comboItemEnabled(commandBox_, idx);
     bool allowed = true;
     const bool isOper = currentState_ == 3;
     if (c == UiCommand::Turret || c == UiCommand::Mirror || c == UiCommand::Sut) {
@@ -1276,6 +1305,7 @@ class DiagnosticsWindow : public QMainWindow {
     if (!commandEnabledByMapping) {
       allowed = false;
       sendButton_->setToolTip("Selected command unavailable for current axis mapping");
+      appendLog("Selected command unavailable for current axis mapping; keeping selection and disabling Send.");
     } else {
       sendButton_->setToolTip("");
     }
@@ -1286,7 +1316,7 @@ class DiagnosticsWindow : public QMainWindow {
   void setUiCommandEnabled(UiCommand cmd, bool enabled) {
     const int idx = commandBox_->findData(static_cast<int>(cmd));
     if (idx < 0) return;
-    commandBox_->setItemData(idx, enabled ? QVariant() : QVariant(0), Qt::UserRole - 1);
+    setComboItemEnabled(commandBox_, idx, enabled);
   }
 
 
@@ -1336,7 +1366,7 @@ class DiagnosticsWindow : public QMainWindow {
     for (const auto &spec : kCommandSpecs) {
       commandBox_->addItem(spec.label, static_cast<int>(spec.ui));
       if (!spec.enabled) {
-        commandBox_->setItemData(commandBox_->count() - 1, 0, Qt::UserRole - 1);
+        setComboItemEnabled(commandBox_, commandBox_->count() - 1, false);
       }
     }
     commandBox_->setMaximumWidth(kInputWidth);
