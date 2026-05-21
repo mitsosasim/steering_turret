@@ -114,12 +114,14 @@ QString nackErrToString(uint16_t errCode) {
 }
 
 QString decodeMotorStatusLabels(uint8_t statusBits) {
-  if (statusBits == 0x00) return "Healthy";
+  if (statusBits == 0x00) return "Disabled / Not configured";
   QStringList labels;
-  if (statusBits & 0x01) labels << "Enabled";
-  if (statusBits & 0x02) labels << "Fault";
-  if (statusBits & 0x04) labels << "Stale";
-  if (statusBits & 0x08) labels << "Limited";
+  if (statusBits & 0x02) labels << "Connected";
+  if (statusBits & 0x04) labels << "Fault";
+  if (statusBits & 0x08) labels << "Stale";
+  if (statusBits & 0x10) labels << "Limited";
+  if (statusBits & 0x20) labels << "Moving";
+  if (statusBits & 0x40) labels << "Degraded";
   return labels.isEmpty() ? QString("Unknown(0x%1)").arg(statusBits, 2, 16, QChar('0')) : labels.join(" | ");
 }
 
@@ -646,7 +648,7 @@ class DiagnosticsWindow : public QMainWindow {
           bool idxOk = false;
           const int axis = pair[0].trimmed().toInt(&axisOk);
           const int statusIdx = pair[1].trimmed().toInt(&idxOk);
-          if (!axisOk || !idxOk || axis < 0 || axis >= kAxisCount || statusIdx < 0 || statusIdx >= 8) continue;
+          if (!axisOk || !idxOk || axis < 0 || axis >= kAxisCount || statusIdx < 0 || statusIdx >= kAxisCount) continue;
           axisMotorStatusMap_[axis] = statusIdx;
         }
       }
@@ -897,7 +899,7 @@ class DiagnosticsWindow : public QMainWindow {
       if (haveLowTelemetry_ && statusIndex >= 0 && statusIndex < static_cast<int>(lastMotorStatus_.size())) {
         uint8_t bits = lastMotorStatus_[statusIndex];
         axisEnabled = (bits & 0x01) != 0;
-        if (telemetryMissing) bits |= 0x04;
+        if (telemetryMissing) bits |= 0x08;
         status = decodeMotorStatusLabels(bits);
       } else if (axisConnected_[axis]) {
         status = "Connected";
@@ -1632,7 +1634,9 @@ class DiagnosticsWindow : public QMainWindow {
     simPos_.fill(0.0);
     simVel_.fill(0.0);
     simTargetVel_.fill(0.0);
-    axisMotorStatusMap_.fill(-1);
+    for (int i = 0; i < kAxisCount; ++i) {
+      axisMotorStatusMap_[i] = i;
+    }
     haveLowTelemetry_ = false;
     lastHighTelemetryMs_ = -1;
     lastLowTelemetryMs_ = -1;
@@ -1648,6 +1652,13 @@ class DiagnosticsWindow : public QMainWindow {
     std::fwrite(utf8.constData(), 1, static_cast<size_t>(utf8.size()), stderr);
     std::fflush(stderr);
   }
+
+ public:
+  void appendQtMessage(const QString &line) {
+    if (!logEdit_) return;
+    logEdit_->appendPlainText(line);
+  }
+ private:
 
   QTcpSocket *tcpSocket_{};
   QUdpSocket *udpHigh_{};
@@ -1737,7 +1748,7 @@ class DiagnosticsWindow : public QMainWindow {
   std::array<QString, kAxisCount> axisDriverNames_{};
   std::array<int, kAxisCount> axisConnected_{};
   std::array<int, kAxisCount> axisMotorStatusMap_{};
-  std::array<uint8_t, 8> lastMotorStatus_{};
+  std::array<uint8_t, kAxisCount> lastMotorStatus_{};
   bool haveLowTelemetry_{false};
   qint64 lastHighTelemetryMs_{-1};
   qint64 lastLowTelemetryMs_{-1};
@@ -1747,9 +1758,39 @@ class DiagnosticsWindow : public QMainWindow {
   std::array<double, kAxisCount> simTargetVel_{};
 };
 
+static DiagnosticsWindow* g_logSinkWindow = nullptr;
+
+static void qtGlobalMessageHandler(QtMsgType type, const QMessageLogContext&, const QString& msg) {
+  const char* level = "DEBUG";
+  switch (type) {
+    case QtDebugMsg: level = "DEBUG"; break;
+    case QtInfoMsg: level = "INFO"; break;
+    case QtWarningMsg: level = "WARN"; break;
+    case QtCriticalMsg: level = "CRIT"; break;
+    case QtFatalMsg: level = "FATAL"; break;
+  }
+  const QString stamped = QString("[%1] [QT %2] %3")
+                            .arg(QTime::currentTime().toString("HH:mm:ss.zzz"))
+                            .arg(level)
+                            .arg(msg);
+  const QByteArray utf8 = (stamped + "\n").toUtf8();
+  std::fwrite(utf8.constData(), 1, static_cast<size_t>(utf8.size()), stderr);
+  std::fflush(stderr);
+  if (g_logSinkWindow) {
+    g_logSinkWindow->appendQtMessage(stamped);
+  }
+  if (type == QtFatalMsg) {
+    std::abort();
+  }
+}
+
 int main(int argc, char *argv[]) {
   QApplication app(argc, argv);
+  qInstallMessageHandler(qtGlobalMessageHandler);
   DiagnosticsWindow w;
+  g_logSinkWindow = &w;
   w.show();
-  return app.exec();
+  const int rc = app.exec();
+  g_logSinkWindow = nullptr;
+  return rc;
 }

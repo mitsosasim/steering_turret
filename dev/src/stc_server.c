@@ -1237,6 +1237,7 @@ static void* can_worker_thread(void* arg) {
       memcpy(a->sh->d.can_discovered_nodes, snap.can_discovered_nodes, sizeof(a->sh->d.can_discovered_nodes));
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
         a->sh->d.axis_available[axis] = snap.axis_available[axis];
+        a->sh->d.axis_fault_active[axis] = snap.fault_active[axis] ? 1u : 0u;
         uint64_t rx_ms = snap.last_rx_ms[axis];
         if (rx_ms == 0 && a->sh->d.axis_expected[axis]) {
           /*
@@ -2033,13 +2034,12 @@ static void* tlml_tx_thread(void* arg) {
     m.level_y = 0.0f;
 
     for (size_t axis = 0; axis < STC_ICD_AXES_COUNT; axis++) {
-      const int enabled = axis_configured[axis] ? 1 : 0;
-      if (!enabled || a->sh->d.cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) {
+      const int expected = axis_expected[axis] ? 1 : 0;
+      const int enabled = (expected && axis_configured[axis]) ? 1 : 0;
+      if (!enabled) {
         m.motor_status[axis] = 0x00;
         continue;
       }
-
-      const int expected = axis_expected[axis] ? 1 : 0;
       const int connected = axis_available[axis] ? 1 : 0;
       const int timed_out = elapsed_ms_nonnegative(nowm, last_rx_ms[axis]) > can_timeout_ms;
       const int stale = (!in_startup_grace && can_timeout_ms > 0)
