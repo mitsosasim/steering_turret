@@ -92,6 +92,10 @@ typedef struct {
   uint8_t can_connected_devices;
   uint8_t can_discovered_devices;
   uint64_t last_rx_ms[STC_AXIS_COUNT];
+  uint8_t axis_fault_active[STC_AXIS_COUNT];
+  uint8_t axis_connected[STC_AXIS_COUNT];
+  uint8_t axis_stale[STC_AXIS_COUNT];
+  uint8_t axis_moving[STC_AXIS_COUNT];
 
   int32_t pos_raw[STC_AXIS_COUNT];
   int32_t vel_raw[STC_AXIS_COUNT];

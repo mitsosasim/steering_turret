@@ -18,4 +18,5 @@ int pd4c_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mas
 int pd4c_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask) { return can_motion_backend_quick_stop(backend, axes_mask); }
 int pd4c_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask) { return can_motion_backend_clear_faults(backend, axes_mask); }
 int pd4c_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) { return can_motion_backend_set_laser(backend, laser_id, on_off); }
+/* PD4-C health semantics are provided by can_backend via snapshot.axis_fault_active[]. */
 int pd4c_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) { return can_motion_backend_get_snapshot(backend, snapshot); }
