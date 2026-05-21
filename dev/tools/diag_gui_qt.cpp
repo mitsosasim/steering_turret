@@ -723,7 +723,13 @@ class DiagnosticsWindow : public QMainWindow {
     }
 
     if (!modeFromPayload.isEmpty()) {
-      modeLabel_->setText(QString("Server mode: %1").arg(modeFromPayload));
+      QString modePretty = modeFromPayload;
+      if (modeFromPayload.compare("sim", Qt::CaseInsensitive) == 0) {
+        modePretty = "Simulation";
+      } else if (modeFromPayload.compare("can", Qt::CaseInsensitive) == 0) {
+        modePretty = "Hardware/CAN";
+      }
+      modeLabel_->setText(QString("Server mode: %1 (%2)").arg(modePretty, modeFromPayload));
     }
 
     if (connectedFromPayload >= 0) {

@@ -3729,7 +3729,7 @@ int main(int argc, char** argv) {
         size_t off = 0;
         size_t required = 0;
         const shared_data_t* d = &sh.d;
-        const char* mode = (parsed_cfg.runtime_backend == STC_RUNTIME_BACKEND_SIMULATOR) ? "Simulation" : "Hardware/CAN";
+        const char* mode = (parsed_cfg.runtime_backend == STC_RUNTIME_BACKEND_SIMULATOR) ? "sim" : "can";
         int connected_axes = 0;
         int expected_axes = 0;
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
