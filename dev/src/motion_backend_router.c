@@ -77,10 +77,13 @@ typedef struct {
 } routed_backend_t;
 
 static routed_backend_t g_backend;
+static motion_backend_cfg_t g_backend_cfg;
 
 int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend){
   if(!cfg||!out_backend) return -1;
   memset(&g_backend,0,sizeof(g_backend));
+  memset(&g_backend_cfg, 0, sizeof(g_backend_cfg));
+  g_backend_cfg = *cfg;
   g_backend.type = (cfg->backend[0] ? cfg->backend : "simulator");
 
   int rc = -1;
@@ -177,3 +180,18 @@ int motion_backend_quick_stop(motion_backend_t* b,uint32_t m){(void)b; if (g_bac
 int motion_backend_clear_faults(motion_backend_t* b,uint32_t m){(void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_clear_faults(g_backend.impl,m); if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) return can_motion_backend_clear_faults(g_backend.impl,m); if (g_backend.family == BACKEND_FAMILY_MYACT) return myact_motion_backend_clear_faults(g_backend.impl,m); if (g_backend.family == BACKEND_FAMILY_MOCK) return mock_motion_backend_clear_faults(g_backend.impl,m); STC_LOG_ERROR("motion_backend_clear_faults: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_set_laser(motion_backend_t* b,uint8_t i,uint8_t o){(void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_set_laser(g_backend.impl,i,o); if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) return can_motion_backend_set_laser(g_backend.impl,i,o); if (g_backend.family == BACKEND_FAMILY_MYACT) return myact_motion_backend_set_laser(g_backend.impl,i,o); if (g_backend.family == BACKEND_FAMILY_MOCK) return mock_motion_backend_set_laser(g_backend.impl,i,o); STC_LOG_ERROR("motion_backend_set_laser: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_get_snapshot(motion_backend_t* b,motion_snapshot_t* s){(void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_get_snapshot(g_backend.impl,s); if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) return can_motion_backend_get_snapshot(g_backend.impl,s); if (g_backend.family == BACKEND_FAMILY_MYACT) return myact_motion_backend_get_snapshot(g_backend.impl,s); if (g_backend.family == BACKEND_FAMILY_MOCK) return mock_motion_backend_get_snapshot(g_backend.impl,s); STC_LOG_ERROR("motion_backend_get_snapshot: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
+int motion_backend_get_axis_inventory(motion_backend_t* b, motion_axis_inventory_t out_axes[STC_AXIS_COUNT]) {
+  (void)b;
+  if (!out_axes) return -1;
+  motion_snapshot_t snap;
+  if (motion_backend_get_snapshot(g_backend.impl, &snap) != 0) return -1;
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; ++axis) {
+    out_axes[axis].driver = g_backend_cfg.axis_cfg[axis].driver;
+    out_axes[axis].enabled = g_backend_cfg.axis_enabled[axis] ? 1u : 0u;
+    out_axes[axis].connected = snap.axis_available[axis] ? 1u : 0u;
+    out_axes[axis].available = snap.axis_available[axis] ? 1u : 0u;
+    out_axes[axis].stale = (snap.command_age_ms[axis] > 2000u) ? 1u : 0u;
+    out_axes[axis].last_error = snap.fault_active[axis] ? (int32_t)snap.status_word[axis] : 0;
+  }
+  return 0;
+}

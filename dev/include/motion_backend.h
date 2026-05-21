@@ -113,6 +113,15 @@ typedef struct {
   uint64_t ts_emcy_ms;
 } motion_snapshot_t;
 
+typedef struct {
+  stc_axis_driver_t driver;
+  uint8_t enabled;
+  uint8_t connected;
+  uint8_t available;
+  uint8_t stale;
+  int32_t last_error;
+} motion_axis_inventory_t;
+
 
 /** Count enabled hardware CAN axes per driver from static config (dry-run helper for tests). */
 static inline void hardware_backend_count_configured_axes(const motion_backend_cfg_t* cfg,
@@ -152,6 +161,7 @@ int motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask);
 int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off);
 /** Copy latest backend snapshot for telemetry/diagnostics consumption by server. */
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot);
+int motion_backend_get_axis_inventory(motion_backend_t* backend, motion_axis_inventory_t out_axes[STC_AXIS_COUNT]);
 
 /* Dedicated MYACT backend entry points (used when backend=myact_x8_25). */
 int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend);

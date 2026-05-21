@@ -590,6 +590,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
     const uint8_t node_id = cfg->axis_node_id[axis];
     if (!cfg->axis_enabled[axis] || cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!node_id) continue;
+    STC_LOG_INFO("MYACT axis%zu node=%u opening SocketCAN on %s", axis, (unsigned)node_id, cfg->can_if ? cfg->can_if : "can0");
     b->can_socket[axis] = open_can_socket(cfg->can_if, node_id);
     if (b->can_socket[axis] < 0) {
       for (size_t i = 0; i < STC_AXIS_COUNT; i++) if (b->can_socket[i] >= 0) close(b->can_socket[i]);
@@ -603,8 +604,21 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!cfg->axis_enabled[axis] || cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!cfg->axis_node_id[axis]) continue;
-    b->snap.axis_available[axis] = 1;
-    b->snap.can_connected_devices++;
+    STC_LOG_INFO("MYACT axis%zu discovery: sending read_model", axis);
+    char model[8] = {0};
+    if (send_myact_read(b, cfg->axis_node_id[axis], MYACT_CMD_READ_MODEL) == 0) {
+      struct can_frame f;
+      if (recv_myact_reply(b, cfg->axis_node_id[axis], MYACT_CMD_READ_MODEL, &f, 100) == 0) {
+        memcpy(model, &f.data[1], 7);
+        model[7] = '\0';
+        STC_LOG_INFO("MYACT axis%zu discovery OK model=%s", axis, model);
+        b->snap.axis_available[axis] = 1;
+        b->snap.can_connected_devices++;
+        continue;
+      }
+    }
+    STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_read_model expected_rx=0x%03X", axis, -1, (unsigned)(MYACT_REPLY_BASE + cfg->axis_node_id[axis]));
+    b->snap.axis_available[axis] = 0;
   }
   b->snap.can_ok = (b->snap.can_connected_devices > 0);
   b->snap.capabilities.supports_native_a2_speed = 1;

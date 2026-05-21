@@ -17,6 +17,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "motion_backend.h"
+#include "myact_backend.h"
 
 #include "pd4c.h"
 #include "x8_25.h"
@@ -191,6 +192,46 @@ static void refresh_can_status(struct motion_backend* b) {
   b->snap.capabilities.supports_native_absolute_position = 0;
   b->snap.backend_mode = 2;
   b->snap.transport_status = 1;
+}
+
+int myact_backend_discover_axis(motion_backend_t* backend, size_t axis, const char* can_if, uint8_t node_id) {
+  struct motion_backend* b = (struct motion_backend*)backend;
+  if (!b || axis >= STC_AXIS_COUNT || !can_if || !can_if[0] || node_id == 0) return -1;
+
+  STC_LOG_INFO("MYACT axis%zu node=%u opening SocketCAN on %s", axis, (unsigned)node_id, can_if);
+  int rc = myact_socketcan_open(&b->axis[axis].u.x8.io, can_if, node_id);
+  if (rc != MYACT_OK) {
+    STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=socketcan_open expected_rx=0x%03X", axis, rc, (unsigned)(0x240u + node_id));
+    return rc;
+  }
+
+  STC_LOG_INFO("MYACT socketcan axis%zu node=%u tx_single=0x%03X rx_single=0x%03X tx_motion=0x%03X rx_motion=0x%03X",
+               axis, (unsigned)node_id,
+               (unsigned)b->axis[axis].u.x8.io.tx_single_id, (unsigned)b->axis[axis].u.x8.io.rx_single_id,
+               (unsigned)b->axis[axis].u.x8.io.tx_motion_id, (unsigned)b->axis[axis].u.x8.io.rx_motion_id);
+  if (myact_init(&b->axis[axis].u.x8.ctx, node_id, &b->axis[axis].u.x8.io.io) != MYACT_OK) {
+    myact_socketcan_close(&b->axis[axis].u.x8.io);
+    STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_init expected_rx=0x%03X", axis, MYACT_EIO, (unsigned)(0x240u + node_id));
+    return MYACT_EIO;
+  }
+
+  STC_LOG_INFO("MYACT axis%zu discovery: sending read_model", axis);
+  char model[8] = {0};
+  rc = myact_read_model(&b->axis[axis].u.x8.ctx, model);
+  if (rc != MYACT_OK) {
+    STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_read_model expected_rx=0x%03X", axis, rc, (unsigned)(0x240u + node_id));
+    myact_socketcan_close(&b->axis[axis].u.x8.io);
+    return rc;
+  }
+
+  STC_LOG_INFO("MYACT axis%zu discovery OK model=%s", axis, model);
+  b->axis[axis].connected = 1;
+  b->axis[axis].enabled = 1;
+  b->axis[axis].last_rx_ms = mono_ms();
+  b->axis[axis].last_healthcheck_ms = b->axis[axis].last_rx_ms;
+  b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
+  b->snap.axis_available[axis] = 1;
+  return MYACT_OK;
 }
 
 static int axis_selected(uint32_t axes_mask, size_t axis) {
@@ -449,43 +490,11 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
         STC_LOG_INFO("axis%zu pd4c init OK", axis);
       } break;
       case STC_AXIS_DRIVER_MYACT_X8_25: {
-        int rc = myact_socketcan_open(&b->axis[axis].u.x8.io, cfg->can_if, node_id);
-        if (rc != MYACT_OK) break;
-        STC_LOG_INFO("MYACT socketcan axis%zu node=%u tx_single=0x%03X rx_single=0x%03X tx_motion=0x%03X rx_motion=0x%03X",
-                     axis, node_id,
-                     (unsigned)b->axis[axis].u.x8.io.tx_single_id, (unsigned)b->axis[axis].u.x8.io.rx_single_id,
-                     (unsigned)b->axis[axis].u.x8.io.tx_motion_id, (unsigned)b->axis[axis].u.x8.io.rx_motion_id);
-        if (myact_init(&b->axis[axis].u.x8.ctx, node_id, &b->axis[axis].u.x8.io.io) != MYACT_OK) {
-          myact_socketcan_close(&b->axis[axis].u.x8.io);
-          break;
-        }
-        char model[8] = {0};
-        myact_status1_t status1;
-        myact_status2_t status2;
-        int32_t angle_raw_0p01 = 0;
-        int discovery_rc = myact_read_model(&b->axis[axis].u.x8.ctx, model);
-        const char* discovery_reason = "myact_read_model";
-        if (discovery_rc != MYACT_OK) {
-          discovery_rc = myact_read_status1(&b->axis[axis].u.x8.ctx, &status1);
-          discovery_reason = "myact_read_status1";
-        }
-        if (discovery_rc != MYACT_OK) {
-          discovery_rc = myact_read_status2(&b->axis[axis].u.x8.ctx, &status2);
-          discovery_reason = "myact_read_status2";
-        }
-        if (discovery_rc != MYACT_OK) {
-          discovery_rc = myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
-          discovery_reason = "myact_read_multiturn_angle";
-        }
-
+        int discovery_rc = myact_backend_discover_axis((motion_backend_t*)b, axis, cfg->can_if, node_id);
         if (discovery_rc == MYACT_OK) {
-          b->axis[axis].connected = 1;
-          b->axis[axis].enabled = 1;
-          b->axis[axis].last_rx_ms = mono_ms();
-          b->axis[axis].last_healthcheck_ms = b->axis[axis].last_rx_ms;
-          b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
-          b->snap.axis_available[axis] = 1;
           b->snap.can_connected_devices++;
+          int32_t angle_raw_0p01 = 0;
+          (void)myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
           b->axis[axis].u.x8.last_raw_angle_deg = (double)angle_raw_0p01 / 100.0;
           if (cfg->axis_cfg[axis].zero_on_start) {
             b->axis[axis].u.x8.raw_zero_deg = b->axis[axis].u.x8.last_raw_angle_deg;
@@ -496,14 +505,9 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
             (void)myact_active_reply_config(&b->axis[axis].u.x8.ctx, MYACT_CMD_STATUS2, true, interval_10ms);
             STC_LOG_INFO("axis%zu active_reply 9C enabled interval_ms=%u", axis, (unsigned)(interval_10ms * 10u));
           }
-          STC_LOG_INFO("axis%zu driver=myact_x8_25 node=%u connected model=%s", axis, node_id, model);
+          STC_LOG_INFO("axis%zu driver=myact_x8_25 node=%u connected", axis, node_id);
           STC_LOG_INFO("axis%zu myact init OK", axis);
-        } else {
-          STC_LOG_ERROR("MYACT axis%zu node=%u discovery failed rc=%d reason=%s", axis, node_id, discovery_rc, discovery_reason);
-          myact_socketcan_close(&b->axis[axis].u.x8.io);
         }
-        (void)status1;
-        (void)status2;
       } break;
       case STC_AXIS_DRIVER_DISABLED:
       default:
