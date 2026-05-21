@@ -154,7 +154,7 @@ void motion_backend_stop(motion_backend_t* backend);
 int motion_backend_discover(motion_backend_t* backend);
 /** Apply profile-position targets (degrees) on axes selected by axes_mask. */
 int motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]);
-/** Apply mixed per-axis motion kinds via one API used by action execution path. */
+/** Apply mixed per-axis motion kinds via one API used by action execution path (native backend commands, no protocol fallback translation). */
 int motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]);
 /** Apply profile-velocity/stream speed targets (deg/s) on selected axes. */
 int motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]);
