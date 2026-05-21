@@ -66,6 +66,7 @@ static int sockcan_recv(myact_can_frame_t* out, uint32_t to_ms, void* user) {
     out->id = c.can_id & CAN_SFF_MASK;
     out->dlc = c.can_dlc;
     memcpy(out->data, c.data, 8);
+    /* Higher protocol layers decide whether RX frames are awaited replies or async telemetry. */
     STC_LOG_TRACE("MYACT RX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
                   (unsigned)out->id, (unsigned)out->dlc,
                   out->data[0], out->data[1], out->data[2], out->data[3],

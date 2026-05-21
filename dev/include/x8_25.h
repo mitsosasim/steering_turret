@@ -37,6 +37,8 @@ extern "C" {
  * Real-time sensitivity:
  *   A1/A2/A4/A8 and motion-mode pack/send paths are designed as send-only fast paths.
  *   Setup/diagnostic helpers use bounded request/reply with explicit timeout budgets.
+ *   Request/reply matching is command-aware: unrelated asynchronous frames are parsed
+ *   into cache/events and ignored until the expected command response arrives or times out.
  *
  * Interface nature:
  *   Hardware/protocol-facing for MYACTUATOR X8-25 V3 CAN frames (not PDO/SDO DS402).
