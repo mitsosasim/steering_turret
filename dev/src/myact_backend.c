@@ -612,6 +612,7 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
         memcpy(model, &f.data[1], 7);
         model[7] = '\0';
         STC_LOG_INFO("MYACT axis%zu discovery OK model=%s", axis, model);
+        STC_LOG_INFO("axis%zu connected", axis);
         b->snap.axis_available[axis] = 1;
         b->snap.can_connected_devices++;
         continue;
