@@ -600,6 +600,24 @@ class DiagnosticsWindow : public QMainWindow {
     return out;
   }
 
+
+  std::vector<int> parseMappedIds(const QString &text, int minId, int maxId) const {
+    QSet<int> ids;
+    for (const QString &entry : text.split(QRegularExpression("[;,]+"), Qt::SkipEmptyParts)) {
+      const QStringList pair = entry.split(':');
+      if (pair.size() != 2) continue;
+      bool idOk = false;
+      const int id = pair[0].trimmed().toInt(&idOk);
+      if (!idOk || id < minId || id > maxId) continue;
+      ids.insert(id);
+    }
+    std::vector<int> out;
+    out.reserve(static_cast<size_t>(ids.size()));
+    for (const int id : ids) out.push_back(id);
+    std::sort(out.begin(), out.end());
+    return out;
+  }
+
   void updateConfigFromHwInfoPayload(const QString &hwInfo) {
     if (hwInfo.isEmpty()) return;
 
@@ -642,28 +660,22 @@ class DiagnosticsWindow : public QMainWindow {
         const auto parsed = parseIdList(value, 1, 255);
         if (!parsed.empty()) configuredMirrorIds_ = parsed;
       } else if (key == "mirror_axes") {
-        QSet<int> mirrorIds;
-        for (const QString &entry : value.split(',', Qt::SkipEmptyParts)) {
-          const QStringList pair = entry.split(':');
-          if (pair.size() != 2) continue;
-          bool idOk = false;
-          bool axisOk = false;
-          const int mirrorId = pair[0].trimmed().toInt(&idOk);
-          const int axis = pair[1].trimmed().toInt(&axisOk);
-          if (!idOk || !axisOk || mirrorId <= 0 || mirrorId > 255 || axis < 0 || axis >= kAxisCount) continue;
-          mirrorIds.insert(mirrorId);
-        }
-        if (!mirrorIds.isEmpty()) {
-          configuredMirrorIds_.clear();
-          configuredMirrorIds_.reserve(mirrorIds.size());
-          for (const int id : mirrorIds) configuredMirrorIds_.push_back(id);
-          std::sort(configuredMirrorIds_.begin(), configuredMirrorIds_.end());
-        }
+        const auto parsed = parseMappedIds(value, 1, 255);
+        if (!parsed.empty()) configuredMirrorIds_ = parsed;
       } else if (key == "mirror_count") {
         bool ok = false;
         const int count = value.toInt(&ok);
         if (ok && count > 0 && configuredMirrorIds_.empty()) {
           for (int id = 1; id <= qMin(count, 255); ++id) configuredMirrorIds_.push_back(id);
+        }
+      } else if (key == "sut_axes") {
+        const auto parsed = parseMappedIds(value, 1, 255);
+        if (!parsed.empty()) configuredSutIds_ = parsed;
+      } else if (key == "sut_count") {
+        bool ok = false;
+        const int count = value.toInt(&ok);
+        if (ok && count > 0 && configuredSutIds_.empty()) {
+          for (int id = 1; id <= qMin(count, 255); ++id) configuredSutIds_.push_back(id);
         }
       } else if (key == "axis_drivers") {
         axisDriverNames_.fill("-");
@@ -716,6 +728,8 @@ class DiagnosticsWindow : public QMainWindow {
     const QRegularExpression mirrorRx("mirror_ids\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
     const QRegularExpression mirrorAxesRx("mirror_axes\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
     const QRegularExpression mirrorCountRx("mirror_count\\s*=\\s*(\\d+)", QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression sutAxesRx("sut_axes\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression sutCountRx("sut_count\\s*=\\s*(\\d+)", QRegularExpression::CaseInsensitiveOption);
 
     const auto turretMatch = turretRx.match(hwInfo);
     if (turretMatch.hasMatch()) {
@@ -730,23 +744,8 @@ class DiagnosticsWindow : public QMainWindow {
     } else {
       const auto mirrorAxesMatch = mirrorAxesRx.match(hwInfo);
       if (mirrorAxesMatch.hasMatch()) {
-        QSet<int> mirrorIds;
-        for (const QString &entry : mirrorAxesMatch.captured(1).split(',', Qt::SkipEmptyParts)) {
-          const QStringList pair = entry.split(':');
-          if (pair.size() != 2) continue;
-          bool idOk = false;
-          bool axisOk = false;
-          const int mirrorId = pair[0].trimmed().toInt(&idOk);
-          const int axis = pair[1].trimmed().toInt(&axisOk);
-          if (!idOk || !axisOk || mirrorId <= 0 || mirrorId > 255 || axis < 0 || axis >= kAxisCount) continue;
-          mirrorIds.insert(mirrorId);
-        }
-        if (!mirrorIds.isEmpty()) {
-          configuredMirrorIds_.clear();
-          configuredMirrorIds_.reserve(mirrorIds.size());
-          for (const int id : mirrorIds) configuredMirrorIds_.push_back(id);
-          std::sort(configuredMirrorIds_.begin(), configuredMirrorIds_.end());
-        }
+        const auto parsed = parseMappedIds(mirrorAxesMatch.captured(1), 1, 255);
+        if (!parsed.empty()) configuredMirrorIds_ = parsed;
       }
       const auto countMatch = mirrorCountRx.match(hwInfo);
       if (countMatch.hasMatch()) {
@@ -755,6 +754,20 @@ class DiagnosticsWindow : public QMainWindow {
         if (ok && count > 0 && configuredMirrorIds_.empty()) {
           for (int id = 1; id <= qMin(count, 255); ++id) configuredMirrorIds_.push_back(id);
         }
+      }
+    }
+
+    const auto sutAxesMatch = sutAxesRx.match(hwInfo);
+    if (sutAxesMatch.hasMatch()) {
+      const auto parsed = parseMappedIds(sutAxesMatch.captured(1), 1, 255);
+      if (!parsed.empty()) configuredSutIds_ = parsed;
+    }
+    const auto sutCountMatch = sutCountRx.match(hwInfo);
+    if (sutCountMatch.hasMatch()) {
+      bool ok = false;
+      const int count = sutCountMatch.captured(1).toInt(&ok);
+      if (ok && count > 0 && configuredSutIds_.empty()) {
+        for (int id = 1; id <= qMin(count, 255); ++id) configuredSutIds_.push_back(id);
       }
     }
 
@@ -985,21 +998,24 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void updateDeviceSelectors(int connectedDevices, int discoveredDevices) {
-    const int availableSut = qBound(0, connectedDevices > 2 ? (connectedDevices - 2) / 2 : 0, 8);
     const int configuredTurretAxes = static_cast<int>(configuredTurretAxes_.size());
     const bool turretSelectable = simModeBox_->isChecked() || configuredTurretAxes >= 1;
 
     std::vector<int> selectableMirrorIds = configuredMirrorIds_;
+    std::vector<int> selectableSutIds = configuredSutIds_;
+    if (simModeBox_->isChecked() && selectableSutIds.empty()) {
+      for (int id = 1; id <= 8; ++id) selectableSutIds.push_back(id);
+    }
     const bool topologyReady = simModeBox_->isChecked() || hwTopologyLoaded_;
     const bool mirrorSelectable = simModeBox_->isChecked() || (topologyReady && !selectableMirrorIds.empty());
-    const bool sutSelectable = simModeBox_->isChecked() || availableSut > 0;
+    const bool sutSelectable = simModeBox_->isChecked() || (topologyReady && !selectableSutIds.empty());
 
     if (sutIdBox_) {
       int desired = preferredSutId_;
       if (desired < 0) desired = sutIdBox_->currentData().toInt();
       sutIdBox_->clear();
       sutIdBox_->addItem("All", 0xFF);
-      for (int id = 1; id <= availableSut; ++id) {
+      for (const int id : selectableSutIds) {
         sutIdBox_->addItem(QString::number(id), id);
       }
       int idx = sutIdBox_->findData(desired);
@@ -1009,7 +1025,7 @@ class DiagnosticsWindow : public QMainWindow {
       sutIdBox_->setCurrentIndex(idx);
       preferredSutId_ = sutIdBox_->currentData().toInt();
       sutSelectionValid_ = true;
-      sutIdBox_->setEnabled(availableSut > 0);
+      sutIdBox_->setEnabled(sutSelectable);
     }
 
     if (turretTypeBox_) {
@@ -1811,6 +1827,7 @@ class DiagnosticsWindow : public QMainWindow {
   bool sutSelectionValid_{true};
   std::vector<int> configuredTurretAxes_{};
   std::vector<int> configuredMirrorIds_{};
+  std::vector<int> configuredSutIds_{};
   std::array<QString, kAxisCount> axisDriverNames_{};
   std::array<int, kAxisCount> axisConnected_{};
   std::array<int, kAxisCount> axisMotorStatusMap_{};
