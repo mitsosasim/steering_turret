@@ -21,6 +21,7 @@
 /* Queue is producer/consumer between TCP command thread and CAN worker.
  * eventfd wakeups integrate queue activity with poll/epoll without busy loops.
  */
+/* Mirror pre-validation lives in TCP path; queue receives only validated actions. */
 static void actionq_notify_locked(actionq_t* q) {
   if (q->wake_fd < 0) return;
   const uint64_t one = 1;

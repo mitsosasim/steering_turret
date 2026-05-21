@@ -37,6 +37,7 @@
 #include "stc_state.h"
 #include "stc_faults.h"
 #include "stc_log.h"
+#include "stc_errors.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -3474,23 +3475,40 @@ int main(int argc, char** argv) {
                 if (cmd.u.mirror.mirror_id != 0xFF) {
                   const int mirror_idx = (int)cmd.u.mirror.mirror_id - 1;
                   const int mirror_axis = (mirror_idx >= 0 && mirror_idx < sh.d.mirror_count) ? sh.d.mirror_axis[mirror_idx] : -1;
+                  const int axis = mirror_axis;
+                  const int configured = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.cfg[axis].expected) ? 1 : 0;
+                  const int connected = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_connected[axis]) ? 1 : 0;
+                  const int available = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_available[axis]) ? 1 : 0;
+                  const int stale = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_stale[axis]) ? 1 : 0;
+                  const int fault = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_fault_active[axis]) ? 1 : 0;
+                  const int strict_stale = sh.d.strict_stale_policy ? 1 : 0;
+
                   if (mirror_axis >= 0) {
                     STC_LOG_INFO("MIRROR id=%u maps to axis%d", cmd.u.mirror.mirror_id, mirror_axis);
                   }
+                  STC_LOG_INFO("MIRROR validation axis%d configured=%d connected=%d available=%d stale=%d fault=%d state=%s",
+                               axis,
+                               configured,
+                               connected,
+                               available,
+                               stale,
+                               fault,
+                               stc_state_name(sh.d.st_state));
+
                   if (sh.d.st_state != STC_STATE_OPER) {
-                    STC_LOG_WARN("MIRROR id=%u rejected: state=%s (OPER required)",
-                                 cmd.u.mirror.mirror_id,
-                                 stc_state_name(sh.d.st_state));
                     v = STC_ERR_NOT_ALLOWED_STATE;
-                  }
-                  if (mirror_axis >= 0 && !axis_is_live_for_motion(&sh.d, mirror_axis)) {
-                    STC_LOG_WARN("MIRROR id=%u maps to axis%d but axis is not connected; rejecting motion",
-                                 cmd.u.mirror.mirror_id, mirror_axis);
+                  } else if (axis < 0 || axis >= (int)STC_AXIS_COUNT || !configured) {
+                    v = STC_ERR_INVALID_AXIS;
+                  } else if (!connected) {
                     v = STC_ERR_AXIS_NOT_CONNECTED;
+                  } else if (fault) {
+                    v = STC_ERR_AXIS_FAULT;
+                  } else if (stale && strict_stale) {
+                    v = STC_ERR_AXIS_STALE;
                   }
                 }
                 if (v != STC_ERR_NO_ERROR) {
-                  /* Do not build/queue any action when target axis is not live. */
+                  /* Do not build/queue any action when target axis pre-validation fails. */
                 } else {
                 axes_mask = mirror_axes_mask(&sh.d, cmd.u.mirror.mirror_id);
                 for (int i = 0; i < sh.d.mirror_count; i++) {
