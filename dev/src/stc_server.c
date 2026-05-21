@@ -693,6 +693,19 @@ static int axis_is_operational(const shared_data_t* sh, int axis) {
   return 1;
 }
 
+static int axis_is_live_for_motion(const shared_data_t* sh, int axis) {
+  if (!axis_in_runtime_range(sh, axis)) return 0;
+  if (!sh->axis_enabled[axis]) return 0;
+  if (sh->cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) return 0;
+  if (!sh->axis_available[axis]) return 0;
+  if (sh->axis_fault_active[axis]) return 0;
+  if (sh->can_timeout_ms > 0 &&
+      elapsed_ms_nonnegative(mono_ms(), sh->last_rx_ms[axis]) > sh->can_timeout_ms) {
+    return 0;
+  }
+  return 1;
+}
+
 static int sut_index_from_laser_id(const shared_data_t* sh, uint8_t laser_id) {
   if (!sh) return -1;
   if (laser_id < 1) return -1;
@@ -3223,6 +3236,18 @@ int main(int argc, char** argv) {
                   }
                 }
               } else if (cmd.cmd_id == STC_CMD_MIRROR) {
+                if (cmd.u.mirror.mirror_id != 0xFF) {
+                  const int mirror_idx = (int)cmd.u.mirror.mirror_id - 1;
+                  const int mirror_axis = (mirror_idx >= 0 && mirror_idx < sh.d.mirror_count) ? sh.d.mirror_axis[mirror_idx] : -1;
+                  if (mirror_axis >= 0 && !axis_is_live_for_motion(&sh.d, mirror_axis)) {
+                    STC_LOG_WARN("MIRROR id=%u maps to axis%d but axis is not connected; rejecting motion",
+                                 cmd.u.mirror.mirror_id, mirror_axis);
+                    v = STC_ERR_AXIS_NOT_CONNECTED;
+                  }
+                }
+                if (v != STC_ERR_NO_ERROR) {
+                  /* Do not build/queue any action when target axis is not live. */
+                } else {
                 axes_mask = mirror_axes_mask(&sh.d, cmd.u.mirror.mirror_id);
                 for (int i = 0; i < sh.d.mirror_count; i++) {
                   if (cmd.u.mirror.mirror_id != 0xFF && cmd.u.mirror.mirror_id != (uint8_t)(i + 1)) continue;
@@ -3248,6 +3273,7 @@ int main(int argc, char** argv) {
                     log_axis_abs_saturation_if_needed(axis, requested_abs, targets[axis], &sh.d.cfg[axis], target_limited);
                     mark_axis_saturated(&sh.d, axis, target_limited);
                   }
+                }
                 }
               }
 
