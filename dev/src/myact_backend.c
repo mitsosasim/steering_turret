@@ -43,6 +43,7 @@ enum {
   MYACT_CMD_READ_STATUS1 = 0x9A,
   MYACT_CMD_READ_ANGLE = 0x92,
   MYACT_CMD_READ_STATUS2 = 0x9C,
+  MYACT_CMD_READ_STATUS3 = 0x9D,
   MYACT_CAN_BASE = 0x140,
   MYACT_REPLY_BASE = 0x240,
   MYACT_MOTION_REPLY_BASE = 0x500,
@@ -193,6 +194,32 @@ static void log_myact_failure(struct motion_backend* b, size_t axis, const char*
 
 static int send_myact_read(struct motion_backend* b, uint8_t node_id, uint8_t cmd) {
   return send_myact_cmd(b, node_id, cmd, 0, 0);
+}
+
+static int quiesce_active_replies(struct motion_backend* b, uint8_t node_id, int drain_ms) {
+  static const uint8_t cmds[] = { MYACT_CMD_READ_STATUS1, MYACT_CMD_READ_STATUS2, MYACT_CMD_READ_STATUS3, MYACT_CMD_READ_ANGLE };
+  for (size_t i = 0; i < (sizeof(cmds) / sizeof(cmds[0])); i++) {
+    (void)send_myact_cmd(b, node_id, 0xB6, 0, (int32_t)((uint32_t)cmds[i] << 8));
+  }
+  int drained = 0;
+  const uint64_t deadline = now_ms() + (uint64_t)((drain_ms > 0) ? drain_ms : 0);
+  while (now_ms() <= deadline) {
+    struct can_frame f;
+    const int fd = socket_for_node(b, node_id);
+    if (fd < 0) break;
+    const ssize_t r = read(fd, &f, sizeof(f));
+    if (r == (ssize_t)sizeof(f)) {
+      drained++;
+      continue;
+    }
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      struct timespec ts = {.tv_sec = 0, .tv_nsec = 1 * 1000 * 1000};
+      nanosleep(&ts, NULL);
+      continue;
+    }
+    break;
+  }
+  return drained;
 }
 
 static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t expected_cmd, struct can_frame* out, int timeout_ms) {
@@ -596,6 +623,12 @@ int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!cfg->axis_enabled[axis] || cfg->axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
     if (!cfg->axis_node_id[axis]) continue;
+    const int drained = quiesce_active_replies(b, cfg->axis_node_id[axis], 150);
+    if (drained > 0) {
+      STC_LOG_INFO("MYACT axis%zu quiesce: disabled active replies, drained %d stale frames", axis, drained);
+    } else {
+      STC_LOG_INFO("MYACT axis%zu quiesce: disabled active replies", axis);
+    }
     STC_LOG_INFO("MYACT axis%zu discovery: sending read_model", axis);
     char model[8] = {0};
     if (send_myact_read(b, cfg->axis_node_id[axis], MYACT_CMD_READ_MODEL) == 0) {

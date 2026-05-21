@@ -39,6 +39,7 @@ int myact_socketcan_open(myact_socketcan_t* io, const char* ifname, uint8_t node
 void myact_socketcan_close(myact_socketcan_t* io);
 int myact_socketcan_fd(const myact_socketcan_t* io);
 int myact_socketcan_drain(myact_socketcan_t* io, myact_ctx_t* ctx, int max_frames);
+int myact_socketcan_drain_for(myact_socketcan_t* io, myact_ctx_t* ctx, int drain_ms);
 
 #ifdef __cplusplus
 }
