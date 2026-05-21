@@ -489,6 +489,23 @@ class DiagnosticsWindow : public QMainWindow {
     tcpConnected_ = true;
     updateTcpStatusLabel();
     appendLog(QString("CU TCP connected to %1:%2").arg(tcpSocket_->peerAddress().toString()).arg(tcpSocket_->peerPort()));
+    hwInfoRefreshRequestedThisConnect_ = false;
+    hwTopologyLoaded_ = false;
+    if (!simModeBox_->isChecked()) requestHwInfoRefresh("tcp connect");
+  }
+
+  bool requestHwInfoRefresh(const QString &reason) {
+    stc_icd_cmd_t cmd{};
+    makeHeader(&cmd);
+    cmd.cmd_id = STC_CMD_REQ_HW_INFO;
+    cmd.payload_decoded = 1;
+    cmd.payload_size = 0;
+    if (!sendPackedCommand(cmd, QString("REQ_HW_INFO refresh (%1)").arg(reason))) {
+      appendLog(QString("REQ_HW_INFO refresh failed (%1)").arg(reason));
+      return false;
+    }
+    hwInfoRefreshRequestedThisConnect_ = true;
+    return true;
   }
 
   void onTcpDisconnected() {
@@ -539,8 +556,10 @@ class DiagnosticsWindow : public QMainWindow {
 
       if (ack && rsp.cmd_id == STC_CMD_REQ_HW_INFO && rsp.payload_size > 0) {
         const QString hwInfo = QString::fromUtf8(reinterpret_cast<const char*>(rsp.payload), rsp.payload_size).trimmed();
+        hwTopologyLoaded_ = true;
         updateConfigFromHwInfoPayload(hwInfo);
         updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
+        updateCommandAvailability();
       }
     }
   }
@@ -926,6 +945,10 @@ class DiagnosticsWindow : public QMainWindow {
       }
       tlmlErrorsLabel_->setText(QString("TLML errors matrix:\n%1").arg(errors.isEmpty() ? "none" : errors.join(", ")));
 
+      if (!simModeBox_->isChecked() && !hwTopologyLoaded_ && !hwInfoRefreshRequestedThisConnect_) {
+        requestHwInfoRefresh("first TLML");
+      }
+
       updateDeviceSelectors(lastConnectedDevices_, lastDiscoveredDevices_);
       updateCommandAvailability();
 
@@ -967,10 +990,8 @@ class DiagnosticsWindow : public QMainWindow {
     const bool turretSelectable = simModeBox_->isChecked() || configuredTurretAxes >= 1;
 
     std::vector<int> selectableMirrorIds = configuredMirrorIds_;
-    if (selectableMirrorIds.empty()) {
-      for (int id = 1; id <= 8; ++id) selectableMirrorIds.push_back(id);
-    }
-    const bool mirrorSelectable = simModeBox_->isChecked() || !selectableMirrorIds.empty();
+    const bool topologyReady = simModeBox_->isChecked() || hwTopologyLoaded_;
+    const bool mirrorSelectable = simModeBox_->isChecked() || (topologyReady && !selectableMirrorIds.empty());
     const bool sutSelectable = simModeBox_->isChecked() || availableSut > 0;
 
     if (sutIdBox_) {
@@ -1024,9 +1045,13 @@ class DiagnosticsWindow : public QMainWindow {
     for (int i = 0; i < kAxisCount; ++i) {
       if (axisDriverNames_[i] != "-") drivers << QString("axis%1=%2").arg(i).arg(axisDriverNames_[i]);
     }
-    inventoryLabel_->setText(QString("Inventory: Connected motors = %1 | %2")
-                               .arg(connectedDevices)
-                               .arg(drivers.isEmpty() ? "disabled" : drivers.join(", ")));
+    if (!simModeBox_->isChecked() && !hwTopologyLoaded_) {
+      inventoryLabel_->setText("Inventory: loading topology…");
+    } else {
+      inventoryLabel_->setText(QString("Inventory: Connected motors = %1 | %2")
+                                 .arg(connectedDevices)
+                                 .arg(drivers.isEmpty() ? "disabled" : drivers.join(", ")));
+    }
     setUiCommandEnabled(UiCommand::Turret, turretSelectable);
     setUiCommandEnabled(UiCommand::Mirror, mirrorSelectable);
     setUiCommandEnabled(UiCommand::Sut, sutSelectable);
@@ -1182,6 +1207,7 @@ class DiagnosticsWindow : public QMainWindow {
     if (success) {
       appendLog("CAN rediscovery: SUCCESS");
       appendLog(QString("CAN rediscovery success: %1").arg(detailsJoined));
+      requestHwInfoRefresh("post-rediscovery");
     } else {
       appendLog("CAN rediscovery: FAILED");
       appendLog(QString("CAN rediscovery failed: %1").arg(detailsJoined));
@@ -1346,6 +1372,9 @@ class DiagnosticsWindow : public QMainWindow {
     const bool isOper = currentState_ == 3;
     if (c == UiCommand::Turret || c == UiCommand::Mirror || c == UiCommand::Sut) {
       allowed = isOper;
+      if (!simModeBox_->isChecked() && !hwTopologyLoaded_) {
+        allowed = false;
+      }
     }
     if (c == UiCommand::Config) {
       allowed = false;
@@ -1767,6 +1796,8 @@ class DiagnosticsWindow : public QMainWindow {
   uint8_t currentState_ = 0;
   bool tcpConnected_ = false;
   bool startupCapabilityCheckDone_ = false;
+  bool hwTopologyLoaded_{false};
+  bool hwInfoRefreshRequestedThisConnect_{false};
   QByteArray rspBuffer_;
   QHash<uint16_t, QString> pendingCommands_;
 
