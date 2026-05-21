@@ -13,12 +13,11 @@
 
 #include "stc_faults.h"
 
-/* DS402 fault detection uses statusword state-mask bits (0x004F) and matches
- * standardized fault/fault-reaction patterns, instead of vendor-specific text.
+/* DS402 fault detection is bit-based: bit 3 indicates fault regardless of
+ * other state bits in the statusword.
  */
 int stc_detect_ds402_fault(uint16_t status) {
-  const uint16_t masked = (uint16_t)(status & 0x004Fu);
-  return (masked == 0x0008u || masked == 0x000Fu) ? 1 : 0;
+  return (status & 0x0008u) != 0u;
 }
 
 /* Stale telemetry detection is time-delta based so callers can apply uniform

@@ -432,7 +432,10 @@ if(BUILD_TESTING)
   add_test(NAME test_diag_state_integration COMMAND test_diag_state_integration)
   add_test(NAME test_icd_codec COMMAND test_icd_codec)
   add_test(NAME test_myact_socketcan_ids COMMAND test_myact_socketcan_ids)
-  add_test(NAME x8_25_test_can COMMAND x8_25_test_can)
+  add_test(NAME x8_25_test_can_hw COMMAND x8_25_test_can can0 1)
+  set_tests_properties(x8_25_test_can_hw PROPERTIES
+    LABELS "hardware"
+    DISABLED TRUE)
   add_test(NAME test_x8_25_protocol COMMAND test_x8_25_protocol)
   add_test(NAME test_axis_cfg_map COMMAND test_axis_cfg_map)
   add_test(NAME stc_config_test COMMAND stc_config_test)
