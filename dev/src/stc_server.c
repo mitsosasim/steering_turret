@@ -2114,7 +2114,8 @@ static void print_usage(FILE* out, const char* p) {
           "          [--tlml-ip 127.0.0.1 --tlml-port 6020 --tlml-hz 10]\n"
           "          [--rt-enabled 0|1] [--rt-strict 0|1] [--rt-policy fifo|rr|other]\n"
           "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n"
-          "          [--diag-port 0|PORT] [--strict-stale-policy 0|1]\n\n"
+          "          [--diag-port 0|PORT] [--strict-stale-policy 0|1]\n"
+          "          [--log-level error|warn|info|debug]\n\n"
           "--backend sim|simulator|can|hardware|hardware_can\n"
           "    Select runtime backend.\n"
           "    simulator: no real hardware.\n"
@@ -2439,7 +2440,8 @@ int main(int argc, char** argv) {
   int udp_l = -1;
   int srv = -1;
 
-  stc_log_init("stc.log", STC_LOG_LEVEL_DEBUG);
+  stc_log_level_t cli_log_level = STC_LOG_LEVEL_DEBUG;
+  stc_log_init("stc.log", cli_log_level);
 
   runtime_net_t net = {
     .can_if = "can0",
@@ -2612,6 +2614,16 @@ int main(int argc, char** argv) {
     }
     else if (!strcmp(argv[i], "--diag-port") && i + 1 < argc) {
       net.diag_port = atoi(argv[++i]);
+    }
+    else if (!strcmp(argv[i], "--log-level") && i + 1 < argc) {
+      const char* level_value = argv[++i];
+      if (stc_log_level_from_string(level_value, &cli_log_level) != 0) {
+        STC_LOG_ERROR("invalid --log-level value='%s' (expected error|warn|info|debug)", level_value);
+        print_usage(stderr, argv[0]);
+        exit_code = 2;
+        goto cleanup;
+      }
+      stc_log_set_level(cli_log_level);
     }
     else if (!strcmp(argv[i], "--rt-enabled") && i + 1 < argc) {
       net.sched.rt_enabled = atoi(argv[++i]) ? 1 : 0;
@@ -3281,7 +3293,7 @@ int main(int argc, char** argv) {
                 STC_LOG_WARN("requested motion target is not configured");
                 v = STC_ERR_NOT_CONFIGURED;
               } else if (axes_mask == 0) {
-                v = STC_ERR_VALUE_OUT_OF_RANGE;
+                v = STC_ERR_AXIS_NOT_CONNECTED;
               } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
                 /* Command-to-action conversion: speed commands become stream actions, others become bounded moves. */
                 if ((cmd.cmd_id == STC_CMD_TURRET && cmd.u.turret.motion_type == STC_MOTION_SPEED) ||

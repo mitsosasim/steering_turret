@@ -129,6 +129,15 @@ void stc_vlog(stc_log_level_t level, const char* fmt, va_list ap) {
   pthread_mutex_unlock(&g_log_mutex);
 }
 
+int stc_log_level_from_string(const char* value, stc_log_level_t* out_level) {
+  if (!value || !out_level) return -1;
+  if (strcmp(value, "error") == 0) { *out_level = STC_LOG_LEVEL_ERROR; return 0; }
+  if (strcmp(value, "warn") == 0)  { *out_level = STC_LOG_LEVEL_WARN; return 0; }
+  if (strcmp(value, "info") == 0)  { *out_level = STC_LOG_LEVEL_INFO; return 0; }
+  if (strcmp(value, "debug") == 0) { *out_level = STC_LOG_LEVEL_DEBUG; return 0; }
+  return -1;
+}
+
 void stc_log(stc_log_level_t level, const char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);

@@ -15,6 +15,7 @@
 // icd_tx_tcp.c
 #define _POSIX_C_SOURCE 200809L
 #include "stc_icd.h"
+#include "stc_errors.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -137,21 +138,7 @@ static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg) {
   }
 
   const char* result_name = (rsp.result == STC_RSP_ACK ? "ACK" : "NACK");
-  const char* err_name = "UNKNOWN";
-  switch (rsp.err_code) {
-    case STC_ERR_NO_ERROR: err_name = "STC_ERR_NO_ERROR"; break;
-    case STC_ERR_CLIENT_UNKNOWN: err_name = "STC_ERR_CLIENT_UNKNOWN"; break;
-    case STC_ERR_PROTOCOL_MISMATCH: err_name = "STC_ERR_PROTOCOL_MISMATCH"; break;
-    case STC_ERR_SYNTAX_ERROR: err_name = "STC_ERR_SYNTAX_ERROR"; break;
-    case STC_ERR_VALUE_OUT_OF_RANGE: err_name = "STC_ERR_VALUE_OUT_OF_RANGE"; break;
-    case STC_ERR_NOT_ALLOWED_STATE: err_name = "STC_ERR_NOT_ALLOWED_STATE"; break;
-    case STC_ERR_INSUFFICIENT_RES: err_name = "STC_ERR_INSUFFICIENT_RES"; break;
-    case STC_ERR_TIMEOUT: err_name = "STC_ERR_TIMEOUT"; break;
-    case STC_ERR_COMMAND_NOT_IMPLEMENTED: err_name = "STC_ERR_COMMAND_NOT_IMPLEMENTED"; break;
-    case STC_ERR_NOT_CONFIGURED: err_name = "STC_ERR_NOT_CONFIGURED"; break;
-    case STC_ERR_AXIS_NOT_CONNECTED: err_name = "STC_ERR_AXIS_NOT_CONNECTED"; break;
-    case STC_ERR_GENERIC: err_name = "STC_ERR_GENERIC"; break;
-  }
+  const char* err_name = stc_error_code_name((stc_nack_err_t)rsp.err_code);
 
   printf("RSP: cmd_id=0x%04X seq=%u result=%s err_code=%u (%s) payload_size=%u\n",
          rsp.cmd_id, rsp.seq, result_name,

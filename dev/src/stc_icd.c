@@ -14,6 +14,7 @@
  */
 
 #include "stc_icd.h"
+#include "stc_errors.h"
 
 #include <assert.h>
 #include <string.h>
@@ -601,4 +602,23 @@ stc_icd_rc_t stc_icd_tlml_pack(const stc_icd_cfg_t* cfg,
   if (off != total) return STC_ICD_EPROTO;
   *out_len = total;
   return STC_ICD_OK;
+}
+
+
+const char* stc_error_code_name(stc_nack_err_t code) {
+  switch (code) {
+    case STC_ERR_NO_ERROR: return "STC_ERR_NO_ERROR";
+    case STC_ERR_CLIENT_UNKNOWN: return "STC_ERR_CLIENT_UNKNOWN";
+    case STC_ERR_PROTOCOL_MISMATCH: return "STC_ERR_PROTOCOL_MISMATCH";
+    case STC_ERR_SYNTAX_ERROR: return "STC_ERR_SYNTAX_ERROR";
+    case STC_ERR_VALUE_OUT_OF_RANGE: return "STC_ERR_VALUE_OUT_OF_RANGE";
+    case STC_ERR_NOT_ALLOWED_STATE: return "STC_ERR_NOT_ALLOWED_STATE";
+    case STC_ERR_INSUFFICIENT_RES: return "STC_ERR_INSUFFICIENT_RES";
+    case STC_ERR_TIMEOUT: return "STC_ERR_TIMEOUT";
+    case STC_ERR_COMMAND_NOT_IMPLEMENTED: return "STC_ERR_COMMAND_NOT_IMPLEMENTED";
+    case STC_ERR_NOT_CONFIGURED: return "STC_ERR_NOT_CONFIGURED";
+    case STC_ERR_AXIS_NOT_CONNECTED: return "STC_ERR_AXIS_NOT_CONNECTED";
+    case STC_ERR_GENERIC: return "STC_ERR_GENERIC";
+    default: return "UNKNOWN";
+  }
 }
