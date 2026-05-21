@@ -460,6 +460,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       (void)send_myact_cmd(b, node_id, MYACT_CMD_BRAKE_RELEASE, 0, 0);
       b->velocity_session_ready[axis] = 1;
     }
+    STC_LOG_INFO("MYACT TX motion axis%zu cmd=A2 raw=%d", axis, speed_0p01dps);
     const int speed_rc = send_myact_cmd(b, node_id, MYACT_CMD_SPEED, 0, speed_0p01dps);
     if (speed_rc == 0) {
       b->speed_active[axis] = (speed_0p01dps != 0);
@@ -505,6 +506,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       }
       const int32_t delta_0p01deg = (int32_t)llround(effective_delta * gr * 100.0);
       expected_target_deg = current_deg + effective_delta;
+      STC_LOG_INFO("MYACT TX motion axis%zu cmd=A8 speed_dps=%u raw=%d", axis, (unsigned)speed_dps, delta_0p01deg);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
       if (cmd_ok == 0) {
         STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, effective_delta, max_speed);
@@ -512,6 +514,7 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
       } else log_myact_failure(b, axis, "A8", cmd_ok);
     } else {
       const int32_t target_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
+      STC_LOG_INFO("MYACT TX motion axis%zu cmd=A4 speed_dps=%u raw=%d", axis, (unsigned)speed_dps, target_0p01deg);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_ABS, speed_dps, target_0p01deg);
       if (cmd_ok == 0) {
         STC_LOG_INFO("axis%zu MYACT A4 abs_deg=%.3f speed=%.3f rc=OK", axis, target_deg, max_speed);
