@@ -232,6 +232,7 @@ class DiagnosticsWindow : public QMainWindow {
     // TCP command send path (CMD frame packing -> socket write).
     connect(sendButton_, &QPushButton::clicked, this, &DiagnosticsWindow::sendCommand);
     connect(commandBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, &DiagnosticsWindow::onCommandSelectionChanged);
+    connect(commandBox_, qOverload<int>(&QComboBox::activated), this, &DiagnosticsWindow::onCommandUserActivated);
     // UDP telemetry receive path (TLMH/TLML decode -> UI update).
     connect(udpHigh_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processHighTelemetry);
     connect(udpLow_, &QUdpSocket::readyRead, this, &DiagnosticsWindow::processLowTelemetry);
@@ -248,13 +249,15 @@ class DiagnosticsWindow : public QMainWindow {
     connect(resetStateButton_, &QPushButton::clicked, this, [this]() { sendStateControl(0xFF, "FAIL reset/RESET state sent"); });
     connect(tlmHighPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
     connect(tlmLowPortSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { bindTelemetrySockets(); });
-    connect(mirrorIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-      if (!mirrorIdBox_ || mirrorIdBox_->signalsBlocked()) return;
+    connect(mirrorIdBox_, qOverload<int>(&QComboBox::activated), this, [this](int) {
+      if (!mirrorIdBox_) return;
       preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
+      mirrorSelectionValid_ = true;
     });
-    connect(sutIdBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+    connect(sutIdBox_, qOverload<int>(&QComboBox::activated), this, [this](int) {
       if (!sutIdBox_) return;
       preferredSutId_ = sutIdBox_->currentData().toInt();
+      sutSelectionValid_ = true;
     });
     connect(tcpSocket_, &QTcpSocket::connected, this, &DiagnosticsWindow::onTcpConnected);
     connect(tcpSocket_, &QTcpSocket::disconnected, this, &DiagnosticsWindow::onTcpDisconnected);
@@ -293,11 +296,14 @@ class DiagnosticsWindow : public QMainWindow {
 
  private:
   void onCommandSelectionChanged(int index) {
-    if (!applyingCommandAvailability_) {
-      userSelectedCommand_ = true;
-    }
     payloadStack_->setCurrentIndex(index);
     updateCommandAvailability();
+  }
+
+  void onCommandUserActivated(int) {
+    if (!commandBox_) return;
+    selectedCommandUi_ = static_cast<UiCommand>(commandBox_->currentData().toInt());
+    userSelectedCommand_ = true;
   }
 
   UiCommand currentUiCommand() const {
@@ -923,11 +929,15 @@ class DiagnosticsWindow : public QMainWindow {
       for (int id = 1; id <= availableSut; ++id) {
         sutIdBox_->addItem(QString::number(id), id);
       }
-      int idx = sutIdBox_->findData(desired);
-      if (idx < 0) idx = 0;
-      sutIdBox_->setCurrentIndex(idx);
-      preferredSutId_ = sutIdBox_->currentData().toInt();
-      sutIdBox_->setEnabled(availableSut > 0);
+      const int idx = sutIdBox_->findData(desired);
+      if (idx >= 0) {
+        sutIdBox_->setCurrentIndex(idx);
+        preferredSutId_ = sutIdBox_->currentData().toInt();
+        sutSelectionValid_ = true;
+      } else {
+        sutSelectionValid_ = false;
+      }
+      sutIdBox_->setEnabled(availableSut > 0 && sutSelectionValid_);
     }
 
     if (turretTypeBox_) {
@@ -949,10 +959,15 @@ class DiagnosticsWindow : public QMainWindow {
       for (const int id : selectableMirrorIds) {
         mirrorIdBox_->addItem(QString::number(id), id);
       }
-      int idx = mirrorIdBox_->findData(desired);
-      if (idx < 0) idx = 0;
-      mirrorIdBox_->setCurrentIndex(idx);
-      mirrorIdBox_->setEnabled(mirrorSelectable);
+      const int idx = mirrorIdBox_->findData(desired);
+      if (idx >= 0) {
+        mirrorIdBox_->setCurrentIndex(idx);
+        preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
+        mirrorSelectionValid_ = true;
+      } else {
+        mirrorSelectionValid_ = false;
+      }
+      mirrorIdBox_->setEnabled(mirrorSelectable && mirrorSelectionValid_);
     }
 
     QStringList drivers;
@@ -1272,19 +1287,11 @@ class DiagnosticsWindow : public QMainWindow {
     if (!commandBox_ || !sendButton_) return;
     QSignalBlocker block(commandBox_);
     applyingCommandAvailability_ = true;
-    if (!userSelectedCommand_) {
-      const std::array<UiCommand, 5> startupDefaultOrder{
-        UiCommand::CuState, UiCommand::ReqHwInfo, UiCommand::Mirror, UiCommand::Turret, UiCommand::Sut
-      };
-      for (const UiCommand cmd : startupDefaultOrder) {
-        const int candidateIdx = commandBox_->findData(static_cast<int>(cmd));
-        if (candidateIdx >= 0 && comboItemEnabled(commandBox_, candidateIdx)) {
-          if (commandBox_->currentIndex() != candidateIdx) {
-            commandBox_->setCurrentIndex(candidateIdx);
-          }
-          break;
-        }
-      }
+    const UiCommand desiredCommand = userSelectedCommand_ ? selectedCommandUi_
+                                                          : static_cast<UiCommand>(commandBox_->currentData().toInt());
+    const int desiredIdx = commandBox_->findData(static_cast<int>(desiredCommand));
+    if (desiredIdx >= 0 && commandBox_->currentIndex() != desiredIdx) {
+      commandBox_->setCurrentIndex(desiredIdx);
     }
 
     const int idx = commandBox_->currentIndex();
@@ -1722,6 +1729,9 @@ class DiagnosticsWindow : public QMainWindow {
   int lastDiscoveredDevices_{0};
   bool userSelectedCommand_{false};
   bool applyingCommandAvailability_{false};
+  UiCommand selectedCommandUi_{UiCommand::CuState};
+  bool mirrorSelectionValid_{true};
+  bool sutSelectionValid_{true};
   std::vector<int> configuredTurretAxes_{};
   std::vector<int> configuredMirrorIds_{};
   std::array<QString, kAxisCount> axisDriverNames_{};
