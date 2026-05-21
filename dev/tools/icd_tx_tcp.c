@@ -101,7 +101,22 @@ static int tcp_connect(const char* host, const char* port) {
   return fd;
 }
 
-static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg) {
+
+static const char* state_meaning(uint8_t state) {
+  switch (state) {
+    case 0: return "INIT";
+    case 1: return "INIT_DONE";
+    case 2: return "SAFE";
+    case 3: return "OPER";
+    case 4: return "SELF_LEVELLING";
+    case 5: return "IBIT_RUNNING";
+    case 6: return "STORE";
+    case 7: return "FAIL";
+    default: return "UNKNOWN";
+  }
+}
+
+static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg, uint16_t sent_cmd_id, uint8_t requested_cu_state, int has_requested_cu_state) {
   /* Read fixed RSP header first, then read payload according to payload_size field. */
   // RSP header is 14 bytes after our ICD-aligned fix
   uint8_t hdr[14];
@@ -147,6 +162,11 @@ static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg) {
 
   printf("%s\n", result_name);
   printf("error_code_name=%s\n", err_name);
+
+  if (rsp.result == STC_RSP_NACK && rsp.err_code == STC_ERR_NOT_ALLOWED_STATE &&
+      sent_cmd_id == STC_CMD_CU_STATE && has_requested_cu_state) {
+    printf("requested_cu_state=%u (%s)\n", (unsigned)requested_cu_state, state_meaning(requested_cu_state));
+  }
 
   if (rsp.cmd_id == STC_CMD_REQ_WORK_TIME && rsp.payload_size == 4) {
     uint32_t uptime_sec = le32(rsp.payload);
@@ -268,53 +288,53 @@ int main(int argc, char** argv) {
     INIT_CMD(STC_CMD_CU_STATE);
     c.u.cu_state.state = 2;
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_SELFLEV);
     c.u.selflev.v = 1;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_SELFLEV);
     c.u.selflev.v = 0;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_IBIT);
     c.u.ibit.v = 1;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_STORAGE);
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_LASER);
     c.u.laser.id = 1;
     c.u.laser.on_off = 1;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_TURRET);
     c.u.turret.motion_type = (uint8_t)STC_MOTION_SPEED;
     c.u.turret.az = 10.0f;
     c.u.turret.el = -3.0f;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_TURRET);
     c.u.turret.motion_type = (uint8_t)STC_MOTION_ABSOLUTE;
     c.u.turret.az = 45.0f;
     c.u.turret.el = 0.0f;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_MIRROR);
     c.u.mirror.mirror_id = 0xFF;
     c.u.mirror.motion_type = (uint8_t)STC_MOTION_ABSOLUTE;
     c.u.mirror.elevation = 12.34f;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_SUT);
     c.u.sut.id = 0xFF;
@@ -322,7 +342,7 @@ int main(int argc, char** argv) {
     c.u.sut.az = 1.0f;
     c.u.sut.el = -1.0f;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     // manualpos double
     INIT_CMD(STC_CMD_MANUALPOS);
@@ -333,16 +353,16 @@ int main(int argc, char** argv) {
     c.u.manualpos.encoded_as_double = 1;
     c.payload_size = 32;
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_POSMODE);
     c.u.posmode.v = 1; // manual
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     INIT_CMD(STC_CMD_REQ_SW_VERSION);
     if (send_cmd(fd, &cfg, &c, 0) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     // a couple bad cases
     printf("\nNow some intentional bad packets...\n");
@@ -352,7 +372,7 @@ int main(int argc, char** argv) {
     c.version = 2;
     c.u.cu_state.state = 2;
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     // bad_payload (turret but wrong payload size by forcing raw)
     INIT_CMD(STC_CMD_TURRET);
@@ -361,7 +381,7 @@ int main(int argc, char** argv) {
     c.payload_raw[0] = 0x02;
     c.payload_raw[1] = 0x00;
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
 
     printf("Suite done.\n");
     close(fd);
@@ -379,7 +399,7 @@ int main(int argc, char** argv) {
     out[0] = 'B'; out[1] = 'A'; out[2] = 'D'; out[3] = '!';
     printf("TX bad_magic:\n"); hexdump(out, out_len);
     if (send_all(fd, out, out_len) != 0) { perror("send"); return 1; }
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
     close(fd);
     return 0;
   }
@@ -388,7 +408,7 @@ int main(int argc, char** argv) {
   if (!strcmp(cmdn, "unknown_cmd")) {
     INIT_CMD(0x9999);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
     close(fd);
     return 0;
   }
@@ -399,7 +419,7 @@ int main(int argc, char** argv) {
     c.version = 2;
     c.u.cu_state.state = 2;
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
     close(fd);
     return 0;
   }
@@ -412,7 +432,7 @@ int main(int argc, char** argv) {
     c.payload_raw[0] = 0x02;
     c.payload_raw[1] = 0x00;
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
     close(fd);
     return 0;
   }
@@ -423,30 +443,30 @@ int main(int argc, char** argv) {
     INIT_CMD(STC_CMD_CU_STATE);
     c.u.cu_state.state = (uint8_t)atoi(argv[4]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "selflev")) {
     if (argc < 5) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_SELFLEV);
     c.u.selflev.v = (uint8_t)atoi(argv[4]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "ibit")) {
     if (argc < 5) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_IBIT);
     c.u.ibit.v = (uint8_t)atoi(argv[4]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "storage")) {
     INIT_CMD(STC_CMD_STORAGE);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "laser")) {
     if (argc < 6) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_LASER);
     c.u.laser.id = (uint8_t)atoi(argv[4]);
     c.u.laser.on_off = (uint8_t)atoi(argv[5]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "turret")) {
     if (argc < 7) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_TURRET);
@@ -454,7 +474,7 @@ int main(int argc, char** argv) {
     c.u.turret.az = (float)atof(argv[5]);
     c.u.turret.el = (float)atof(argv[6]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "mirror")) {
     if (argc != 7) {
       fprintf(stderr, "mirror command takes exactly 3 payload arguments: id, motion, value\n");
@@ -466,7 +486,7 @@ int main(int argc, char** argv) {
     c.u.mirror.motion_type = (uint8_t)parse_motion(argv[5]);
     c.u.mirror.elevation = (float)atof(argv[6]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "sut")) {
     if (argc < 8) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_SUT);
@@ -475,19 +495,19 @@ int main(int argc, char** argv) {
     c.u.sut.az = (float)atof(argv[6]);
     c.u.sut.el = (float)atof(argv[7]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "reset")) {
     INIT_CMD(STC_CMD_RESET);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "factory")) {
     INIT_CMD(STC_CMD_FACTORY);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "shutdown")) {
     INIT_CMD(STC_CMD_SHUTDOWN);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "manualpos")) {
     if (argc < 8) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_MANUALPOS);
@@ -499,7 +519,7 @@ int main(int argc, char** argv) {
     c.payload_size = 32;
 
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "posmode")) {
     if (argc < 5) { usage(argv[0]); return 2; }
     INIT_CMD(STC_CMD_POSMODE);
@@ -507,19 +527,19 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[4], "manual")) c.u.posmode.v = 1;
     else c.u.posmode.v = (uint8_t)atoi(argv[4]);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "req_sw") || !strcmp(cmdn, "req_sw_version")) {
     INIT_CMD(STC_CMD_REQ_SW_VERSION);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "req_hw_info") || !strcmp(cmdn, "req_hw")) {
     INIT_CMD(STC_CMD_REQ_HW_INFO);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else if (!strcmp(cmdn, "req_work_time") || !strcmp(cmdn, "req_worktime")) {
     INIT_CMD(STC_CMD_REQ_WORK_TIME);
     if (send_cmd(fd, &cfg, &c, 1) != 0) return 1;
-    if (read_rsp_and_print(fd, &cfg) != 0) return 1;
+    if (read_rsp_and_print(fd, &cfg, c.cmd_id, c.u.cu_state.state, (c.cmd_id == STC_CMD_CU_STATE)) != 0) return 1;
   } else {
     usage(argv[0]);
     close(fd);
