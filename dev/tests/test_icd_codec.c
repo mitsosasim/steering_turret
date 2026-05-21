@@ -279,6 +279,34 @@ static void test_tlml_declared_error_count_mismatch(void) {
   assert_true(rc == STC_ICD_EPROTO, "tlml parse declared count mismatch");
 }
 
+static void test_req_hw_info_rsp_roundtrip_payload(void) {
+  stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
+  stc_icd_rsp_t rsp;
+  memset(&rsp, 0, sizeof(rsp));
+  rsp.version = 0x01;
+  rsp.cmd_id = STC_CMD_REQ_HW_INFO;
+  rsp.seq = 333;
+  rsp.result = STC_RSP_ACK;
+  rsp.err_code = STC_ERR_NO_ERROR;
+
+  const char* hw = "STC_HW_INFO;mode=can;connected=3;turret_axes=0,1;mirror_ids=1,2;axis_connected=0:1,1:1;motor_status_map=0:0,1:1";
+  rsp.payload_size = (uint16_t)strlen(hw);
+  memcpy(rsp.payload, hw, rsp.payload_size);
+
+  uint8_t buf[512];
+  size_t out_len = 0;
+  stc_icd_rc_t rc = stc_icd_rsp_pack(&cfg, &rsp, buf, sizeof(buf), &out_len);
+  assert_true(rc == STC_ICD_OK, "req_hw_info rsp pack");
+
+  stc_icd_rsp_t parsed;
+  rc = stc_icd_rsp_parse(&cfg, buf, out_len, &parsed);
+  assert_true(rc == STC_ICD_OK, "req_hw_info rsp parse");
+  assert_eq_u16(parsed.cmd_id, STC_CMD_REQ_HW_INFO, "req_hw_info rsp cmd_id");
+  assert_eq_u16(parsed.seq, 333, "req_hw_info rsp seq");
+  assert_true(parsed.payload_size == strlen(hw), "req_hw_info payload size roundtrip");
+  assert_true(memcmp(parsed.payload, hw, strlen(hw)) == 0, "req_hw_info payload mapping/counts preserved");
+}
+
 int main(void) {
   test_cmd_turret_pack_parse();
   test_rsp_pack_parse();
@@ -286,6 +314,7 @@ int main(void) {
   test_tlml_pack_parse();
   test_cmd_mirror_id();
   test_tlml_declared_error_count_mismatch();
+  test_req_hw_info_rsp_roundtrip_payload();
 
   printf("OK\n");
   return 0;
