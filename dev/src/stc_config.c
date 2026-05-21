@@ -238,6 +238,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   for (size_t i = 0; i < STC_MAX_SUT; i++) {
     cfg->sut_az_axis[i] = -1;
     cfg->sut_el_axis[i] = -1;
+    cfg->sut_mirror_axis[i] = -1;
     cfg->sut_laser_on[i] = 0u;
   }
   for (size_t i = 0; i < STC_MAX_MIRROR; i++) {
@@ -295,10 +296,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
       }
       trim_inplace(section);
 
-      const int mir_idx = parse_indexed_section(section, "Mirror", STC_MAX_MIRROR, 1);
-      if (mir_idx >= 0 && mir_idx + 1 > cfg->mirror_count) {
-        cfg->mirror_count = mir_idx + 1;
-      }
       continue;
     }
 
@@ -394,9 +391,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
       } else if (strcmp(key, "strict_stale_policy") == 0) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else if (strcmp(key, "allow_degraded_startup") == 0) {
-        if (parse_int(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
+        if (parse_int(value, &cfg->allow_degraded_startup) != 0 &&
+            parse_bool(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
       } else if (strcmp(key, "require_identity_for_pbit") == 0) {
-        if (parse_int(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
+        if (parse_int(value, &cfg->require_identity_for_pbit) != 0 &&
+            parse_bool(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
       } else if (strcmp(key, "speed_watchdog_ms") == 0) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {
@@ -481,9 +480,11 @@ bool load_config(const char* path, stc_config_t* cfg) {
       } else if (strcmp(key, "strict_stale_policy") == 0) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else if (strcmp(key, "allow_degraded_startup") == 0) {
-        if (parse_int(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
+        if (parse_int(value, &cfg->allow_degraded_startup) != 0 &&
+            parse_bool(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
       } else if (strcmp(key, "require_identity_for_pbit") == 0) {
-        if (parse_int(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
+        if (parse_int(value, &cfg->require_identity_for_pbit) != 0 &&
+            parse_bool(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
       } else if (strcmp(key, "speed_watchdog_ms") == 0) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {
@@ -628,6 +629,21 @@ bool load_config(const char* path, stc_config_t* cfg) {
       continue;
     }
 
+    if (strcmp(section, "SUT") == 0) {
+      bool recognized = true;
+      if (strcmp(key, "count") == 0) {
+        int count = 0;
+        if (parse_int(value, &count) != 0 || count < 0 || count > STC_MAX_SUT) goto parse_error;
+      } else {
+        recognized = false;
+      }
+      if (!recognized) {
+        parse_error_reason = "unknown key";
+        goto parse_error;
+      }
+      continue;
+    }
+
     const int sut_idx = parse_indexed_section(section, "SUT", STC_MAX_SUT, 1);
     if (sut_idx >= 0) {
       bool recognized = true;
@@ -639,6 +655,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         int laser_on = 0;
         if (parse_int(value, &laser_on) != 0 || (laser_on != 0 && laser_on != 1)) goto parse_error;
         cfg->sut_laser_on[sut_idx] = (uint8_t)laser_on;
+      } else if (strcmp(key, "mirror_axis") == 0) {
+        if (parse_int(value, &cfg->sut_mirror_axis[sut_idx]) != 0) goto parse_error;
       } else {
         recognized = false;
       }
@@ -646,7 +664,6 @@ bool load_config(const char* path, stc_config_t* cfg) {
         parse_error_reason = "unknown key";
         goto parse_error;
       }
-      if (sut_idx + 1 > cfg->sut_count) cfg->sut_count = sut_idx + 1;
       continue;
     }
 
@@ -671,6 +688,18 @@ bool load_config(const char* path, stc_config_t* cfg) {
 
   fclose(f);
 
+  int mapped_sut_count = 0;
+  for (int i = 0; i < STC_MAX_SUT; i++) {
+    if (cfg->sut_az_axis[i] >= 0 && cfg->sut_el_axis[i] >= 0) mapped_sut_count++;
+  }
+  cfg->sut_count = mapped_sut_count;
+
+  int mapped_mirror_count = 0;
+  for (int i = 0; i < STC_MAX_MIRROR; i++) {
+    if (cfg->mirror_axis[i] >= 0) mapped_mirror_count++;
+  }
+  cfg->mirror_count = mapped_mirror_count;
+
   cfg->num_axes = max_axis_seen + 1;
   if (cfg->num_axes <= 0) {
     STC_LOG_ERROR("%s: no [AxisN] sections were defined", path);
@@ -692,6 +721,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
     }
     if (!valid_axis_ref(cfg->sut_el_axis[i]) || cfg->sut_el_axis[i] >= cfg->num_axes) {
       STC_LOG_ERROR("%s: [SUT%d].el_axis out of range", path, i + 1);
+      return false;
+    }
+    if (!valid_axis_ref(cfg->sut_mirror_axis[i]) || cfg->sut_mirror_axis[i] >= cfg->num_axes) {
+      STC_LOG_ERROR("%s: [SUT%d].mirror_axis out of range", path, i + 1);
       return false;
     }
   }
