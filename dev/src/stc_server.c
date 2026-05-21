@@ -316,6 +316,7 @@ typedef struct shared_data {
   int can_ok;
   int num_axes;
   uint8_t axis_available[STC_AXIS_COUNT];
+  stc_axis_health_t axis_health[STC_AXIS_COUNT];
   uint8_t axis_expected[STC_AXIS_COUNT];
   uint8_t can_discovered_nodes[16];
   uint8_t can_connected_devices;
@@ -371,7 +372,7 @@ static void expected_motor_counts(const shared_data_t* d, int* expected_motors, 
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       if (!d->axis_expected[axis]) continue;
       expected++;
-      if (d->axis_available[axis]) connected++;
+      if (d->axis_health[axis].connected) connected++;
     }
   }
   if (expected_motors) *expected_motors = expected;
@@ -736,7 +737,7 @@ static int axis_in_runtime_range(const shared_data_t* sh, int axis) {
 static int axis_is_operational(const shared_data_t* sh, int axis) {
   if (!axis_in_runtime_range(sh, axis)) return 0;
   if (!sh->axis_expected[axis]) return 0;
-  if (!sh->axis_available[axis]) return 0;
+  if (!sh->axis_health[axis].connected) return 0;
   if (sh->axis_fault_active[axis]) return 0;
   return 1;
 }
@@ -745,7 +746,7 @@ static int axis_is_live_for_motion(const shared_data_t* sh, int axis) {
   if (!axis_in_runtime_range(sh, axis)) return 0;
   if (!sh->axis_enabled[axis]) return 0;
   if (sh->cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) return 0;
-  if (!sh->axis_available[axis]) return 0;
+  if (!sh->axis_health[axis].connected) return 0;
   if (sh->axis_fault_active[axis]) return 0;
   if (sh->can_timeout_ms > 0 &&
       elapsed_ms_nonnegative(mono_ms(), sh->last_rx_ms[axis]) > sh->can_timeout_ms) {
@@ -1295,7 +1296,8 @@ static void* can_worker_thread(void* arg) {
       a->sh->d.supports_native_absolute_position = snap.capabilities.supports_native_absolute_position;
       memcpy(a->sh->d.can_discovered_nodes, snap.can_discovered_nodes, sizeof(a->sh->d.can_discovered_nodes));
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-        a->sh->d.axis_available[axis] = snap.axis_connected[axis];
+        a->sh->d.axis_health[axis] = snap.axis_health[axis];
+        a->sh->d.axis_available[axis] = snap.axis_health[axis].connected ? 1u : 0u;
         a->sh->d.axis_fault_active[axis] = snap.axis_fault_active[axis] ? 1u : 0u;
         uint64_t rx_ms = snap.last_rx_ms[axis];
         if (rx_ms == 0 && a->sh->d.axis_expected[axis]) {
@@ -1308,6 +1310,8 @@ static void* can_worker_thread(void* arg) {
           rx_ms = now;
         }
         a->sh->d.last_rx_ms[axis] = rx_ms;
+        a->sh->d.axis_health[axis].last_rx_ms = rx_ms;
+        a->sh->d.axis_health[axis].fault_active = a->sh->d.axis_fault_active[axis];
         axis_telem_update(&a->sh->d.telem[axis],
                           &a->sh->d.cfg[axis],
                           snap.pos_raw[axis],
@@ -3628,7 +3632,7 @@ int main(int argc, char** argv) {
         int connected_axes = 0;
         int expected_axes = 0;
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-          if (d->axis_available[axis]) connected_axes++;
+          if (d->axis_health[axis].connected) connected_axes++;
           if (d->cfg[axis].driver != STC_AXIS_DRIVER_DISABLED) expected_axes++;
         }
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required,
@@ -3655,7 +3659,7 @@ int main(int argc, char** argv) {
                             axis,
                             axis_driver_to_string(d->cfg[axis].driver),
                             d->cfg[axis].node_id,
-                            d->axis_available[axis] ? "connected" : "disconnected",
+                            d->axis_health[axis].connected ? "connected" : "disconnected",
                             role);
           }
         }
@@ -3663,7 +3667,7 @@ int main(int argc, char** argv) {
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axis_drivers=");
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%s", axis == 0 ? "" : ",", axis, axis_driver_to_string(d->cfg[axis].driver));
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";axis_connected=");
-        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%u", axis == 0 ? "" : ",", axis, d->axis_available[axis] ? 1u : 0u);
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%u", axis == 0 ? "" : ",", axis, d->axis_health[axis].connected ? 1u : 0u);
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";turret_axes=%d,%d;mirror_count=%d;mirror_axes=", d->turret_az_axis, d->turret_el_axis, d->mirror_count);
         const char* sep = "";
         for (int i = 0; i < d->mirror_count; i++) {
