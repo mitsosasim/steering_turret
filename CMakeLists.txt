@@ -214,6 +214,7 @@ add_executable(x8_25_test_can
   dev/tests/x8_25_test.c
   dev/src/x8_25.c
   dev/src/myact_socketcan.c
+  dev/src/stc_log.c
 )
 target_include_directories(x8_25_test_can PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(x8_25_test_can PRIVATE -Wall -Wextra)

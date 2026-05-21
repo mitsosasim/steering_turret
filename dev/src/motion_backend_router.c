@@ -89,7 +89,7 @@ int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out
     rc = sim_motion_backend_start(cfg, &g_backend.impl);
   } else if (strcmp(g_backend.type, "hardware_can_backend") == 0) {
     g_backend.family = BACKEND_FAMILY_HARDWARE_CAN;
-    rc = can_motion_backend_start ? can_motion_backend_start(cfg, &g_backend.impl) : -1;
+    rc = can_motion_backend_start(cfg, &g_backend.impl);
   } else if (strcmp(g_backend.type, "myact_x8_25") == 0) {
     g_backend.family = BACKEND_FAMILY_MYACT;
     rc = myact_motion_backend_start(cfg, &g_backend.impl);
@@ -128,7 +128,7 @@ void motion_backend_stop(motion_backend_t* b){
   (void)b;
   if(!g_backend.impl) return;
   if (g_backend.family == BACKEND_FAMILY_SIMULATOR) sim_motion_backend_stop(g_backend.impl);
-  else if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) { if (can_motion_backend_stop) can_motion_backend_stop(g_backend.impl); else STC_LOG_ERROR("can backend stop unavailable"); }
+  else if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) can_motion_backend_stop(g_backend.impl);
   else if (g_backend.family == BACKEND_FAMILY_MYACT) myact_motion_backend_stop(g_backend.impl);
   else if (g_backend.family == BACKEND_FAMILY_MOCK) mock_motion_backend_stop(g_backend.impl);
   else STC_LOG_ERROR("motion_backend_stop: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)");
