@@ -1217,6 +1217,7 @@ static void* can_worker_thread(void* arg) {
   pthread_mutex_unlock(&a->sh->mtx);
 
   motion_backend_t* backend = NULL;
+  STC_LOG_INFO("BACKEND_STARTUP_BEGIN");
   if (motion_backend_start(&backend_cfg, &backend) != 0 || !backend) {
     stc_action_t dropped;
     while (actionq_try_peek(a->q, &dropped)) {
@@ -1252,6 +1253,9 @@ static void* can_worker_thread(void* arg) {
   const int startup_ok = startup_inventory_valid &&
                          (startup_expected_motors > 0) &&
                          (startup_connected_motors >= startup_expected_motors);
+  STC_LOG_INFO("BACKEND_STARTUP_DONE expected=%d connected=%d",
+               startup_expected_motors,
+               startup_connected_motors);
   pthread_mutex_lock(&a->sh->mtx);
   a->sh->backend_startup_done = 1;
   a->sh->backend_startup_ok = startup_ok;
@@ -1341,14 +1345,15 @@ static void* can_worker_thread(void* arg) {
       a->sh->d.ibit_pending = 0;
       a->sh->d.ibit_due_ms = 0;
     }
-    if (a->sh->d.st_state == STC_STATE_FAIL &&
-        a->sh->d.fail_cause == STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS &&
+    if (((a->sh->d.st_state == STC_STATE_FAIL &&
+          a->sh->d.fail_cause == STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS) ||
+         a->sh->d.st_state == STC_STATE_INIT) &&
         !a->sh->d.ibit_pending &&
         expected_motors_fully_connected(&a->sh->d)) {
       int expected_motors = 0;
       int connected_motors = 0;
       expected_motor_counts(&a->sh->d, &expected_motors, &connected_motors);
-      STC_LOG_INFO("startup PBIT failed before backend inventory was valid; backend later reports expected_motors=%d connected_motors=%d; rerunning PBIT",
+      STC_LOG_INFO("backend inventory update detected expected_motors=%d connected_motors=%d; rerunning startup PBIT",
                    expected_motors,
                    connected_motors);
       if (shared_transition_locked(a->sh, EVT_PBIT_OK) == 0) {
@@ -2279,6 +2284,11 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
   const int connected_motors = sh->backend_connected_motors;
   const int inventory_valid = sh->backend_inventory_valid ? 1 : 0;
   const int allow_degraded_startup = sh->d.allow_degraded_startup ? 1 : 0;
+  STC_LOG_INFO("PBIT_BEGIN");
+  if (!sh->backend_startup_done) {
+    STC_LOG_ERROR("PBIT ordering violation: PBIT_BEGIN before BACKEND_STARTUP_DONE");
+    return EVT_PBIT_FAIL;
+  }
 
   int network_ok = 1;
   struct in_addr parsed_addr;
@@ -3619,18 +3629,23 @@ int main(int argc, char** argv) {
           if (d->axis_available[axis]) connected_axes++;
           if (d->cfg[axis].driver != STC_AXIS_DRIVER_DISABLED) expected_axes++;
         }
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "STC_HW_INFO;schema=2;mode=%s;connected_count=%d;expected_count=%d;axis_count=%zu;", mode, connected_axes, expected_axes, (size_t)STC_AXIS_COUNT);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axes=");
-        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-          const char* drv = axis_driver_to_string(d->cfg[axis].driver);
-          const unsigned nid = (unsigned)d->axis_node_id[axis];
-          const char* state = d->axis_available[axis] ? "connected" : "disconnected";
-          append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%s:node%u:%s", axis == 0 ? "" : ",", axis, drv, nid, state);
-          if (d->cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ":disabled");
-          for (int m = 0; m < d->mirror_count; m++) if (d->mirror_axis[m] == (int)axis) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ":mirror%d", m + 1);
-        }
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required,
+                        "STC_HW_INFO;schema=2;mode=%s;state=%s;pbit=%s;expected_count=%d;connected_count=%d;connected=%d;axis_count=%zu;",
+                        mode,
+                        stc_state_name(d->st_state),
+                        (d->st_state == STC_STATE_SAFE || d->st_state == STC_STATE_OPER) ? "PASS" : "FAIL",
+                        expected_axes,
+                        connected_axes,
+                        connected_axes,
+                        (size_t)STC_AXIS_COUNT);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axis_drivers=");
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%s", axis == 0 ? "" : ",", axis, axis_driver_to_string(d->cfg[axis].driver));
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";axis_connected=");
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%u", axis == 0 ? "" : ",", axis, d->axis_available[axis] ? 1u : 0u);
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";turret_axes=%d,%d;mirror_count=%d;", d->turret_az_axis, d->turret_el_axis, d->mirror_count);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "mirror_axes=");
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "mirror_ids=");
+        for (int i = 0; i < d->mirror_count; i++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%d", i == 0 ? "" : ",", i + 1);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";mirror_axes=");
         const char* sep = "";
         for (int i = 0; i < d->mirror_count; i++) {
           if (d->mirror_axis[i] < 0 || d->mirror_axis[i] >= (int)STC_AXIS_COUNT) continue;
@@ -3644,14 +3659,6 @@ int main(int argc, char** argv) {
         }
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "motor_status_map=");
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%zu", axis == 0 ? "" : ",", axis, axis);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";pbit=PASS;state=SAFE;");
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "connected=%d;", connected_axes);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axis_drivers=");
-        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%s", axis == 0 ? "" : ",", axis, axis_driver_to_string(d->cfg[axis].driver));
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";axis_connected=");
-        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%u", axis == 0 ? "" : ",", axis, d->axis_available[axis] ? 1u : 0u);
-        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";mirror_ids=");
-        for (int i = 0; i < d->mirror_count; i++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%d", i == 0 ? "" : ",", i + 1);
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";");
 
         if ((required + 1u) > STC_ICD_MAX_PAYLOAD) {
