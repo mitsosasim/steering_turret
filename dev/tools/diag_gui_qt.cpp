@@ -824,7 +824,7 @@ class DiagnosticsWindow : public QMainWindow {
 
       QStringList laserStates;
       int laserOnCount = 0;
-      for (int i = 0; i < STC_ICD_LASER_COUNT; ++i) {
+      for (unsigned int i = 0; i < STC_ICD_LASER_COUNT; ++i) {
         const bool on = tlm.laser_status[i] != 0;
         if (on) ++laserOnCount;
         laserStates << QString("SUT%1 laser:%2").arg(i + 1).arg(on ? "ON" : "OFF");
