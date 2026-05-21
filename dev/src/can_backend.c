@@ -916,12 +916,21 @@ int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t
       }
       if (cache->status2.valid) {
         b->snap.vel_raw[axis] = cache->status2.speed_dps;
+        b->axis[axis].last_rx_ms = now;
+        b->axis[axis].connected = 1;
+        b->snap.axis_available[axis] = 1u;
+        b->snap.axis_connected[axis] = 1u;
+        b->snap.axis_stale[axis] = 0u;
       }
       if (!b->axis[axis].u.x8.active_status2_enabled || !cache->status2.valid) {
         myact_status2_t st2;
         if (myact_read_status2(&b->axis[axis].u.x8.ctx, &st2) == MYACT_OK) {
           b->snap.vel_raw[axis] = st2.speed_dps;
           b->axis[axis].last_rx_ms = now;
+          b->axis[axis].connected = 1;
+          b->snap.axis_available[axis] = 1u;
+          b->snap.axis_connected[axis] = 1u;
+          b->snap.axis_stale[axis] = 0u;
         }
       }
       if (!cache->angle_multi_valid) {

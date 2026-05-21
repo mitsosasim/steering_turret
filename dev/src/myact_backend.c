@@ -400,11 +400,14 @@ static void refresh_feedback_locked(struct motion_backend* b, uint64_t t_ms) {
         b->snap.last_rx_ms[axis] = t_ms;
         continue;
       }
-      if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS || f.data[0] == MYACT_CMD_POS_INC) {
+      if (f.data[0] == MYACT_CMD_SPEED || f.data[0] == MYACT_CMD_POS_ABS || f.data[0] == MYACT_CMD_POS_INC || f.data[0] == MYACT_CMD_READ_STATUS2) {
         const int16_t iq_0p01a = (int16_t)((uint16_t)f.data[2] | ((uint16_t)f.data[3] << 8));
         const int16_t speed_dps = (int16_t)((uint16_t)f.data[4] | ((uint16_t)f.data[5] << 8));
         const int16_t angle_deg = (int16_t)((uint16_t)f.data[6] | ((uint16_t)f.data[7] << 8));
         normalize_snapshot_from_feedback(b, axis, iq_0p01a, speed_dps, angle_deg, t_ms);
+        b->snap.axis_available[axis] = 1u;
+        b->snap.axis_connected[axis] = 1u;
+        b->snap.axis_stale[axis] = 0u;
         if (f.data[0] == MYACT_CMD_POS_ABS) b->native_abs_validated[axis] = 1;
       }
     }
