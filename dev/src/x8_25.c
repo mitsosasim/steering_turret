@@ -526,47 +526,47 @@ static int myact_wait_for_reply(myact_ctx_t* ctx,
                                 int expected_cmd_or_neg1,
                                 uint32_t timeout_ms,
                                 myact_can_frame_t* out) {
-    uint64_t start;
+    uint64_t deadline;
     uint64_t now;
     myact_can_frame_t fr;
     int rc;
 
     if (!ctx) return MYACT_EINVAL;
-    start = myact_now_ms(ctx);
+    now = myact_now_ms(ctx);
+    deadline = now + (uint64_t)timeout_ms;
 
-    for (;;) {
+    while (now < deadline) {
         uint32_t remain;
-        now = myact_now_ms(ctx);
-        if (now - start >= timeout_ms) return MYACT_ETIMEDOUT;
-        remain = (uint32_t)(timeout_ms - (now - start));
+        remain = (uint32_t)(deadline - now);
+        if (remain == 0u) break;
 
         rc = myact_recv_frame(ctx, remain, &fr);
+        if (rc == MYACT_ETIMEDOUT) return MYACT_ETIMEDOUT;
         if (rc < 0) return rc;
 
         (void)myact_parse_frame(ctx, &fr);
 
         if (fr.id != reply_id) {
-            if (fr.id == ctx->reply_id || fr.id == ctx->motion_reply_id) {
-                (void)myact_parse_frame(ctx, &fr);
-            }
+            now = myact_now_ms(ctx);
             continue;
         }
         if (fr.dlc != 8) return MYACT_EPROTO;
         if (expected_cmd_or_neg1 >= 0 && fr.data[0] != (uint8_t)expected_cmd_or_neg1) {
-            (void)myact_parse_frame(ctx, &fr);
             if (ctx->log_fn) {
                 char msg[120];
                 (void)snprintf(msg, sizeof(msg),
-                               "wait_for_reply opcode mismatch exp=0x%02X got=0x%02X id=0x%03X",
-                               (unsigned)expected_cmd_or_neg1, (unsigned)fr.data[0], (unsigned)fr.id);
+                               "MYACT async frame while waiting for %02X: got %02X, ignored",
+                               (unsigned)expected_cmd_or_neg1, (unsigned)fr.data[0]);
                 ctx->log_fn(MYACT_LOG_DEBUG, msg, ctx->log_user);
             }
+            now = myact_now_ms(ctx);
             continue;
         }
 
         if (out) *out = fr;
         return MYACT_OK;
     }
+    return MYACT_ETIMEDOUT;
 }
 
 static int myact_txrx(myact_ctx_t* ctx,
