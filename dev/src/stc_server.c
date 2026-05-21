@@ -3458,6 +3458,7 @@ int main(int argc, char** argv) {
       } else if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_HW_INFO) {
         char hw_info[STC_ICD_MAX_PAYLOAD] = {0};
         size_t off = 0;
+        const shared_data_t* d = &sh.d;
         int written = snprintf(hw_info + off, sizeof(hw_info) - off, "STC_HW_INFO;");
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
@@ -3467,12 +3468,11 @@ int main(int argc, char** argv) {
 
         int connected_axes = 0;
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-          if (sh.d.axis_available[axis]) connected_axes++;
+          if (d->axis_available[axis]) connected_axes++;
         }
-        const int connected = (connected_axes > 0) ? 1 : 0;
         written = snprintf(hw_info + off, sizeof(hw_info) - off,
                            "connected=%d;axis_count=%zu;",
-                           connected,
+                           connected_axes,
                            (size_t)STC_AXIS_COUNT);
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
@@ -3484,7 +3484,7 @@ int main(int argc, char** argv) {
                              "%s%zu:%s",
                              sep,
                              axis,
-                             axis_driver_to_string(sh.d.cfg[axis].driver));
+                             axis_driver_to_string(d->cfg[axis].driver));
           if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
           off += (size_t)written;
           sep = ",";
@@ -3499,24 +3499,74 @@ int main(int argc, char** argv) {
                              "%s%zu:%u",
                              sep,
                              axis,
-                             sh.d.axis_available[axis] ? 1u : 0u);
+                             d->axis_available[axis] ? 1u : 0u);
           if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
           off += (size_t)written;
           sep = ",";
         }
         if (off < sizeof(hw_info)) hw_info[off++] = ';';
 
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "turret_axes=%d,%d;", -1, -1);
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "turret_axes=");
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        if (d->turret_az_axis >= 0) {
+          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%d", d->turret_az_axis);
+          if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        }
+        if (d->turret_el_axis >= 0 && off < sizeof(hw_info)) {
+          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d",
+                             d->turret_az_axis >= 0 ? "," : "",
+                             d->turret_el_axis);
+          if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        }
+        if (off < sizeof(hw_info)) hw_info[off++] = ';';
+
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_ids=");
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        sep = "";
+        for (int i = 0; i < d->mirror_count && off < sizeof(hw_info); i++) {
+          const int axis = d->mirror_axis[i];
+          if (axis < 0 || axis >= (int)STC_AXIS_COUNT) continue;
+          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d", sep, i + 1);
+          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
+          off += (size_t)written;
+          sep = ",";
+        }
+        if (off < sizeof(hw_info)) hw_info[off++] = ';';
+
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_axes=");
+        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        sep = "";
+        for (int i = 0; i < d->mirror_count && off < sizeof(hw_info); i++) {
+          const int axis = d->mirror_axis[i];
+          if (axis < 0 || axis >= (int)STC_AXIS_COUNT) continue;
+          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d:%d", sep, i + 1, axis);
+          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
+          off += (size_t)written;
+          sep = ",";
+        }
+        if (off < sizeof(hw_info)) hw_info[off++] = ';';
+
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "sut_count=%d;", d->sut_count);
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_ids=1;mirror_axes=1:0;sut_count=0;");
+        written = snprintf(hw_info + off, sizeof(hw_info) - off, "sut_axes=");
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        sep = "";
+        for (int i = 0; i < d->sut_count && i < STC_MAX_SUT && off < sizeof(hw_info); i++) {
+          const int az = d->sut_az_axis[i];
+          const int el = d->sut_el_axis[i];
+          if ((az < 0 || az >= (int)STC_AXIS_COUNT) && (el < 0 || el >= (int)STC_AXIS_COUNT)) continue;
+          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d:%d,%d", sep, i + 1, az, el);
+          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
+          off += (size_t)written;
+          sep = ";";
+        }
+        if (off < sizeof(hw_info)) hw_info[off++] = ';';
 
         written = snprintf(hw_info + off, sizeof(hw_info) - off, "motor_status_map=");
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
         for (size_t axis = 0; axis < STC_AXIS_COUNT && off < sizeof(hw_info); axis++) {
-          const int status = sh.d.axis_available[axis] ? 0 : -1;
-          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d", axis == 0 ? "" : ",", status);
+          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%zu:%zu", axis == 0 ? "" : ",", axis, axis);
           if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
           off += (size_t)written;
         }
