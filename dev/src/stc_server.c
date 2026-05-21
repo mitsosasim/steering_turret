@@ -315,7 +315,10 @@ typedef struct shared_data {
   // --- runtime flags
   int can_ok;
   int num_axes;
+  uint8_t axis_configured[STC_AXIS_COUNT];
   uint8_t axis_available[STC_AXIS_COUNT];
+  uint8_t axis_connected[STC_AXIS_COUNT];
+  uint8_t axis_stale[STC_AXIS_COUNT];
   stc_axis_health_t axis_health[STC_AXIS_COUNT];
   uint8_t axis_expected[STC_AXIS_COUNT];
   uint8_t can_discovered_nodes[16];
@@ -1296,8 +1299,20 @@ static void* can_worker_thread(void* arg) {
       a->sh->d.supports_native_absolute_position = snap.capabilities.supports_native_absolute_position;
       memcpy(a->sh->d.can_discovered_nodes, snap.can_discovered_nodes, sizeof(a->sh->d.can_discovered_nodes));
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+        const uint8_t prev_connected = a->sh->d.axis_connected[axis];
+        const uint8_t prev_available = a->sh->d.axis_available[axis];
+        const uint8_t prev_stale = a->sh->d.axis_stale[axis];
+        const uint8_t prev_fault = a->sh->d.axis_fault_active[axis];
+        uint8_t snap_connected = snap.axis_connected[axis] ? 1u : 0u;
+        if (snap_connected == 0u && snap.axis_available[axis]) {
+          /* Compatibility fallback for backends that only expose availability. */
+          snap_connected = 1u;
+        }
         a->sh->d.axis_health[axis] = snap.axis_health[axis];
-        a->sh->d.axis_available[axis] = snap.axis_health[axis].connected ? 1u : 0u;
+        a->sh->d.axis_configured[axis] = snap.axis_configured[axis] ? 1u : 0u;
+        a->sh->d.axis_available[axis] = snap.axis_available[axis] ? 1u : 0u;
+        a->sh->d.axis_connected[axis] = snap_connected;
+        a->sh->d.axis_stale[axis] = snap.axis_stale[axis] ? 1u : 0u;
         a->sh->d.axis_fault_active[axis] = snap.axis_fault_active[axis] ? 1u : 0u;
         uint64_t rx_ms = snap.last_rx_ms[axis];
         if (rx_ms == 0 && a->sh->d.axis_expected[axis]) {
@@ -1311,7 +1326,21 @@ static void* can_worker_thread(void* arg) {
         }
         a->sh->d.last_rx_ms[axis] = rx_ms;
         a->sh->d.axis_health[axis].last_rx_ms = rx_ms;
+        a->sh->d.axis_health[axis].connected = a->sh->d.axis_connected[axis];
+        a->sh->d.axis_health[axis].available = a->sh->d.axis_available[axis];
+        a->sh->d.axis_health[axis].stale = a->sh->d.axis_stale[axis];
         a->sh->d.axis_health[axis].fault_active = a->sh->d.axis_fault_active[axis];
+        if (axis == 0 &&
+            (prev_connected != a->sh->d.axis_connected[axis] ||
+             prev_available != a->sh->d.axis_available[axis] ||
+             prev_stale != a->sh->d.axis_stale[axis] ||
+             prev_fault != a->sh->d.axis_fault_active[axis])) {
+          STC_LOG_DEBUG("axis0 liveness changed: connected=%u available=%u stale=%u fault=%u",
+                        (unsigned)a->sh->d.axis_connected[axis],
+                        (unsigned)a->sh->d.axis_available[axis],
+                        (unsigned)a->sh->d.axis_stale[axis],
+                        (unsigned)a->sh->d.axis_fault_active[axis]);
+        }
         axis_telem_update(&a->sh->d.telem[axis],
                           &a->sh->d.cfg[axis],
                           snap.pos_raw[axis],
@@ -2647,6 +2676,9 @@ int main(int argc, char** argv) {
   sh.d.fail_cause = STC_FAIL_CAUSE_NONE;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     sh.d.last_rx_ms[axis] = sh.d.boot_ms;
+    sh.d.axis_configured[axis] = 0;
+    sh.d.axis_connected[axis] = 0;
+    sh.d.axis_stale[axis] = 0;
     sh.d.axis_enabled[axis] = 0;
     sh.d.axis_fault_active[axis] = 0;
     sh.d.axis_available[axis] = 0;
