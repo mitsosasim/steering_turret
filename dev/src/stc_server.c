@@ -1187,7 +1187,7 @@ static void* can_worker_thread(void* arg) {
   backend_cfg.ds402_timeout_ms = a->sh->d.ds402_timeout_ms;
   backend_cfg.pp_sdo_diag = a->sh->d.pp_sdo_diag;
   backend_cfg.can_timeout_ms = a->sh->d.can_timeout_ms;
-  memcpy(backend_cfg.axis_enabled, a->sh->d.axis_enabled, sizeof(backend_cfg.axis_enabled));
+  memcpy(backend_cfg.axis_enabled, a->sh->d.axis_expected, sizeof(backend_cfg.axis_enabled));
   memcpy(backend_cfg.axis_cfg, a->sh->d.cfg, sizeof(backend_cfg.axis_cfg));
   memcpy(backend_cfg.axis_node_id, a->sh->d.axis_node_id, sizeof(backend_cfg.axis_node_id));
   pthread_mutex_unlock(&a->sh->mtx);
@@ -1989,7 +1989,7 @@ static void* tlml_tx_thread(void* arg) {
 
     bool saturated[STC_AXIS_COUNT] = {false};
     uint8_t axis_fault_active[STC_AXIS_COUNT] = {0};
-    uint8_t axis_enabled[STC_AXIS_COUNT] = {0};
+    uint8_t axis_configured[STC_AXIS_COUNT] = {0};
     uint8_t axis_available[STC_AXIS_COUNT] = {0};
     uint8_t axis_expected[STC_AXIS_COUNT] = {0};
     uint64_t last_rx_ms[STC_AXIS_COUNT] = {0};
@@ -2001,7 +2001,7 @@ static void* tlml_tx_thread(void* arg) {
     for (size_t i = 0; i < STC_AXIS_COUNT; i++) {
       saturated[i] = a->sh->d.saturated[i] && (nowm <= a->sh->d.saturated_until_ms[i]);
       axis_fault_active[i] = a->sh->d.axis_fault_active[i];
-      axis_enabled[i] = a->sh->d.axis_enabled[i];
+      axis_configured[i] = a->sh->d.axis_expected[i];
       axis_available[i] = a->sh->d.axis_available[i];
       axis_expected[i] = a->sh->d.axis_expected[i];
       last_rx_ms[i] = a->sh->d.last_rx_ms[i];
@@ -2033,7 +2033,7 @@ static void* tlml_tx_thread(void* arg) {
     m.level_y = 0.0f;
 
     for (size_t axis = 0; axis < STC_ICD_AXES_COUNT; axis++) {
-      const int enabled = axis_enabled[axis] ? 1 : 0;
+      const int enabled = axis_configured[axis] ? 1 : 0;
       if (!enabled || a->sh->d.cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) {
         m.motor_status[axis] = 0x00;
         continue;
