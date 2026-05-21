@@ -127,6 +127,10 @@ int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next
       }
       break;
     case STC_STATE_FAIL:
+      if (evt == EVT_PBIT_OK) {
+        *next = STC_STATE_INIT_DONE;
+        return 0;
+      }
       if (evt == EVT_IBIT) {
         *next = STC_STATE_IBIT_RUNNING;
         return 0;

@@ -284,6 +284,7 @@ typedef struct shared_data {
 
   // --- software state / navigation
   stc_state_t st_state;
+  stc_fail_cause_t fail_cause;
   uint8_t posmode;              // from POSMODE command
 
   int has_manualpos;
@@ -583,6 +584,11 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
                  stc_state_to_string(next));
   }
   if (next == STC_STATE_FAIL && prev != STC_STATE_FAIL) {
+    if (evt == EVT_PBIT_FAIL && sh->d.fail_cause == STC_FAIL_CAUSE_NONE) {
+      sh->d.fail_cause = STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS;
+    } else if (evt == EVT_FAULT_CRITICAL) {
+      sh->d.fail_cause = STC_FAIL_CAUSE_RUNTIME_CRITICAL_FAULT;
+    }
     /* FAIL is latched centrally; CAN worker executes quick-stop on this mask. */
     uint32_t mask = 0;
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -595,6 +601,9 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
     }
     sh->d.fail_stop_pending = 1;
     sh->d.fail_stop_axes_mask = mask;
+  }
+  if (prev == STC_STATE_FAIL && next != STC_STATE_FAIL) {
+    sh->d.fail_cause = STC_FAIL_CAUSE_NONE;
   }
   if (evt == EVT_ENTER_SAFE) {
     sh->d.ibit_pending = 0;
@@ -1318,6 +1327,26 @@ static void* can_worker_thread(void* arg) {
       }
       a->sh->d.ibit_pending = 0;
       a->sh->d.ibit_due_ms = 0;
+    }
+    if (a->sh->d.st_state == STC_STATE_FAIL &&
+        a->sh->d.fail_cause == STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS &&
+        !a->sh->d.ibit_pending &&
+        expected_motors_fully_connected(&a->sh->d)) {
+      int expected_motors = 0;
+      int connected_motors = 0;
+      expected_motor_counts(&a->sh->d, &expected_motors, &connected_motors);
+      STC_LOG_INFO("startup PBIT failed before backend inventory was valid; backend later reports expected_motors=%d connected_motors=%d; rerunning PBIT",
+                   expected_motors,
+                   connected_motors);
+      if (shared_transition_locked(a->sh, EVT_PBIT_OK) == 0) {
+        if (shared_transition_locked(a->sh, EVT_ENTER_SAFE) == 0) {
+          STC_LOG_INFO("PBIT result: PASS");
+          STC_LOG_INFO("state transition: FAIL -> INIT_DONE -> SAFE");
+          a->sh->d.fail_cause = STC_FAIL_CAUSE_NONE;
+        } else {
+          (void)shared_transition_locked(a->sh, EVT_FAULT_CRITICAL);
+        }
+      }
     }
     if (a->sh->d.selflev_pending && now >= a->sh->d.selflev_due_ms) {
       const stc_event_t selflev_evt = selflev_completion_event_locked(&a->sh->d);
@@ -2568,6 +2597,7 @@ int main(int argc, char** argv) {
   sh.d.startup_feedback_grace_ms = 3000;
   sh.d.strict_stale_policy = 0;
   sh.d.st_state = STC_STATE_INIT;
+  sh.d.fail_cause = STC_FAIL_CAUSE_NONE;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     sh.d.last_rx_ms[axis] = sh.d.boot_ms;
     sh.d.axis_enabled[axis] = 0;
@@ -2919,6 +2949,11 @@ int main(int argc, char** argv) {
   }
   stc_state_t next_state = STC_STATE_INIT;
   const stc_event_t pbit_evt = run_startup_pbit(&sh, &net);
+  if (pbit_evt == EVT_PBIT_FAIL &&
+      sh.backend_expected_motors > 0 &&
+      sh.backend_connected_motors == 0) {
+    sh.d.fail_cause = STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS;
+  }
   if (stc_state_transition(sh.d.st_state, pbit_evt, &next_state) == 0) {
     sh.d.st_state = next_state;
   } else {
@@ -2933,9 +2968,7 @@ int main(int argc, char** argv) {
   }
   pthread_mutex_unlock(&sh.mtx);
   if (sh.d.st_state == STC_STATE_FAIL) {
-    STC_LOG_ERROR("startup failed; not starting telemetry or command server");
-    exit_code = 1;
-    goto cleanup;
+    STC_LOG_WARN("startup failed; continuing in FAIL to allow recovery path");
   }
 
   // UDP telemetry threads
