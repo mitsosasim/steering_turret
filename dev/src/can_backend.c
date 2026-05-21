@@ -169,16 +169,26 @@ struct motion_backend {
  * preserving per-axis availability in axis_available[] so callers can diagnose
  * which axes are missing.
  */
+static void expected_connected_counts(const struct motion_backend* b, int* expected_axes, int* connected_expected_axes) {
+  int expected = 0;
+  int connected = 0;
+  if (b) {
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!b->cfg.axis_enabled[axis] || b->cfg.axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
+      expected++;
+      if (b->axis[axis].connected) connected++;
+    }
+  }
+  if (expected_axes) *expected_axes = expected;
+  if (connected_expected_axes) *connected_expected_axes = connected;
+}
+
 static int compute_can_ok(const struct motion_backend* b) {
   if (!b) return 0;
 
   int expected_axes = 0;
   int connected_expected_axes = 0;
-  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if (!b->cfg.axis_enabled[axis] || b->cfg.axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
-    expected_axes++;
-    if (b->axis[axis].connected) connected_expected_axes++;
-  }
+  expected_connected_counts(b, &expected_axes, &connected_expected_axes);
 
   if (expected_axes == 0) return 0;
   return connected_expected_axes == expected_axes;
@@ -537,6 +547,12 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
       effective_scan_max(&b->cfg), b->snap.can_discovered_devices, b->snap.can_connected_devices);
   }
   refresh_can_status(b);
+  {
+    int expected_axes = 0;
+    int connected_expected_axes = 0;
+    expected_connected_counts(b, &expected_axes, &connected_expected_axes);
+    STC_LOG_INFO("CAN startup inventory expected_motors=%d connected_motors=%d", expected_axes, connected_expected_axes);
+  }
   *out_backend = b;
   return 0;
 }

@@ -55,7 +55,7 @@ static cbit_slot_t* cbit_find_slot(shared_data_t* shared, bool create) {
   return free_slot;
 }
 
-/** PBIT models startup readiness gate before entering operational states. */
+/** PBIT stores startup readiness gate result for state-transition checks. */
 bool run_pbit_startup(void) {
   return g_pbit_pass;
 }

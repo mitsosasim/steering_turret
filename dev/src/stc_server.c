@@ -120,6 +120,28 @@ static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
   return (a >= b) ? (a - b) : (b - a);
 }
 
+
+static void expected_motor_counts(const shared_data_t* d, int* expected_motors, int* connected_motors) {
+  int expected = 0;
+  int connected = 0;
+  if (d) {
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!d->axis_expected[axis]) continue;
+      expected++;
+      if (d->axis_available[axis]) connected++;
+    }
+  }
+  if (expected_motors) *expected_motors = expected;
+  if (connected_motors) *connected_motors = connected;
+}
+
+static int expected_motors_fully_connected(const shared_data_t* d) {
+  int expected = 0;
+  int connected = 0;
+  expected_motor_counts(d, &expected, &connected);
+  return (expected > 0) && (connected == expected);
+}
+
 static inline uint8_t stc_state_to_wire(stc_state_t s) {
   return (s == STC_STATE_FAIL) ? 0xFFu : (uint8_t)s;
 }
@@ -2175,9 +2197,8 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
   }
 
   int expected_motors = 0;
-  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if (sh->d.axis_expected[axis]) expected_motors++;
-  }
+  int connected_motors = 0;
+  expected_motor_counts(&sh->d, &expected_motors, &connected_motors);
 
   int network_ok = 1;
   struct in_addr parsed_addr;
@@ -2188,8 +2209,11 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
   if (parse_ipv4_addr(net->tlmh_ip, &parsed_addr) != 0) network_ok = 0;
   if (parse_ipv4_addr(net->tlml_ip, &parsed_addr) != 0) network_ok = 0;
 
-  const int motors_ok = (expected_motors > 0);
-  STC_LOG_INFO("PBIT motor_check=%s expected_motors=%d", motors_ok ? "OK" : "FAIL", expected_motors);
+  const int motors_ok = (expected_motors > 0) && (connected_motors == expected_motors);
+  STC_LOG_INFO("PBIT motor_check=%s expected_motors=%d connected_motors=%d",
+               motors_ok ? "OK" : "FAIL",
+               expected_motors,
+               connected_motors);
   STC_LOG_INFO("PBIT network_check=%s can_if=%s can_bitrate=%d tcp_port=%d tlmh=%s:%d tlml=%s:%d",
                network_ok ? "OK" : "FAIL",
                net->can_if ? net->can_if : "<null>",
@@ -2219,9 +2243,8 @@ static stc_event_t run_admin_reset_ibit(const shared_t* sh, const runtime_net_t*
   }
 
   int expected_motors = 0;
-  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    if (sh->d.axis_expected[axis]) expected_motors++;
-  }
+  int connected_motors = 0;
+  expected_motor_counts(&sh->d, &expected_motors, &connected_motors);
 
   int network_ok = 1;
   struct in_addr parsed_addr;
@@ -2232,8 +2255,11 @@ static stc_event_t run_admin_reset_ibit(const shared_t* sh, const runtime_net_t*
   if (parse_ipv4_addr(net->tlmh_ip, &parsed_addr) != 0) network_ok = 0;
   if (parse_ipv4_addr(net->tlml_ip, &parsed_addr) != 0) network_ok = 0;
 
-  const int motors_ok = (expected_motors > 0);
-  STC_LOG_INFO("RESET/IBIT motor_check=%s expected_motors=%d", motors_ok ? "OK" : "FAIL", expected_motors);
+  const int motors_ok = (expected_motors > 0) && (connected_motors == expected_motors);
+  STC_LOG_INFO("RESET/IBIT motor_check=%s expected_motors=%d connected_motors=%d",
+               motors_ok ? "OK" : "FAIL",
+               expected_motors,
+               connected_motors);
   STC_LOG_INFO("RESET/IBIT network_check=%s can_if=%s can_bitrate=%d tcp_port=%d tlmh=%s:%d tlml=%s:%d",
                network_ok ? "OK" : "FAIL",
                net->can_if ? net->can_if : "<null>",
@@ -3097,6 +3123,9 @@ int main(int argc, char** argv) {
                 v = STC_ERR_NOT_ALLOWED_STATE;
                 evt = EVT_ENTER_SAFE;
               }
+              if (v == STC_ERR_NO_ERROR && evt == EVT_ENTER_OPER && !expected_motors_fully_connected(&sh.d)) {
+                v = STC_ERR_NOT_ALLOWED_STATE;
+              }
               if (v == STC_ERR_NO_ERROR && shared_transition_locked(&sh, evt) != 0) {
                 v = STC_ERR_NOT_ALLOWED_STATE;
               }
@@ -3145,6 +3174,8 @@ int main(int argc, char** argv) {
           } else if (cmd.cmd_id == STC_CMD_TURRET || cmd.cmd_id == STC_CMD_SUT || cmd.cmd_id == STC_CMD_MIRROR) {
             /* State gating: motion-producing commands are accepted only in move-capable states. */
             if (!stc_state_can_move(sh.d.st_state)) {
+              v = STC_ERR_NOT_ALLOWED_STATE;
+            } else if (!expected_motors_fully_connected(&sh.d)) {
               v = STC_ERR_NOT_ALLOWED_STATE;
             } else {
               uint32_t axes_mask = 0;
