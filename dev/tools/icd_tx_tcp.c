@@ -149,10 +149,17 @@ static void print_hw_info_pretty(const char* payload) {
   char* save = NULL;
   char* tok = strtok_r(axes, ",", &save);
   while (tok) {
-    char line[320];
-    snprintf(line, sizeof(line), "%s", tok);
-    for (char* c = line; *c; ++c) if (*c == '|') *c = ' ';
-    printf("  Axis %s\n", line);
+    int axis=-1, node=-1;
+    char driver[64]="", conn[64]="", role[64]="";
+    if (sscanf(tok, "%d:%63[^:]:node%d:%63[^:]:%63s", &axis, driver, &node, conn, role) == 5) {
+      if (strcmp(driver, "disabled") == 0) {
+        printf("  Axis %d: disabled\n", axis);
+      } else {
+        printf("  Axis %d: %s node=%d role=%s %s\n", axis, driver, node, role, conn);
+      }
+    } else {
+      printf("  Axis %s\n", tok);
+    }
     tok = strtok_r(NULL, ",", &save);
   }
 

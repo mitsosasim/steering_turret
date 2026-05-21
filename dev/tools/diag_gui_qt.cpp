@@ -605,6 +605,21 @@ class DiagnosticsWindow : public QMainWindow {
         bool ok = false;
         const int parsed = value.toInt(&ok);
         if (ok) connectedFromPayload = parsed;
+      } else if (key == "axes") {
+        axisDriverNames_.fill("-");
+        axisConnected_.fill(0);
+        for (const QString &entry : value.split(',', Qt::SkipEmptyParts)) {
+          const QStringList parts = entry.split(':');
+          if (parts.size() < 2) continue;
+          bool axisOk = false;
+          const int axis = parts[0].trimmed().toInt(&axisOk);
+          if (!axisOk || axis < 0 || axis >= kAxisCount) continue;
+          const QString drv = parts[1].trimmed();
+          axisDriverNames_[axis] = drv;
+          if (parts.size() >= 4 && parts[3].trimmed().compare("connected", Qt::CaseInsensitive) == 0) {
+            axisConnected_[axis] = 1;
+          }
+        }
       } else if (key == "turret_axes") {
         const auto parsed = parseIdList(value, 0, kAxisCount - 1);
         if (!parsed.empty()) configuredTurretAxes_ = parsed;

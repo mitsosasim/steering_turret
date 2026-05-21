@@ -105,6 +105,9 @@ typedef struct {
       double bus_voltage_v;
       int motor_temp_c;
       int active_status2_enabled;
+      int startup_angle92_attempts;
+      int startup_angle92_unavailable_logged;
+      uint64_t last_angle92_poll_ms;
     } x8;
   } u;
 } axis_rt_t;
@@ -565,7 +568,13 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
           b->axis[axis].identity_degraded = 1;
           b->snap.can_connected_devices++;
           int32_t angle_raw_0p01 = 0;
-          (void)myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
+          b->axis[axis].u.x8.startup_angle92_attempts = 0;
+          b->axis[axis].u.x8.startup_angle92_unavailable_logged = 0;
+          b->axis[axis].u.x8.last_angle92_poll_ms = 0;
+          for (int tries = 0; tries < 3; ++tries) {
+            b->axis[axis].u.x8.startup_angle92_attempts++;
+            if (myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01) == MYACT_OK) break;
+          }
           b->axis[axis].u.x8.last_raw_angle_deg = (double)angle_raw_0p01 / 100.0;
           if (cfg->axis_cfg[axis].zero_on_start) {
             b->axis[axis].u.x8.raw_zero_deg = b->axis[axis].u.x8.last_raw_angle_deg;
@@ -763,8 +772,8 @@ int can_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mas
           const double max_speed_motor_dps = fabs(axis_output_to_motor_deg(b, axis, speed_limit_deg_s[axis]));
           const int32_t raw_delta = myact_deg_to_raw_0p01(delta_motor_deg);
           const uint16_t max_speed_dps = (uint16_t)llround(max_speed_motor_dps);
-          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=relative value=%.3f deg profile_speed=%.3f deg/s",
-            axis, node, values_deg_or_dps[axis], speed_limit_deg_s[axis]);
+          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=relative value=%.3f output_deg motor_deg=%.3f profile_speed=%.3f deg/s",
+            axis, node, values_deg_or_dps[axis], delta_motor_deg, speed_limit_deg_s[axis]);
           rc = myact_position_inc(&b->axis[axis].u.x8.ctx, max_speed_dps, raw_delta, &fb);
           break;
         }
@@ -952,11 +961,27 @@ int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t
         }
       }
       if (!cache->angle_multi_valid) {
-        int32_t ang_0p01 = 0;
-        if (myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &ang_0p01) == MYACT_OK) {
-          b->snap.pos_raw[axis] = ang_0p01;
-          b->axis[axis].u.x8.last_raw_angle_deg = (double)ang_0p01 / 100.0;
-          b->axis[axis].last_rx_ms = now;
+        const int active_only_status = b->axis[axis].u.x8.active_status2_enabled && cache->status2.valid;
+        const int startup_budget_remaining = (b->axis[axis].u.x8.startup_angle92_attempts < 3);
+        const uint64_t elapsed = now - b->axis[axis].u.x8.last_angle92_poll_ms;
+        const int rate_gate_ok = (b->axis[axis].u.x8.last_angle92_poll_ms == 0 || elapsed >= 200u);
+        const int should_try_angle = startup_budget_remaining || (!active_only_status && rate_gate_ok);
+        if (should_try_angle && rate_gate_ok) {
+          int32_t ang_0p01 = 0;
+          b->axis[axis].u.x8.last_angle92_poll_ms = now;
+          if (myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &ang_0p01) == MYACT_OK) {
+            b->snap.pos_raw[axis] = ang_0p01;
+            b->axis[axis].u.x8.last_raw_angle_deg = (double)ang_0p01 / 100.0;
+            b->axis[axis].last_rx_ms = now;
+          } else if (startup_budget_remaining) {
+            b->axis[axis].u.x8.startup_angle92_attempts++;
+          }
+        }
+        if (active_only_status &&
+            b->axis[axis].u.x8.startup_angle92_attempts >= 3 &&
+            !b->axis[axis].u.x8.startup_angle92_unavailable_logged) {
+          STC_LOG_INFO("axis%zu angle read unavailable; using status-only telemetry until first position response", axis);
+          b->axis[axis].u.x8.startup_angle92_unavailable_logged = 1;
         }
       }
       if (cache->status1.valid) {
