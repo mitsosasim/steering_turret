@@ -1246,11 +1246,8 @@ static void* can_worker_thread(void* arg) {
   int startup_inventory_valid = 0;
   if (motion_backend_get_snapshot(backend, &startup_snap) == 0) {
     startup_inventory_valid = 1;
-    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-      if (!backend_cfg.axis_enabled[axis]) continue;
-      startup_expected_motors++;
-      if (startup_snap.axis_available[axis]) startup_connected_motors++;
-    }
+    startup_expected_motors = startup_snap.expected_motors;
+    startup_connected_motors = startup_snap.connected_motors;
   }
   const int startup_ok = startup_inventory_valid &&
                          (startup_expected_motors > 0) &&

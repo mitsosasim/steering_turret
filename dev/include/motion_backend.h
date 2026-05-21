@@ -87,7 +87,9 @@ typedef struct {
   uint8_t transport_status;  /* diagnostic only */
   motion_backend_capabilities_t capabilities;
   int can_ok;
-  /* Startup inventory source for PBIT (expected comes from static config). */
+  /* Startup inventory source for PBIT (directly reported by backend startup inventory). */
+  uint8_t expected_motors;
+  uint8_t connected_motors;
   uint8_t axis_available[STC_AXIS_COUNT];
   uint8_t can_discovered_nodes[16];
   uint8_t can_connected_devices;
