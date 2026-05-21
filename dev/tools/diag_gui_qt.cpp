@@ -63,6 +63,7 @@
 
 extern "C" {
 #include "stc_icd.h"
+#include "stc_errors.h"
 }
 
 namespace {
@@ -108,19 +109,16 @@ QString stateToString(uint8_t state) {
 }
 
 QString nackErrToString(uint16_t errCode) {
-  switch (errCode) {
-    case STC_ERR_NO_ERROR: return "No error";
-    case STC_ERR_CLIENT_UNKNOWN: return "Client unknown";
-    case STC_ERR_PROTOCOL_MISMATCH: return "Protocol mismatch";
-    case STC_ERR_SYNTAX_ERROR: return "Syntax error";
-    case STC_ERR_VALUE_OUT_OF_RANGE: return "Value out of range";
-    case STC_ERR_NOT_ALLOWED_STATE: return "Command not allowed in current state";
-    case STC_ERR_INSUFFICIENT_RES: return "Insufficient resources";
-    case STC_ERR_TIMEOUT: return "Timeout";
-    case STC_ERR_COMMAND_NOT_IMPLEMENTED: return "Command not implemented";
-    case STC_ERR_GENERIC: return "Generic error";
-    default: return QString("Unknown err_code=%1").arg(errCode);
+  const char* codeName = stc_error_code_name(static_cast<stc_nack_err_t>(errCode));
+  if (!codeName || std::strcmp(codeName, "UNKNOWN") == 0) {
+    return QString("Unknown err_code=0x%1").arg(errCode, 4, 16, QChar('0'));
   }
+
+  QString friendly = QString::fromLatin1(codeName);
+  if (friendly.startsWith("STC_ERR_")) friendly.remove(0, 8);
+  friendly = friendly.toLower().replace('_', ' ');
+  if (!friendly.isEmpty()) friendly[0] = friendly.at(0).toUpper();
+  return friendly;
 }
 
 QString decodeMotorStatusLabels(uint8_t statusBits) {
