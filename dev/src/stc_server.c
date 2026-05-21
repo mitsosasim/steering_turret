@@ -153,20 +153,6 @@ static uint8_t build_axis_health_byte(int enabled,
   return flags;
 }
 
-static const char* stc_state_to_string(stc_state_t state) {
-  switch (state) {
-    case STC_STATE_INIT: return "INIT";
-    case STC_STATE_INIT_DONE: return "INIT_DONE";
-    case STC_STATE_SAFE: return "SAFE";
-    case STC_STATE_OPER: return "OPER";
-    case STC_STATE_SELF_LEVELLING: return "SELF_LEVELLING";
-    case STC_STATE_STORE: return "STORE";
-    case STC_STATE_IBIT_RUNNING: return "IBIT_RUNNING";
-    case STC_STATE_FAIL: return "FAIL";
-    default: return "UNKNOWN";
-  }
-}
-
 /* ----------------------------- networking helpers ----------------------------- */
 
 static int send_all(int fd, const uint8_t* buf, size_t len) {
@@ -580,8 +566,8 @@ static int shared_transition_locked(shared_t* sh, stc_event_t evt) {
   sh->d.st_state = next;
   if (prev != next) {
     STC_LOG_INFO("state transition: %s -> %s",
-                 stc_state_to_string(prev),
-                 stc_state_to_string(next));
+                 stc_state_name(prev),
+                 stc_state_name(next));
   }
   if (next == STC_STATE_FAIL && prev != STC_STATE_FAIL) {
     if (evt == EVT_PBIT_FAIL && sh->d.fail_cause == STC_FAIL_CAUSE_NONE) {
@@ -2962,8 +2948,8 @@ int main(int argc, char** argv) {
   if (sh.d.st_state != STC_STATE_FAIL &&
       stc_state_transition(sh.d.st_state, EVT_ENTER_SAFE, &next_state) == 0) {
     STC_LOG_INFO("state transition: %s -> %s",
-                 stc_state_to_string(sh.d.st_state),
-                 stc_state_to_string(next_state));
+                 stc_state_name(sh.d.st_state),
+                 stc_state_name(next_state));
     sh.d.st_state = next_state;
   }
   pthread_mutex_unlock(&sh.mtx);
@@ -3211,17 +3197,32 @@ int main(int argc, char** argv) {
             if (cmd.u.cu_state.state == sh.d.st_state) {
               v = STC_ERR_NO_ERROR;
             } else {
+              const stc_state_t current_state = sh.d.st_state;
+              const stc_state_t requested_state = (stc_state_t)cmd.u.cu_state.state;
               stc_event_t evt;
               if (cmd.u.cu_state.state == STC_STATE_SAFE) evt = EVT_ENTER_SAFE;
               else if (cmd.u.cu_state.state == STC_STATE_OPER) evt = EVT_ENTER_OPER;
               else {
+                STC_LOG_WARN("CU_STATE rejected: current_state=%s requested=%u unsupported target state",
+                             stc_state_name(current_state),
+                             (unsigned)cmd.u.cu_state.state);
                 v = STC_ERR_NOT_ALLOWED_STATE;
                 evt = EVT_ENTER_SAFE;
               }
               if (v == STC_ERR_NO_ERROR && evt == EVT_ENTER_OPER && !expected_motors_fully_connected(&sh.d)) {
+                STC_LOG_WARN("CU_STATE rejected: current_state=%s requested=%s motors are not fully connected",
+                             stc_state_name(current_state),
+                             stc_state_name(requested_state));
                 v = STC_ERR_NOT_ALLOWED_STATE;
               }
               if (v == STC_ERR_NO_ERROR && shared_transition_locked(&sh, evt) != 0) {
+                if (current_state == STC_STATE_FAIL && requested_state == STC_STATE_OPER) {
+                  STC_LOG_WARN("CU_STATE rejected: current_state=FAIL requested=OPER recovery requires IBIT/reset");
+                } else {
+                  STC_LOG_WARN("CU_STATE rejected: current_state=%s requested=%s transition not allowed",
+                               stc_state_name(current_state),
+                               stc_state_name(requested_state));
+                }
                 v = STC_ERR_NOT_ALLOWED_STATE;
               }
             }

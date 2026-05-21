@@ -59,6 +59,7 @@ typedef enum {
 int stc_state_transition(stc_state_t current, stc_event_t evt, stc_state_t* next);
 int stc_state_can_move(stc_state_t state);
 int stc_state_can_stream(stc_state_t state);
+const char* stc_state_name(stc_state_t state);
 
 #ifdef __cplusplus
 }

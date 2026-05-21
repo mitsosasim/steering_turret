@@ -152,3 +152,17 @@ int stc_state_can_move(stc_state_t state) {
 int stc_state_can_stream(stc_state_t state) {
   return state == STC_STATE_OPER;
 }
+
+const char* stc_state_name(stc_state_t state) {
+  switch (state) {
+    case STC_STATE_INIT: return "INIT";
+    case STC_STATE_INIT_DONE: return "INIT_DONE";
+    case STC_STATE_SAFE: return "SAFE";
+    case STC_STATE_OPER: return "OPER";
+    case STC_STATE_SELF_LEVELLING: return "SELF_LEVELLING";
+    case STC_STATE_IBIT_RUNNING: return "IBIT_RUNNING";
+    case STC_STATE_STORE: return "STORE";
+    case STC_STATE_FAIL: return "FAIL";
+    default: return "UNKNOWN";
+  }
+}
