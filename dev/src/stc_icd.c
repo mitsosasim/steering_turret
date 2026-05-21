@@ -618,6 +618,7 @@ const char* stc_error_code_name(stc_nack_err_t code) {
     case STC_ERR_COMMAND_NOT_IMPLEMENTED: return "STC_ERR_COMMAND_NOT_IMPLEMENTED";
     case STC_ERR_NOT_CONFIGURED: return "STC_ERR_NOT_CONFIGURED";
     case STC_ERR_AXIS_NOT_CONNECTED: return "STC_ERR_AXIS_NOT_CONNECTED";
+    case STC_ERR_PAYLOAD_TOO_LARGE: return "STC_ERR_PAYLOAD_TOO_LARGE";
     case STC_ERR_GENERIC: return "STC_ERR_GENERIC";
     default: return "UNKNOWN";
   }

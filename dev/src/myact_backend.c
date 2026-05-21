@@ -207,7 +207,7 @@ static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t e
     if (r == (ssize_t)sizeof(f)) {
       const canid_t rx_id = f.can_id & CAN_SFF_MASK;
       if (f.can_dlc < 1 || rx_id != expected_id) continue;
-      STC_LOG_DEBUG("MYACT RX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
+      STC_LOG_TRACE("MYACT RX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
                     (unsigned)rx_id, (unsigned)f.can_dlc,
                     f.data[0], f.data[1], f.data[2], f.data[3], f.data[4], f.data[5], f.data[6], f.data[7]);
       if (f.data[0] != expected_cmd) continue;

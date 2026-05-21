@@ -27,6 +27,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+static int g_raw_hw_info = 0;
+
 static uint64_t now_ms(void) {
   struct timeval tv;
   gettimeofday(&tv, NULL);
@@ -116,6 +118,31 @@ static const char* state_meaning(uint8_t state) {
   }
 }
 
+
+static const char* kv_lookup(const char* payload, const char* key, char* out, size_t out_sz) {
+  const char* p = strstr(payload, key);
+  if (!p) return NULL;
+  p += strlen(key);
+  const char* e = strchr(p, ';');
+  if (!e) e = p + strlen(p);
+  size_t n = (size_t)(e - p);
+  if (n >= out_sz) n = out_sz - 1;
+  memcpy(out, p, n); out[n]='\0';
+  return out;
+}
+
+static void print_hw_info_pretty(const char* payload) {
+  char mode[64]="?", state[32]="?", pbit[32]="?", exp[32]="0", conn[32]="0", axes[1800]="", turret[64]="", mirror[256]="", sut[256]="";
+  kv_lookup(payload,"mode=",mode,sizeof(mode)); kv_lookup(payload,"state=",state,sizeof(state)); kv_lookup(payload,"pbit=",pbit,sizeof(pbit));
+  kv_lookup(payload,"expected_count=",exp,sizeof(exp)); kv_lookup(payload,"connected_count=",conn,sizeof(conn));
+  kv_lookup(payload,"axes=",axes,sizeof(axes)); kv_lookup(payload,"turret_axes=",turret,sizeof(turret)); kv_lookup(payload,"mirror_axes=",mirror,sizeof(mirror)); kv_lookup(payload,"sut_axes=",sut,sizeof(sut));
+  printf("Hardware info\n-------------\nMode: %s\nState: %s\nPBIT: %s\nExpected motors: %s\nConnected motors: %s\n\n", mode,state,pbit,exp,conn);
+  printf("Axes:\n");
+  char* save=NULL; char* tok=strtok_r(axes,",",&save);
+  while(tok){ printf("  Axis %s\n", tok); tok=strtok_r(NULL,",",&save);}
+  printf("\nMappings:\n  Turret: %s\n  Mirror: %s\n  SUT: %s\n", turret[0]?turret:"disabled", mirror[0]?mirror:"none", sut[0]?sut:"none");
+}
+
 static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg, uint16_t sent_cmd_id, uint8_t requested_cu_state, int has_requested_cu_state) {
   /* Read fixed RSP header first, then read payload according to payload_size field. */
   // RSP header is 14 bytes after our ICD-aligned fix
@@ -172,9 +199,18 @@ static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg, uint16_t sent_cm
     uint32_t uptime_sec = le32(rsp.payload);
     printf("response_payload.uptime_sec=%u\n", uptime_sec);
   } else if (rsp.payload_size > 0) {
-    printf("response_payload=");
-    fwrite(rsp.payload, 1, rsp.payload_size, stdout);
-    printf("\n");
+    if (rsp.payload_size >= 13 && memcmp(rsp.payload, "STC_HW_INFO;", 12) == 0) {
+      if (g_raw_hw_info) {
+        fwrite(rsp.payload, 1, rsp.payload_size, stdout);
+        printf("\n");
+      } else {
+        print_hw_info_pretty((const char*)rsp.payload);
+      }
+    } else {
+      printf("response_payload=");
+      fwrite(rsp.payload, 1, rsp.payload_size, stdout);
+      printf("\n");
+    }
   }
   return 0;
 }
@@ -244,6 +280,7 @@ static int send_cmd(int fd, stc_icd_cfg_t* cfg, stc_icd_cmd_t* cmd, int print_he
 int main(int argc, char** argv) {
   /* Command-line parsing: endpoint + command selector + command-specific args. */
   if (argc < 4) { usage(argv[0]); return 2; }
+  for (int i = 4; i < argc; ++i) if (strcmp(argv[i], "--raw") == 0) g_raw_hw_info = 1;
 
   const char* host = argv[1];
   const char* port = argv[2];

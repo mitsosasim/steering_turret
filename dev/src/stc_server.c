@@ -56,6 +56,7 @@
 #include <limits.h>
 #include <stdatomic.h>
 #include <inttypes.h>
+#include <stdarg.h>
 
 #include "motion_backend.h"
 
@@ -118,6 +119,25 @@ static void sleep_until(struct timespec* next, long period_ns) {
 
 static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
   return (a >= b) ? (a - b) : (b - a);
+}
+
+static int append_hw_infof(char* dst, size_t cap, size_t* off, size_t* required, const char* fmt, ...) {
+  if (!dst || !off || !required || !fmt) return -1;
+  va_list ap;
+  va_start(ap, fmt);
+  int needed = vsnprintf(NULL, 0, fmt, ap);
+  va_end(ap);
+  if (needed < 0) return -1;
+  *required += (size_t)needed;
+  if (*off < cap) {
+    va_start(ap, fmt);
+    int wrote = vsnprintf(dst + *off, cap - *off, fmt, ap);
+    va_end(ap);
+    if (wrote < 0) return -1;
+    if ((size_t)wrote < (cap - *off)) *off += (size_t)wrote;
+    else *off = cap;
+  }
+  return 0;
 }
 
 
@@ -2196,7 +2216,7 @@ static void print_usage(FILE* out, const char* p) {
           "          [--rt-enabled 0|1] [--rt-strict 0|1] [--rt-policy fifo|rr|other]\n"
           "          [--can-worker-prio 80] [--tlmh-prio 70] [--tlml-prio 60]\n"
           "          [--diag-port 0|PORT] [--strict-stale-policy 0|1]\n"
-          "          [--log-level error|warn|info|debug]\n\n"
+          "          [--log-level error|warn|info|debug|trace]\n\n"
           "--backend sim|simulator|can|hardware|hardware_can\n"
           "    Select runtime backend.\n"
           "    simulator: no real hardware.\n"
@@ -2721,7 +2741,7 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[i], "--log-level") && i + 1 < argc) {
       const char* level_value = argv[++i];
       if (stc_log_level_from_string(level_value, &cli_log_level) != 0) {
-        STC_LOG_ERROR("invalid --log-level value='%s' (expected error|warn|info|debug)", level_value);
+        STC_LOG_ERROR("invalid --log-level value='%s' (expected error|warn|info|debug|trace)", level_value);
         print_usage(stderr, argv[0]);
         exit_code = 2;
         goto cleanup;
@@ -3590,124 +3610,60 @@ int main(int argc, char** argv) {
       } else if (v == STC_ERR_NO_ERROR && cmd.cmd_id == STC_CMD_REQ_HW_INFO) {
         char hw_info[STC_ICD_MAX_PAYLOAD] = {0};
         size_t off = 0;
+        size_t required = 0;
         const shared_data_t* d = &sh.d;
-        int written = snprintf(hw_info + off, sizeof(hw_info) - off, "STC_HW_INFO;");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-
         const char* mode = (parsed_cfg.runtime_backend == STC_RUNTIME_BACKEND_SIMULATOR) ? "Simulation" : "Hardware/CAN";
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mode=%s;", mode);
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-
         int connected_axes = 0;
+        int expected_axes = 0;
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
           if (d->axis_available[axis]) connected_axes++;
+          if (d->cfg[axis].driver != STC_AXIS_DRIVER_DISABLED) expected_axes++;
         }
-        written = snprintf(hw_info + off, sizeof(hw_info) - off,
-                           "connected=%d;axis_count=%zu;",
-                           connected_axes,
-                           (size_t)STC_AXIS_COUNT);
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "STC_HW_INFO;schema=2;mode=%s;connected_count=%d;expected_count=%d;axis_count=%zu;", mode, connected_axes, expected_axes, (size_t)STC_AXIS_COUNT);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axes=");
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+          const char* drv = axis_driver_to_string(d->cfg[axis].driver);
+          const unsigned nid = (unsigned)d->axis_node_id[axis];
+          const char* state = d->axis_available[axis] ? "connected" : "disconnected";
+          append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%s:node%u:%s", axis == 0 ? "" : ",", axis, drv, nid, state);
+          if (d->cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ":disabled");
+          for (int m = 0; m < d->mirror_count; m++) if (d->mirror_axis[m] == (int)axis) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ":mirror%d", m + 1);
+        }
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";turret_axes=%d,%d;mirror_count=%d;", d->turret_az_axis, d->turret_el_axis, d->mirror_count);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "mirror_axes=");
         const char* sep = "";
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "axis_drivers=");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        for (size_t axis = 0; axis < STC_AXIS_COUNT && off < sizeof(hw_info); axis++) {
-          written = snprintf(hw_info + off, sizeof(hw_info) - off,
-                             "%s%zu:%s",
-                             sep,
-                             axis,
-                             axis_driver_to_string(d->cfg[axis].driver));
-          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
-          off += (size_t)written;
+        for (int i = 0; i < d->mirror_count; i++) {
+          if (d->mirror_axis[i] < 0 || d->mirror_axis[i] >= (int)STC_AXIS_COUNT) continue;
+          append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%d:%d", sep, i + 1, d->mirror_axis[i]);
           sep = ",";
         }
-        if (off < sizeof(hw_info)) hw_info[off++] = ';';
-
-        sep = "";
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "axis_connected=");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        for (size_t axis = 0; axis < STC_AXIS_COUNT && off < sizeof(hw_info); axis++) {
-          written = snprintf(hw_info + off, sizeof(hw_info) - off,
-                             "%s%zu:%u",
-                             sep,
-                             axis,
-                             d->axis_available[axis] ? 1u : 0u);
-          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
-          off += (size_t)written;
-          sep = ",";
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";sut_count=%d;sut_axes=%s;", d->sut_count, d->sut_count == 0 ? "none" : "");
+        if (d->sut_count > 0) {
+          for (int i = 0; i < d->sut_count && i < STC_MAX_SUT; i++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%d:%d,%d", i == 0 ? "" : ";", i + 1, d->sut_az_axis[i], d->sut_el_axis[i]);
+          append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";");
         }
-        if (off < sizeof(hw_info)) hw_info[off++] = ';';
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "motor_status_map=");
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%zu", axis == 0 ? "" : ",", axis, axis);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";pbit=PASS;state=SAFE;");
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "connected=%d;", connected_axes);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "axis_drivers=");
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%s", axis == 0 ? "" : ",", axis, axis_driver_to_string(d->cfg[axis].driver));
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";axis_connected=");
+        for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%zu:%u", axis == 0 ? "" : ",", axis, d->axis_available[axis] ? 1u : 0u);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";mirror_ids=");
+        for (int i = 0; i < d->mirror_count; i++) append_hw_infof(hw_info, sizeof(hw_info), &off, &required, "%s%d", i == 0 ? "" : ",", i + 1);
+        append_hw_infof(hw_info, sizeof(hw_info), &off, &required, ";");
 
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "turret_axes=");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        if (d->turret_az_axis >= 0) {
-          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%d", d->turret_az_axis);
-          if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
+        if ((required + 1u) > STC_ICD_MAX_PAYLOAD) {
+          STC_LOG_ERROR("REQ_HW_INFO payload too large: required=%zu max=%u", required + 1u, STC_ICD_MAX_PAYLOAD);
+          rsp.result = STC_RSP_NACK;
+          rsp.err_code = STC_ERR_PAYLOAD_TOO_LARGE;
+          rsp.payload_size = 0;
+        } else {
+          size_t n = strnlen(hw_info, sizeof(hw_info) - 1);
+          memcpy(rsp.payload, hw_info, n + 1);
+          rsp.payload_size = (uint16_t)(n + 1);
         }
-        if (d->turret_el_axis >= 0 && off < sizeof(hw_info)) {
-          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d",
-                             d->turret_az_axis >= 0 ? "," : "",
-                             d->turret_el_axis);
-          if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        }
-        if (off < sizeof(hw_info)) hw_info[off++] = ';';
-
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_ids=");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        sep = "";
-        for (int i = 0; i < d->mirror_count && off < sizeof(hw_info); i++) {
-          const int axis = d->mirror_axis[i];
-          if (axis < 0 || axis >= (int)STC_AXIS_COUNT) continue;
-          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d", sep, i + 1);
-          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
-          off += (size_t)written;
-          sep = ",";
-        }
-        if (off < sizeof(hw_info)) hw_info[off++] = ';';
-
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "mirror_axes=");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        sep = "";
-        for (int i = 0; i < d->mirror_count && off < sizeof(hw_info); i++) {
-          const int axis = d->mirror_axis[i];
-          if (axis < 0 || axis >= (int)STC_AXIS_COUNT) continue;
-          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d:%d", sep, i + 1, axis);
-          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
-          off += (size_t)written;
-          sep = ",";
-        }
-        if (off < sizeof(hw_info)) hw_info[off++] = ';';
-
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "sut_count=%d;", d->sut_count);
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "sut_axes=");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        sep = "";
-        for (int i = 0; i < d->sut_count && i < STC_MAX_SUT && off < sizeof(hw_info); i++) {
-          const int az = d->sut_az_axis[i];
-          const int el = d->sut_el_axis[i];
-          if ((az < 0 || az >= (int)STC_AXIS_COUNT) && (el < 0 || el >= (int)STC_AXIS_COUNT)) continue;
-          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%d:%d,%d", sep, i + 1, az, el);
-          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
-          off += (size_t)written;
-          sep = ";";
-        }
-        if (off < sizeof(hw_info)) hw_info[off++] = ';';
-
-        written = snprintf(hw_info + off, sizeof(hw_info) - off, "motor_status_map=");
-        if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
-        for (size_t axis = 0; axis < STC_AXIS_COUNT && off < sizeof(hw_info); axis++) {
-          written = snprintf(hw_info + off, sizeof(hw_info) - off, "%s%zu:%zu", axis == 0 ? "" : ",", axis, axis);
-          if (written <= 0 || (size_t)written >= (sizeof(hw_info) - off)) break;
-          off += (size_t)written;
-        }
-        if (off < sizeof(hw_info)) hw_info[off++] = ';';
-        if (off < sizeof(hw_info)) hw_info[off] = '\0';
-
-        size_t n = strnlen(hw_info, sizeof(hw_info) - 1);
-        memcpy(rsp.payload, hw_info, n + 1);
-        rsp.payload_size = (uint16_t)(n + 1);
       } else {
         rsp.payload_size = 0;
       }
