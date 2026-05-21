@@ -780,6 +780,7 @@ int can_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mas
 int can_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b) return -1;
+  /* Intentionally side-effect free: test and mock paths rely on deterministic success here. */
   STC_LOG_INFO("laser_stub id=%u on_off=%u (no physical laser hardware integrated)", laser_id, on_off);
   return 0;
 }

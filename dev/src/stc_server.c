@@ -1158,6 +1158,11 @@ static void* can_worker_thread(void* arg) {
 
   motion_backend_t* backend = NULL;
   if (motion_backend_start(&backend_cfg, &backend) != 0 || !backend) {
+    stc_action_t dropped;
+    while (actionq_try_peek(a->q, &dropped)) {
+      (void)actionq_drop_head(a->q);
+    }
+    actionq_consume_wakeup(a->q);
     STC_LOG_ERROR("motion_backend_start failed");
     return NULL;
   }
