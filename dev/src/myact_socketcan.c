@@ -139,3 +139,17 @@ int myact_socketcan_drain(myact_socketcan_t* io, myact_ctx_t* ctx, int max_frame
     }
     return drained;
 }
+
+int myact_socketcan_drain_for(myact_socketcan_t* io, myact_ctx_t* ctx, int drain_ms) {
+    if (!io || !ctx || drain_ms < 0) return MYACT_EINVAL;
+    const uint64_t start = sockcan_time_ms(NULL);
+    const uint64_t deadline = start + (uint64_t)drain_ms;
+    int drained = 0;
+    while (sockcan_time_ms(NULL) <= deadline) {
+        int rc = myact_poll(ctx, 0);
+        if (rc == MYACT_ETIMEDOUT) break;
+        if (rc < 0) return rc;
+        drained++;
+    }
+    return drained;
+}

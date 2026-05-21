@@ -32,6 +32,27 @@
 #include <time.h>
 #include <math.h>
 
+int myact_backend_quiesce_active_replies(myact_ctx_t* ctx, int drain_ms) {
+  if (!ctx) return MYACT_EINVAL;
+  const int cmds[] = { MYACT_CMD_STATUS1, MYACT_CMD_STATUS2, MYACT_CMD_STATUS3, MYACT_CMD_READ_ANGLE_MULTI };
+  for (size_t i = 0; i < (sizeof(cmds) / sizeof(cmds[0])); i++) {
+    (void)myact_active_reply_config(ctx, (uint8_t)cmds[i], false, 0);
+  }
+
+  const uint64_t start_ms = ctx->io.time_ms ? ctx->io.time_ms(ctx->io.user) : 0;
+  const uint64_t budget_ms = (drain_ms > 0) ? (uint64_t)drain_ms : 0u;
+  int drained = 0;
+  while (budget_ms > 0) {
+    const uint64_t now = ctx->io.time_ms ? ctx->io.time_ms(ctx->io.user) : start_ms;
+    if ((now - start_ms) >= budget_ms) break;
+    const int rc = myact_poll(ctx, 0);
+    if (rc == MYACT_ETIMEDOUT) break;
+    if (rc < 0) break;
+    drained++;
+  }
+  return drained;
+}
+
 typedef enum {
   MTR_MODE_NONE = 0,
   /* PD4-C velocity mode command path. */
@@ -225,6 +246,12 @@ int myact_backend_discover_axis(motion_backend_t* backend, size_t axis, const ch
     myact_socketcan_close(&b->axis[axis].u.x8.io);
     STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_init expected_rx=0x%03X", axis, MYACT_EIO, (unsigned)(0x240u + node_id));
     return MYACT_EIO;
+  }
+  const int drained = myact_backend_quiesce_active_replies(&b->axis[axis].u.x8.ctx, 150);
+  if (drained > 0) {
+    STC_LOG_INFO("MYACT axis%zu quiesce: disabled active replies, drained %d stale frames", axis, drained);
+  } else {
+    STC_LOG_INFO("MYACT axis%zu quiesce: disabled active replies", axis);
   }
 
   STC_LOG_INFO("MYACT axis%zu discovery: sending read_model", axis);
