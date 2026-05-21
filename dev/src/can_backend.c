@@ -1018,6 +1018,8 @@ int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t
       }
     }
     b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
+    b->snap.axis_configured[axis] =
+        (b->cfg.axis_enabled[axis] && b->cfg.axis_cfg[axis].driver != STC_AXIS_DRIVER_DISABLED) ? 1u : 0u;
     b->snap.axis_connected[axis] = b->axis[axis].connected ? 1u : 0u;
     b->snap.axis_available[axis] = b->snap.axis_connected[axis];
     if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
