@@ -462,6 +462,7 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
   STC_LOG_INFO("CAN backend assumes interface '%s' is preconfigured externally (manual canup/systemd); skipping interface setup commands.",
     (cfg->can_if && cfg->can_if[0]) ? cfg->can_if : "(unset)");
 
+  STC_LOG_INFO("CAN backend discovery starts");
   (void)discover_responsive_nodes(b);
 
   /* Attach only configured/expected axes; keep missing nodes visible via availability flags. */

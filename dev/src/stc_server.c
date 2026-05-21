@@ -379,8 +379,15 @@ static int expected_motors_fully_connected(const shared_data_t* d) {
 
 typedef struct {
   pthread_mutex_t mtx;
+  pthread_cond_t startup_cv;
   shared_data_t d;
+  int backend_startup_done;
+  int backend_startup_ok;
+  int backend_expected_motors;
+  int backend_connected_motors;
 } shared_t;
+
+#define BACKEND_STARTUP_WAIT_TIMEOUT_MS 10000
 
 static void tx_timing_update(tx_timing_stats_t* stats,
                              uint64_t expected_wake_ns,
@@ -1200,10 +1207,37 @@ static void* can_worker_thread(void* arg) {
     }
     actionq_consume_wakeup(a->q);
     STC_LOG_ERROR("motion_backend_start failed");
+    pthread_mutex_lock(&a->sh->mtx);
+    a->sh->backend_startup_done = 1;
+    a->sh->backend_startup_ok = 0;
+    a->sh->backend_expected_motors = 0;
+    a->sh->backend_connected_motors = 0;
+    pthread_cond_broadcast(&a->sh->startup_cv);
+    pthread_mutex_unlock(&a->sh->mtx);
     return NULL;
   }
 
   if (backend_cfg.can_discovery_enabled) (void)motion_backend_discover(backend);
+
+  motion_snapshot_t startup_snap;
+  int startup_expected_motors = 0;
+  int startup_connected_motors = 0;
+  if (motion_backend_get_snapshot(backend, &startup_snap) == 0) {
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!backend_cfg.axis_enabled[axis]) continue;
+      startup_expected_motors++;
+      if (startup_snap.axis_available[axis]) startup_connected_motors++;
+    }
+  }
+  const int startup_ok = (startup_expected_motors > 0) &&
+                         (startup_connected_motors == startup_expected_motors);
+  pthread_mutex_lock(&a->sh->mtx);
+  a->sh->backend_startup_done = 1;
+  a->sh->backend_startup_ok = startup_ok;
+  a->sh->backend_expected_motors = startup_expected_motors;
+  a->sh->backend_connected_motors = startup_connected_motors;
+  pthread_cond_broadcast(&a->sh->startup_cv);
+  pthread_mutex_unlock(&a->sh->mtx);
 
   int axis_enabled[STC_AXIS_COUNT] = {0};
   uint8_t speed_stream_active[STC_AXIS_COUNT] = {0};
@@ -2197,9 +2231,8 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
     return EVT_PBIT_FAIL;
   }
 
-  int expected_motors = 0;
-  int connected_motors = 0;
-  expected_motor_counts(&sh->d, &expected_motors, &connected_motors);
+  const int expected_motors = sh->backend_expected_motors;
+  const int connected_motors = sh->backend_connected_motors;
 
   int network_ok = 1;
   struct in_addr parsed_addr;
@@ -2509,6 +2542,7 @@ int main(int argc, char** argv) {
   shared_t sh;
   memset(&sh, 0, sizeof(sh));
   pthread_mutex_init(&sh.mtx, NULL);
+  pthread_cond_init(&sh.startup_cv, NULL);
   memset(&sh.d.cfg, 0, sizeof(sh.d.cfg));
   memset(&sh.d.telem, 0, sizeof(sh.d.telem));
   memset(&sh.d.stream, 0, sizeof(sh.d.stream));
@@ -2831,21 +2865,6 @@ int main(int argc, char** argv) {
   signal(SIGINT, on_sig);
   signal(SIGTERM, on_sig);
 
-  stc_state_t next_state = STC_STATE_INIT;
-  const stc_event_t pbit_evt = run_startup_pbit(&sh, &net);
-  if (stc_state_transition(sh.d.st_state, pbit_evt, &next_state) == 0) {
-    sh.d.st_state = next_state;
-  } else {
-    STC_LOG_ERROR("startup transition rejected: state=%d event=%d", (int)sh.d.st_state, (int)pbit_evt);
-  }
-  if (sh.d.st_state != STC_STATE_FAIL &&
-      stc_state_transition(sh.d.st_state, EVT_ENTER_SAFE, &next_state) == 0) {
-    STC_LOG_INFO("state transition: %s -> %s",
-                 stc_state_to_string(sh.d.st_state),
-                 stc_state_to_string(next_state));
-    sh.d.st_state = next_state;
-  }
-
   stc_icd_cfg_t cfg = stc_icd_parse_cfg_default();
   cfg.strict_magic = 0;    // allow us to return NACK even when magic is wrong
   cfg.strict_version = 0;
@@ -2876,6 +2895,48 @@ int main(int argc, char** argv) {
   }
   can_thread_started = 1;
   threads_started = 1;
+
+  pthread_mutex_lock(&sh.mtx);
+  if (!sh.backend_startup_done) {
+    struct timespec abs_deadline;
+    clock_gettime(CLOCK_REALTIME, &abs_deadline);
+    abs_deadline.tv_sec += BACKEND_STARTUP_WAIT_TIMEOUT_MS / 1000;
+    abs_deadline.tv_nsec += (long)(BACKEND_STARTUP_WAIT_TIMEOUT_MS % 1000) * 1000000L;
+    if (abs_deadline.tv_nsec >= 1000000000L) {
+      abs_deadline.tv_sec += 1;
+      abs_deadline.tv_nsec -= 1000000000L;
+    }
+    while (!sh.backend_startup_done && !atomic_load(&g_stop)) {
+      int wait_rc = pthread_cond_timedwait(&sh.startup_cv, &sh.mtx, &abs_deadline);
+      if (wait_rc == ETIMEDOUT) break;
+    }
+  }
+  if (!sh.backend_startup_done) {
+    STC_LOG_ERROR("backend startup discovery timeout after %d ms", BACKEND_STARTUP_WAIT_TIMEOUT_MS);
+    sh.backend_startup_ok = 0;
+    sh.backend_expected_motors = 0;
+    sh.backend_connected_motors = 0;
+  }
+  stc_state_t next_state = STC_STATE_INIT;
+  const stc_event_t pbit_evt = run_startup_pbit(&sh, &net);
+  if (stc_state_transition(sh.d.st_state, pbit_evt, &next_state) == 0) {
+    sh.d.st_state = next_state;
+  } else {
+    STC_LOG_ERROR("startup transition rejected: state=%d event=%d", (int)sh.d.st_state, (int)pbit_evt);
+  }
+  if (sh.d.st_state != STC_STATE_FAIL &&
+      stc_state_transition(sh.d.st_state, EVT_ENTER_SAFE, &next_state) == 0) {
+    STC_LOG_INFO("state transition: %s -> %s",
+                 stc_state_to_string(sh.d.st_state),
+                 stc_state_to_string(next_state));
+    sh.d.st_state = next_state;
+  }
+  pthread_mutex_unlock(&sh.mtx);
+  if (sh.d.st_state == STC_STATE_FAIL) {
+    STC_LOG_ERROR("startup failed; not starting telemetry or command server");
+    exit_code = 1;
+    goto cleanup;
+  }
 
   // UDP telemetry threads
   udp_h = open_udp_tx();
