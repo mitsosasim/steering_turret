@@ -981,15 +981,14 @@ class DiagnosticsWindow : public QMainWindow {
       for (int id = 1; id <= availableSut; ++id) {
         sutIdBox_->addItem(QString::number(id), id);
       }
-      const int idx = sutIdBox_->findData(desired);
-      if (idx >= 0) {
-        sutIdBox_->setCurrentIndex(idx);
-        preferredSutId_ = sutIdBox_->currentData().toInt();
-        sutSelectionValid_ = true;
-      } else {
-        sutSelectionValid_ = false;
+      int idx = sutIdBox_->findData(desired);
+      if (idx < 0) {
+        idx = sutIdBox_->count() > 1 ? 1 : 0;
       }
-      sutIdBox_->setEnabled(availableSut > 0 && sutSelectionValid_);
+      sutIdBox_->setCurrentIndex(idx);
+      preferredSutId_ = sutIdBox_->currentData().toInt();
+      sutSelectionValid_ = true;
+      sutIdBox_->setEnabled(availableSut > 0);
     }
 
     if (turretTypeBox_) {
@@ -1011,15 +1010,14 @@ class DiagnosticsWindow : public QMainWindow {
       for (const int id : selectableMirrorIds) {
         mirrorIdBox_->addItem(QString::number(id), id);
       }
-      const int idx = mirrorIdBox_->findData(desired);
-      if (idx >= 0) {
-        mirrorIdBox_->setCurrentIndex(idx);
-        preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
-        mirrorSelectionValid_ = true;
-      } else {
-        mirrorSelectionValid_ = false;
+      int idx = mirrorIdBox_->findData(desired);
+      if (idx < 0) {
+        idx = mirrorIdBox_->count() > 1 ? 1 : 0;
       }
-      mirrorIdBox_->setEnabled(mirrorSelectable && mirrorSelectionValid_);
+      mirrorIdBox_->setCurrentIndex(idx);
+      preferredMirrorId_ = mirrorIdBox_->currentData().toInt();
+      mirrorSelectionValid_ = true;
+      mirrorIdBox_->setEnabled(mirrorSelectable);
     }
 
     QStringList drivers;
