@@ -288,6 +288,7 @@ typedef struct shared_data {
   uint32_t startup_feedback_grace_ms;
   int strict_stale_policy;
   int allow_degraded_startup;
+  int require_identity_for_pbit;
 
   // --- software state / navigation
   stc_state_t st_state;
@@ -1211,6 +1212,7 @@ static void* can_worker_thread(void* arg) {
   backend_cfg.ds402_timeout_ms = a->sh->d.ds402_timeout_ms;
   backend_cfg.pp_sdo_diag = a->sh->d.pp_sdo_diag;
   backend_cfg.can_timeout_ms = a->sh->d.can_timeout_ms;
+  backend_cfg.require_identity_for_pbit = a->sh->d.require_identity_for_pbit;
   memcpy(backend_cfg.axis_enabled, a->sh->d.axis_expected, sizeof(backend_cfg.axis_enabled));
   memcpy(backend_cfg.axis_cfg, a->sh->d.cfg, sizeof(backend_cfg.axis_cfg));
   memcpy(backend_cfg.axis_node_id, a->sh->d.axis_node_id, sizeof(backend_cfg.axis_node_id));
@@ -2416,6 +2418,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.position_poll_ms = (cfg->position_poll_ms > 0) ? cfg->position_poll_ms : 50;
   sh->d.strict_stale_policy = cfg->strict_stale_policy ? 1 : 0;
   sh->d.allow_degraded_startup = cfg->allow_degraded_startup ? 1 : 0;
+  sh->d.require_identity_for_pbit = cfg->require_identity_for_pbit ? 1 : 0;
 }
 
 static int config_has_enabled_driver(const stc_config_t* cfg, stc_axis_driver_t driver) {
@@ -2638,6 +2641,7 @@ int main(int argc, char** argv) {
   sh.d.startup_feedback_grace_ms = 3000;
   sh.d.strict_stale_policy = 0;
   sh.d.allow_degraded_startup = 0;
+  sh.d.require_identity_for_pbit = 1;
   sh.d.st_state = STC_STATE_INIT;
   sh.d.fail_cause = STC_FAIL_CAUSE_NONE;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -2880,6 +2884,7 @@ int main(int argc, char** argv) {
     sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
     sh.d.strict_stale_policy = parsed_cfg.strict_stale_policy ? 1 : 0;
     sh.d.allow_degraded_startup = parsed_cfg.allow_degraded_startup ? 1 : 0;
+    sh.d.require_identity_for_pbit = parsed_cfg.require_identity_for_pbit ? 1 : 0;
 
     apply_config_to_shared(&sh, &parsed_cfg);
   } else {

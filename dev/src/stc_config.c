@@ -188,6 +188,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
   cfg->startup_feedback_grace_ms = 3000;
   cfg->strict_stale_policy = 0;
   cfg->allow_degraded_startup = 0;
+  cfg->require_identity_for_pbit = 1;
   cfg->speed_watchdog_ms = 250;
   cfg->speed_stream_period_ms = 50;
   cfg->position_tolerance_deg = 1.0;
@@ -394,6 +395,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else if (strcmp(key, "allow_degraded_startup") == 0) {
         if (parse_int(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
+      } else if (strcmp(key, "require_identity_for_pbit") == 0) {
+        if (parse_int(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
       } else if (strcmp(key, "speed_watchdog_ms") == 0) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {
@@ -479,6 +482,8 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->strict_stale_policy) != 0) goto parse_error;
       } else if (strcmp(key, "allow_degraded_startup") == 0) {
         if (parse_int(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
+      } else if (strcmp(key, "require_identity_for_pbit") == 0) {
+        if (parse_int(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
       } else if (strcmp(key, "speed_watchdog_ms") == 0) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {

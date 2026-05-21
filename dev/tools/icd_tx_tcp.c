@@ -132,15 +132,34 @@ static const char* kv_lookup(const char* payload, const char* key, char* out, si
 }
 
 static void print_hw_info_pretty(const char* payload) {
-  char mode[64]="?", state[32]="?", pbit[32]="?", exp[32]="0", conn[32]="0", axes[1800]="", turret[64]="", mirror[256]="", sut[256]="";
-  kv_lookup(payload,"mode=",mode,sizeof(mode)); kv_lookup(payload,"state=",state,sizeof(state)); kv_lookup(payload,"pbit=",pbit,sizeof(pbit));
-  kv_lookup(payload,"expected_count=",exp,sizeof(exp)); kv_lookup(payload,"connected_count=",conn,sizeof(conn));
-  kv_lookup(payload,"axes=",axes,sizeof(axes)); kv_lookup(payload,"turret_axes=",turret,sizeof(turret)); kv_lookup(payload,"mirror_axes=",mirror,sizeof(mirror)); kv_lookup(payload,"sut_axes=",sut,sizeof(sut));
-  printf("Hardware info\n-------------\nMode: %s\nState: %s\nPBIT: %s\nExpected motors: %s\nConnected motors: %s\n\n", mode,state,pbit,exp,conn);
+  char mode[64]="?", state[32]="?", pbit[32]="?", exp[32]="0", conn[32]="0";
+  char axes[1800]="", turret[128]="", mirror[256]="", sut[256]="";
+  kv_lookup(payload,"mode=",mode,sizeof(mode));
+  kv_lookup(payload,"state=",state,sizeof(state));
+  kv_lookup(payload,"pbit=",pbit,sizeof(pbit));
+  kv_lookup(payload,"expected_count=",exp,sizeof(exp));
+  kv_lookup(payload,"connected_count=",conn,sizeof(conn));
+  kv_lookup(payload,"axes=",axes,sizeof(axes));
+  kv_lookup(payload,"turret_axes=",turret,sizeof(turret));
+  kv_lookup(payload,"mirror_axes=",mirror,sizeof(mirror));
+  kv_lookup(payload,"sut_axes=",sut,sizeof(sut));
+
+  printf("Hardware info\n-------------\nMode: %s\nState: %s\nPBIT: %s\nExpected motors: %s\nConnected motors: %s\n\n", mode, state, pbit, exp, conn);
   printf("Axes:\n");
-  char* save=NULL; char* tok=strtok_r(axes,",",&save);
-  while(tok){ printf("  Axis %s\n", tok); tok=strtok_r(NULL,",",&save);}
-  printf("\nMappings:\n  Turret: %s\n  Mirror: %s\n  SUT: %s\n", turret[0]?turret:"disabled", mirror[0]?mirror:"none", sut[0]?sut:"none");
+  char* save = NULL;
+  char* tok = strtok_r(axes, ",", &save);
+  while (tok) {
+    char line[320];
+    snprintf(line, sizeof(line), "%s", tok);
+    for (char* c = line; *c; ++c) if (*c == '|') *c = ' ';
+    printf("  Axis %s\n", line);
+    tok = strtok_r(NULL, ",", &save);
+  }
+
+  printf("\nMappings:\n");
+  printf("  Turret: %s\n", turret[0] ? turret : "disabled");
+  printf("  Mirror 1: %s\n", mirror[0] ? mirror : "none");
+  printf("  SUT: %s\n", sut[0] ? sut : "none");
 }
 
 static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg, uint16_t sent_cmd_id, uint8_t requested_cu_state, int has_requested_cu_state) {
