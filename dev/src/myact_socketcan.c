@@ -14,6 +14,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "myact_socketcan.h"
+#include "stc_log.h"
 
 #include <errno.h>
 #include <linux/can.h>
@@ -29,6 +30,7 @@
 #define MYACT_CMD_ID_BASE 0x140u
 #define MYACT_REPLY_ID_BASE 0x240u
 #define MYACT_MOTION_CMD_ID_BASE 0x400u
+#define MYACT_MOTION_REPLY_ID_BASE 0x500u
 
 static uint64_t sockcan_time_ms(void* user) {
     (void)user;
@@ -44,6 +46,10 @@ static int sockcan_send(const myact_can_frame_t* fr, void* user) {
     c.can_id = fr->id & CAN_SFF_MASK;
     c.can_dlc = fr->dlc;
     memcpy(c.data, fr->data, 8);
+    STC_LOG_DEBUG("MYACT TX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                  (unsigned)c.can_id, (unsigned)c.can_dlc,
+                  c.data[0], c.data[1], c.data[2], c.data[3],
+                  c.data[4], c.data[5], c.data[6], c.data[7]);
     return (write(io->fd, &c, sizeof(c)) == (ssize_t)sizeof(c)) ? MYACT_OK : MYACT_EIO;
 }
 
@@ -60,6 +66,10 @@ static int sockcan_recv(myact_can_frame_t* out, uint32_t to_ms, void* user) {
     out->id = c.can_id & CAN_SFF_MASK;
     out->dlc = c.can_dlc;
     memcpy(out->data, c.data, 8);
+    STC_LOG_DEBUG("MYACT RX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                  (unsigned)out->id, (unsigned)out->dlc,
+                  out->data[0], out->data[1], out->data[2], out->data[3],
+                  out->data[4], out->data[5], out->data[6], out->data[7]);
     return MYACT_OK;
 }
 
@@ -76,10 +86,15 @@ int myact_socketcan_open(myact_socketcan_t* io, const char* ifname, uint8_t node
     strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
     if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) { close(fd); return MYACT_EIO; }
 
+    io->tx_single_id = MYACT_CMD_ID_BASE + node_id;
+    io->rx_single_id = MYACT_REPLY_ID_BASE + node_id;
+    io->tx_motion_id = MYACT_MOTION_CMD_ID_BASE + node_id;
+    io->rx_motion_id = MYACT_MOTION_REPLY_ID_BASE + node_id;
+
     struct can_filter filters[2];
-    filters[0].can_id = MYACT_REPLY_ID_BASE + node_id;
+    filters[0].can_id = io->rx_single_id;
     filters[0].can_mask = CAN_SFF_MASK;
-    filters[1].can_id = MYACT_MOTION_CMD_ID_BASE + node_id;
+    filters[1].can_id = io->rx_motion_id;
     filters[1].can_mask = CAN_SFF_MASK;
     if (setsockopt(fd, SOL_CAN_RAW, CAN_RAW_FILTER, &filters, (socklen_t)sizeof(filters)) < 0) {
         close(fd);
@@ -98,6 +113,10 @@ int myact_socketcan_open(myact_socketcan_t* io, const char* ifname, uint8_t node
     io->io.recv = sockcan_recv;
     io->io.time_ms = sockcan_time_ms;
     io->io.user = io;
+    STC_LOG_INFO("MYACT socketcan axis? node=%u tx_single=0x%03X rx_single=0x%03X tx_motion=0x%03X rx_motion=0x%03X",
+                 (unsigned)node_id,
+                 (unsigned)io->tx_single_id, (unsigned)io->rx_single_id,
+                 (unsigned)io->tx_motion_id, (unsigned)io->rx_motion_id);
     return MYACT_OK;
 }
 

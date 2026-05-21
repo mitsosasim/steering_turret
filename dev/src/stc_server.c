@@ -3395,10 +3395,11 @@ int main(int argc, char** argv) {
         written = snprintf(hw_info + off, sizeof(hw_info) - off, "mode=%s;", mode);
         if (written > 0 && (size_t)written < (sizeof(hw_info) - off)) off += (size_t)written;
 
-        int connected = 0;
+        int connected_axes = 0;
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-          if (sh.d.axis_available[axis]) connected++;
+          if (sh.d.axis_available[axis]) connected_axes++;
         }
+        const int connected = (connected_axes > 0) ? 1 : 0;
         written = snprintf(hw_info + off, sizeof(hw_info) - off,
                            "connected=%d;axis_count=%zu;",
                            connected,

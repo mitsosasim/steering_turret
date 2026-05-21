@@ -28,6 +28,10 @@ extern "C" {
 typedef struct {
     int fd;
     uint8_t node_id;
+    uint32_t tx_single_id;
+    uint32_t rx_single_id;
+    uint32_t tx_motion_id;
+    uint32_t rx_motion_id;
     myact_io_t io;
 } myact_socketcan_t;
 
