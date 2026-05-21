@@ -44,6 +44,8 @@ enum {
   MYACT_CMD_READ_ANGLE = 0x92,
   MYACT_CMD_READ_STATUS2 = 0x9C,
   MYACT_CAN_BASE = 0x140,
+  MYACT_REPLY_BASE = 0x240,
+  MYACT_MOTION_REPLY_BASE = 0x500,
   TELEMETRY_PERIOD_NS = 20 * 1000 * 1000,
 };
 
@@ -111,10 +113,12 @@ static int open_can_socket(const char* ifname, uint8_t node_id) {
   addr.can_ifindex = ifr.ifr_ifindex;
   const int nonblock = 1;
   if (ioctl(fd, FIONBIO, &nonblock) < 0) { close(fd); return -1; }
-  struct can_filter filter;
-  filter.can_id = (canid_t)(0x240u + (uint32_t)node_id);
-  filter.can_mask = CAN_SFF_MASK;
-  if (setsockopt(fd, SOL_CAN_RAW, CAN_RAW_FILTER, &filter, (socklen_t)sizeof(filter)) < 0) {
+  struct can_filter filters[2];
+  filters[0].can_id = (canid_t)(MYACT_REPLY_BASE + (uint32_t)node_id);
+  filters[0].can_mask = CAN_SFF_MASK;
+  filters[1].can_id = (canid_t)(MYACT_MOTION_REPLY_BASE + (uint32_t)node_id);
+  filters[1].can_mask = CAN_SFF_MASK;
+  if (setsockopt(fd, SOL_CAN_RAW, CAN_RAW_FILTER, &filters, (socklen_t)sizeof(filters)) < 0) {
     close(fd);
     return -1;
   }
@@ -150,6 +154,9 @@ static int send_myact_cmd(struct motion_backend* b, uint8_t node_id, uint8_t cmd
   f.data[5] = (uint8_t)((value >> 8) & 0xFF);
   f.data[6] = (uint8_t)((value >> 16) & 0xFF);
   f.data[7] = (uint8_t)((value >> 24) & 0xFF);
+  STC_LOG_DEBUG("MYACT TX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                (unsigned)f.can_id, (unsigned)f.can_dlc,
+                f.data[0], f.data[1], f.data[2], f.data[3], f.data[4], f.data[5], f.data[6], f.data[7]);
 
   return (write(fd, &f, sizeof(f)) == (ssize_t)sizeof(f)) ? 0 : -1;
 }
@@ -190,7 +197,7 @@ static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t e
   if (!b || !out) return -1;
   const int fd = socket_for_node(b, node_id);
   if (fd < 0) return -1;
-  const canid_t expected_id = (canid_t)(MYACT_CAN_BASE + (uint32_t)node_id);
+  const canid_t expected_id = (canid_t)(MYACT_REPLY_BASE + (uint32_t)node_id);
   const uint64_t deadline = now_ms() + (uint64_t)((timeout_ms > 0) ? timeout_ms : 50);
   while (now_ms() <= deadline) {
     struct can_frame f;
@@ -198,6 +205,9 @@ static int recv_myact_reply(struct motion_backend* b, uint8_t node_id, uint8_t e
     if (r == (ssize_t)sizeof(f)) {
       const canid_t rx_id = f.can_id & CAN_SFF_MASK;
       if (f.can_dlc < 1 || rx_id != expected_id) continue;
+      STC_LOG_DEBUG("MYACT RX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                    (unsigned)rx_id, (unsigned)f.can_dlc,
+                    f.data[0], f.data[1], f.data[2], f.data[3], f.data[4], f.data[5], f.data[6], f.data[7]);
       if (f.data[0] != expected_cmd) continue;
       *out = f;
       return 0;

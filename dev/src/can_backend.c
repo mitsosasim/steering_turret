@@ -451,28 +451,36 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
       case STC_AXIS_DRIVER_MYACT_X8_25: {
         int rc = myact_socketcan_open(&b->axis[axis].u.x8.io, cfg->can_if, node_id);
         if (rc != MYACT_OK) break;
+        STC_LOG_INFO("MYACT socketcan axis%zu node=%u tx_single=0x%03X rx_single=0x%03X tx_motion=0x%03X rx_motion=0x%03X",
+                     axis, node_id,
+                     (unsigned)b->axis[axis].u.x8.io.tx_single_id, (unsigned)b->axis[axis].u.x8.io.rx_single_id,
+                     (unsigned)b->axis[axis].u.x8.io.tx_motion_id, (unsigned)b->axis[axis].u.x8.io.rx_motion_id);
         if (myact_init(&b->axis[axis].u.x8.ctx, node_id, &b->axis[axis].u.x8.io.io) != MYACT_OK) {
           myact_socketcan_close(&b->axis[axis].u.x8.io);
           break;
         }
         char model[8] = {0};
-        uint32_t ver = 0, runtime = 0;
         myact_status1_t status1;
-        myact_status3_t status3;
+        myact_status2_t status2;
         int32_t angle_raw_0p01 = 0;
-        const int model_rc = myact_read_model(&b->axis[axis].u.x8.ctx, model);
-        const int ver_rc = myact_read_version_date(&b->axis[axis].u.x8.ctx, &ver);
-        const int run_rc = myact_read_runtime(&b->axis[axis].u.x8.ctx, &runtime);
-        const int st_rc = myact_read_status1(&b->axis[axis].u.x8.ctx, &status1);
-        const int ang_rc = myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
-        const int status3_rc = myact_read_status3(&b->axis[axis].u.x8.ctx, &status3);
-        if (model_rc == MYACT_OK &&
-            ver_rc == MYACT_OK &&
-            run_rc == MYACT_OK &&
-            st_rc == MYACT_OK &&
-            ang_rc == MYACT_OK &&
-            status3_rc == MYACT_OK) {
+        int discovery_rc = myact_read_model(&b->axis[axis].u.x8.ctx, model);
+        const char* discovery_reason = "myact_read_model";
+        if (discovery_rc != MYACT_OK) {
+          discovery_rc = myact_read_status1(&b->axis[axis].u.x8.ctx, &status1);
+          discovery_reason = "myact_read_status1";
+        }
+        if (discovery_rc != MYACT_OK) {
+          discovery_rc = myact_read_status2(&b->axis[axis].u.x8.ctx, &status2);
+          discovery_reason = "myact_read_status2";
+        }
+        if (discovery_rc != MYACT_OK) {
+          discovery_rc = myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
+          discovery_reason = "myact_read_multiturn_angle";
+        }
+
+        if (discovery_rc == MYACT_OK) {
           b->axis[axis].connected = 1;
+          b->axis[axis].enabled = 1;
           b->axis[axis].last_rx_ms = mono_ms();
           b->axis[axis].last_healthcheck_ms = b->axis[axis].last_rx_ms;
           b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
@@ -488,13 +496,14 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
             (void)myact_active_reply_config(&b->axis[axis].u.x8.ctx, MYACT_CMD_STATUS2, true, interval_10ms);
             STC_LOG_INFO("axis%zu active_reply 9C enabled interval_ms=%u", axis, (unsigned)(interval_10ms * 10u));
           }
-          STC_LOG_INFO("axis%zu driver=myact_x8_25 node=%u connected model=%s ver=%u runtime_ms=%u", axis, node_id, model, ver, runtime);
+          STC_LOG_INFO("axis%zu driver=myact_x8_25 node=%u connected model=%s", axis, node_id, model);
           STC_LOG_INFO("axis%zu myact init OK", axis);
         } else {
+          STC_LOG_ERROR("MYACT axis%zu node=%u discovery failed rc=%d reason=%s", axis, node_id, discovery_rc, discovery_reason);
           myact_socketcan_close(&b->axis[axis].u.x8.io);
         }
         (void)status1;
-        (void)status3;
+        (void)status2;
       } break;
       case STC_AXIS_DRIVER_DISABLED:
       default:
