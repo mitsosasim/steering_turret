@@ -447,3 +447,12 @@ if(BUILD_TESTING)
     add_test(NAME test_motion_backend_router COMMAND test_motion_backend_router --no-sim)
   endif()
 endif()
+
+
+add_executable(test_diag_gui_regressions
+  dev/tests/test_diag_gui_regressions.cpp
+  dev/src/stc_icd.c
+)
+target_include_directories(test_diag_gui_regressions PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
+target_compile_options(test_diag_gui_regressions PRIVATE -Wall -Wextra)
+

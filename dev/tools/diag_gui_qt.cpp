@@ -64,9 +64,18 @@
 extern "C" {
 #include "stc_icd.h"
 #include "stc_errors.h"
+#include "stc_version.h"
 }
 
 namespace {
+
+#ifndef STC_BUILD_GIT_SHA
+#define STC_BUILD_GIT_SHA "unknown"
+#endif
+#ifndef STC_BUILD_TIMESTAMP
+#define STC_BUILD_TIMESTAMP __DATE__ " " __TIME__
+#endif
+
 constexpr uint16_t kDefaultControlPort = 7000;
 constexpr uint16_t kDefaultTlmHighPort = 6010;
 constexpr uint16_t kDefaultTlmLowPort = 6020;
@@ -1884,6 +1893,10 @@ static void qtGlobalMessageHandler(QtMsgType type, const QMessageLogContext&, co
 int main(int argc, char *argv[]) {
   QApplication app(argc, argv);
   qInstallMessageHandler(qtGlobalMessageHandler);
+  qInfo().noquote() << QString("build_fingerprint git_sha=%1 build_timestamp=%2 log_level=%3")
+                       .arg(STC_BUILD_GIT_SHA)
+                       .arg(STC_BUILD_TIMESTAMP)
+                       .arg(QString::fromLocal8Bit(qgetenv("QT_LOGGING_RULES")).isEmpty() ? QString("default") : QString::fromLocal8Bit(qgetenv("QT_LOGGING_RULES")));
   DiagnosticsWindow w;
   g_logSinkWindow = &w;
   w.show();
