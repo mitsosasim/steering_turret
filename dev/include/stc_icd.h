@@ -42,7 +42,7 @@ extern "C" {
 
 /* ----------------------------- Limits ----------------------------- */
 
-#define STC_ICD_MAX_PAYLOAD       512u
+#define STC_ICD_MAX_PAYLOAD       2048u
 #define STC_ICD_AXES_COUNT        18u
 #define STC_ICD_LASER_COUNT       8u
 #define STC_ICD_TLML_BASE_SIZE    100u
@@ -234,6 +234,7 @@ typedef enum stc_nack_err_e {
   STC_ERR_COMMAND_NOT_IMPLEMENTED     = 0x0008,
   STC_ERR_NOT_CONFIGURED              = 0x0009,
   STC_ERR_AXIS_NOT_CONNECTED          = 0x000A,
+  STC_ERR_PAYLOAD_TOO_LARGE           = 0x000B,
   STC_ERR_GENERIC                     = 0x00FF
 } stc_nack_err_t;
 

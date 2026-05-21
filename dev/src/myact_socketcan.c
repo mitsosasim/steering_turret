@@ -46,7 +46,7 @@ static int sockcan_send(const myact_can_frame_t* fr, void* user) {
     c.can_id = fr->id & CAN_SFF_MASK;
     c.can_dlc = fr->dlc;
     memcpy(c.data, fr->data, 8);
-    STC_LOG_DEBUG("MYACT TX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
+    STC_LOG_TRACE("MYACT TX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
                   (unsigned)c.can_id, (unsigned)c.can_dlc,
                   c.data[0], c.data[1], c.data[2], c.data[3],
                   c.data[4], c.data[5], c.data[6], c.data[7]);
@@ -66,7 +66,7 @@ static int sockcan_recv(myact_can_frame_t* out, uint32_t to_ms, void* user) {
     out->id = c.can_id & CAN_SFF_MASK;
     out->dlc = c.can_dlc;
     memcpy(out->data, c.data, 8);
-    STC_LOG_DEBUG("MYACT RX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
+    STC_LOG_TRACE("MYACT RX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
                   (unsigned)out->id, (unsigned)out->dlc,
                   out->data[0], out->data[1], out->data[2], out->data[3],
                   out->data[4], out->data[5], out->data[6], out->data[7]);
@@ -113,7 +113,7 @@ int myact_socketcan_open(myact_socketcan_t* io, const char* ifname, uint8_t node
     io->io.recv = sockcan_recv;
     io->io.time_ms = sockcan_time_ms;
     io->io.user = io;
-    STC_LOG_INFO("MYACT socketcan axis? node=%u tx_single=0x%03X rx_single=0x%03X tx_motion=0x%03X rx_motion=0x%03X",
+    STC_LOG_INFO("MYACT socketcan axis0 node=%u tx_single=0x%03X rx_single=0x%03X tx_motion=0x%03X rx_motion=0x%03X",
                  (unsigned)node_id,
                  (unsigned)io->tx_single_id, (unsigned)io->rx_single_id,
                  (unsigned)io->tx_motion_id, (unsigned)io->rx_motion_id);

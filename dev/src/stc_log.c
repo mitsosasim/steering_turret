@@ -31,6 +31,7 @@ static const char* level_tag(stc_log_level_t level) {
     case STC_LOG_LEVEL_WARN: return "WARN ";
     case STC_LOG_LEVEL_INFO: return "INFO ";
     case STC_LOG_LEVEL_DEBUG: return "DEBUG";
+    case STC_LOG_LEVEL_TRACE: return "TRACE";
     default: return "UNKWN";
   }
 }
@@ -135,6 +136,7 @@ int stc_log_level_from_string(const char* value, stc_log_level_t* out_level) {
   if (strcmp(value, "warn") == 0)  { *out_level = STC_LOG_LEVEL_WARN; return 0; }
   if (strcmp(value, "info") == 0)  { *out_level = STC_LOG_LEVEL_INFO; return 0; }
   if (strcmp(value, "debug") == 0) { *out_level = STC_LOG_LEVEL_DEBUG; return 0; }
+  if (strcmp(value, "trace") == 0) { *out_level = STC_LOG_LEVEL_TRACE; return 0; }
   return -1;
 }
 

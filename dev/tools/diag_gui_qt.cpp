@@ -601,7 +601,7 @@ class DiagnosticsWindow : public QMainWindow {
 
       if (key == "mode") {
         modeFromPayload = value;
-      } else if (key == "connected") {
+      } else if (key == "connected" || key == "connected_count") {
         bool ok = false;
         const int parsed = value.toInt(&ok);
         if (ok) connectedFromPayload = parsed;
