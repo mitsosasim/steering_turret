@@ -122,17 +122,6 @@ static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
   return (a >= b) ? (a - b) : (b - a);
 }
 
-static int startup_accept_ready_locked(const shared_t* sh) {
-  if (!sh) return 0;
-  const stc_state_t state = sh->d.st_state;
-  if (state == STC_STATE_SAFE || state == STC_STATE_OPER) return 1;
-  if (state == STC_STATE_FAIL &&
-      sh->d.fail_cause != STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS) {
-    return 1;
-  }
-  return 0;
-}
-
 static int append_hw_infof(char* dst, size_t cap, size_t* off, size_t* required, const char* fmt, ...) {
   if (!dst || !off || !required || !fmt) return -1;
   va_list ap;
@@ -412,6 +401,19 @@ typedef struct {
   int backend_connected_motors;
   int backend_inventory_valid;
 } shared_t;
+
+static int startup_accept_ready_locked(const shared_data_t* d) {
+  if (!d) return 0;
+  const stc_state_t state = d->st_state;
+  if (state == STC_STATE_SAFE || state == STC_STATE_OPER) return 1;
+  if (state == STC_STATE_FAIL &&
+      d->fail_cause != STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS) {
+    return 1;
+  }
+  return 0;
+}
+
+
 
 #define BACKEND_STARTUP_WAIT_TIMEOUT_MS 10000
 
@@ -748,23 +750,12 @@ static int axis_in_runtime_range(const shared_data_t* sh, int axis) {
   return axis < sh->num_axes;
 }
 
+bool stc_axis_can_accept_motion(shared_data_t* d, int axis, char* reason, size_t reason_sz);
+
 /** Axis is operational only when mapped, expected, connected, and not faulted. */
 static int axis_is_operational(const shared_data_t* sh, int axis) {
   char reason[32];
   return stc_axis_can_accept_motion((shared_data_t*)sh, axis, reason, sizeof(reason)) ? 1 : 0;
-}
-
-static int axis_is_live_for_motion(const shared_data_t* sh, int axis) {
-  if (!axis_in_runtime_range(sh, axis)) return 0;
-  if (!sh->axis_enabled[axis]) return 0;
-  if (sh->cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) return 0;
-  if (!sh->axis_health[axis].connected) return 0;
-  if (sh->axis_fault_active[axis]) return 0;
-  if (sh->can_timeout_ms > 0 &&
-      elapsed_ms_nonnegative(mono_ms(), sh->last_rx_ms[axis]) > sh->can_timeout_ms) {
-    return 0;
-  }
-  return 1;
 }
 
 bool stc_axis_can_accept_motion(shared_data_t* d, int axis, char* reason, size_t reason_sz) {
@@ -3099,7 +3090,7 @@ int main(int argc, char** argv) {
     const uint64_t startup_gate_deadline_ms = mono_ms() + (uint64_t)BACKEND_STARTUP_WAIT_TIMEOUT_MS;
     for (;;) {
       pthread_mutex_lock(&sh.mtx);
-      const int ready = startup_accept_ready_locked(&sh);
+      const int ready = startup_accept_ready_locked(&sh.d);
       const stc_state_t state = sh.d.st_state;
       const stc_fail_cause_t fail_cause = sh.d.fail_cause;
       pthread_mutex_unlock(&sh.mtx);
@@ -3538,13 +3529,11 @@ int main(int argc, char** argv) {
                   const int mirror_idx = (int)cmd.u.mirror.mirror_id - 1;
                   const int mirror_axis = (mirror_idx >= 0 && mirror_idx < sh.d.mirror_count) ? sh.d.mirror_axis[mirror_idx] : -1;
                   const int axis = mirror_axis;
-                  const int configured = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.cfg[axis].expected) ? 1 : 0;
+                  const int configured = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_expected[axis]) ? 1 : 0;
                   const int connected = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_connected[axis]) ? 1 : 0;
                   const int available = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_available[axis]) ? 1 : 0;
                   const int stale = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_stale[axis]) ? 1 : 0;
                   const int fault = (axis >= 0 && axis < (int)STC_AXIS_COUNT && sh.d.axis_fault_active[axis]) ? 1 : 0;
-                  const int strict_stale = sh.d.strict_stale_policy ? 1 : 0;
-
                   if (mirror_axis >= 0) {
                     STC_LOG_INFO("MIRROR id=%u maps to axis%d", cmd.u.mirror.mirror_id, mirror_axis);
                   }
