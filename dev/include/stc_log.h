@@ -31,6 +31,7 @@ typedef enum {
 void stc_log_init(const char* filename, stc_log_level_t level);
 void stc_log_close(void);
 void stc_log_set_level(stc_log_level_t level);
+int stc_log_level_from_string(const char* value, stc_log_level_t* out_level);
 void stc_log(stc_log_level_t level, const char* fmt, ...);
 void stc_vlog(stc_log_level_t level, const char* fmt, va_list ap);
 
