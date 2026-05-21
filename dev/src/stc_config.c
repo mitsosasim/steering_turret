@@ -96,11 +96,11 @@ static int valid_axis_ref(int axis_ref) {
 
 
 static int parse_bool(const char* value, int* out) {
-  if (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "TRUE") == 0 || strcmp(value, "yes") == 0 || strcmp(value, "on") == 0) {
+  if (strcasecmp(value, "1") == 0 || strcasecmp(value, "true") == 0 || strcasecmp(value, "yes") == 0 || strcasecmp(value, "on") == 0) {
     *out = 1;
     return 0;
   }
-  if (strcmp(value, "0") == 0 || strcmp(value, "false") == 0 || strcmp(value, "FALSE") == 0 || strcmp(value, "no") == 0 || strcmp(value, "off") == 0) {
+  if (strcasecmp(value, "0") == 0 || strcasecmp(value, "false") == 0 || strcasecmp(value, "no") == 0 || strcasecmp(value, "off") == 0) {
     *out = 0;
     return 0;
   }
@@ -394,8 +394,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->allow_degraded_startup) != 0 &&
             parse_bool(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
       } else if (strcmp(key, "require_identity_for_pbit") == 0) {
-        if (parse_int(value, &cfg->require_identity_for_pbit) != 0 &&
-            parse_bool(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
+        if (parse_bool(value, &cfg->require_identity_for_pbit) != 0) {
+          parse_error_reason = "accepted boolean values: 0/1/false/true/off/on/no/yes";
+          goto parse_error;
+        }
       } else if (strcmp(key, "speed_watchdog_ms") == 0) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {
@@ -483,8 +485,10 @@ bool load_config(const char* path, stc_config_t* cfg) {
         if (parse_int(value, &cfg->allow_degraded_startup) != 0 &&
             parse_bool(value, &cfg->allow_degraded_startup) != 0) goto parse_error;
       } else if (strcmp(key, "require_identity_for_pbit") == 0) {
-        if (parse_int(value, &cfg->require_identity_for_pbit) != 0 &&
-            parse_bool(value, &cfg->require_identity_for_pbit) != 0) goto parse_error;
+        if (parse_bool(value, &cfg->require_identity_for_pbit) != 0) {
+          parse_error_reason = "accepted boolean values: 0/1/false/true/off/on/no/yes";
+          goto parse_error;
+        }
       } else if (strcmp(key, "speed_watchdog_ms") == 0) {
         if (parse_int(value, &cfg->speed_watchdog_ms) != 0) goto parse_error;
       } else if (strcmp(key, "speed_stream_period_ms") == 0) {
@@ -800,7 +804,7 @@ parse_error:
     /* Strict schema: unknown keys are rejected to prevent typo fallthrough. */
     STC_LOG_ERROR("%s:%d: unknown key '%s' in section [%s]", path, line_no, parse_key, section);
   } else {
-    STC_LOG_ERROR("%s:%d: invalid value for %s", path, line_no, parse_key);
+    STC_LOG_ERROR("%s:%d: invalid value for %s (%s)", path, line_no, parse_key, parse_error_reason);
   }
   fclose(f);
   return false;

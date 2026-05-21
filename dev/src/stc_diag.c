@@ -97,6 +97,8 @@ stc_diag_myact_severity_t stc_diag_myact_error_severity(uint16_t error_flags) {
   return STC_DIAG_MYACT_SEV_WARNING;
 }
 
+/* Bench fallback connectivity can report unknown identity while still usable. */
+
 uint16_t stc_diag_myact_primary_error_code(uint16_t error_flags) {
   if (error_flags & 0x0001u) return STC_DIAG_ERR_MYACT_STALL;
   if (error_flags & 0x0002u) return STC_DIAG_ERR_MYACT_UNDERVOLT;

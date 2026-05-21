@@ -363,6 +363,7 @@ static int init_axis_feedback(struct motion_backend* b, size_t axis) {
   b->snap.diag_ext[axis] = (uint32_t)(got_status1 ? ((status_err_flags & 0xFFFFu) | ((uint32_t)(fr.data[1] & 0x1u) << 16)) : 0u);
   b->snap.last_rx_ms[axis] = t_ms;
   b->snap.axis_available[axis] = 1;
+  STC_LOG_INFO("axis%zu identity=unknown health=connected_degraded_identity", axis);
   STC_LOG_INFO("axis%zu myact init OK node=%u model=%s ver=%u runtime_ms=%u status1 err=0x%04X feedback fresh",
                axis, node_id, model[0] ? model : "unknown", sw_version, runtime_ms, (unsigned)status_err_flags);
   return 0;
