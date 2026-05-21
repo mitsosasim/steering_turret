@@ -33,10 +33,30 @@
 #include "stc_model.h"
 #include "stc_actions.h"
 #include "stc_version.h"
+
 #include "stc_limits.h"
 #include "stc_state.h"
 #include "stc_faults.h"
 #include "stc_log.h"
+
+#ifndef STC_BUILD_GIT_SHA
+#define STC_BUILD_GIT_SHA "unknown"
+#endif
+#ifndef STC_BUILD_TIMESTAMP
+#define STC_BUILD_TIMESTAMP __DATE__ " " __TIME__
+#endif
+
+static const char* stc_log_level_name_runtime(stc_log_level_t lvl) {
+  switch (lvl) {
+    case STC_LOG_LEVEL_ERROR: return "error";
+    case STC_LOG_LEVEL_WARN: return "warn";
+    case STC_LOG_LEVEL_INFO: return "info";
+    case STC_LOG_LEVEL_DEBUG: return "debug";
+    case STC_LOG_LEVEL_TRACE: return "trace";
+    default: return "unknown";
+  }
+}
+
 #include "stc_errors.h"
 
 #include <arpa/inet.h>
@@ -2634,6 +2654,8 @@ int main(int argc, char** argv) {
 
   stc_log_level_t cli_log_level = STC_LOG_LEVEL_DEBUG;
   stc_log_init("stc.log", cli_log_level);
+  STC_LOG_INFO("build_fingerprint git_sha=%s build_timestamp=%s log_level=%s",
+               STC_BUILD_GIT_SHA, STC_BUILD_TIMESTAMP, stc_log_level_name_runtime(cli_log_level));
 
   runtime_net_t net = {
     .can_if = "can0",
