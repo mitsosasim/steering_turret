@@ -242,6 +242,17 @@ static void refresh_can_status(struct motion_backend* b) {
   b->snap.transport_status = 1;
 }
 
+static void refresh_axis_health_entry(struct motion_backend* b, size_t axis) {
+  stc_axis_health_t* h = &b->snap.axis_health[axis];
+  h->configured = (b->cfg.axis_enabled[axis] && b->cfg.axis_cfg[axis].driver != STC_AXIS_DRIVER_DISABLED) ? 1u : 0u;
+  h->connected = b->snap.axis_connected[axis] ? 1u : 0u;
+  h->available = b->snap.axis_available[axis] ? 1u : 0u;
+  h->stale = b->snap.axis_stale[axis] ? 1u : 0u;
+  h->fault_active = b->snap.axis_fault_active[axis] ? 1u : 0u;
+  h->degraded = b->axis[axis].identity_degraded ? 1u : 0u;
+  h->last_rx_ms = b->snap.last_rx_ms[axis];
+}
+
 int myact_backend_discover_axis(motion_backend_t* backend, size_t axis, const char* can_if, uint8_t node_id) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || axis >= STC_AXIS_COUNT || !can_if || !can_if[0] || node_id == 0) return -1;
@@ -625,6 +636,7 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
     STC_LOG_INFO("discovery summary: scanned %d, responsive %u, connected %u",
       effective_scan_max(&b->cfg), b->snap.can_discovered_devices, b->snap.can_connected_devices);
   }
+  for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) refresh_axis_health_entry(b, axis);
   refresh_can_status(b);
   {
     int expected_axes = 0;
@@ -1018,6 +1030,7 @@ int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t
                                 (now - b->axis[axis].last_rx_ms) > (uint64_t)b->cfg.can_timeout_ms) ? 1u : 0u;
     b->snap.axis_moving[axis] = (b->snap.vel_raw[axis] > 5 || b->snap.vel_raw[axis] < -5) ? 1u : 0u;
     b->snap.fault_active[axis] = b->snap.axis_fault_active[axis];
+    refresh_axis_health_entry(b, axis);
     b->snap.command_age_ms[axis] = (b->axis[axis].last_cmd_ms > 0 && now >= b->axis[axis].last_cmd_ms) ? (uint32_t)(now - b->axis[axis].last_cmd_ms) : 0u;
     const int32_t abs_err = b->snap.pos_raw[axis] - b->axis_last_cmd_pos_raw[axis];
     const int pos_still_far = (abs_err > 20 || abs_err < -20);

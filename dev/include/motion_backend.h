@@ -99,6 +99,7 @@ typedef struct {
   uint8_t axis_connected[STC_AXIS_COUNT];
   uint8_t axis_stale[STC_AXIS_COUNT];
   uint8_t axis_moving[STC_AXIS_COUNT];
+  stc_axis_health_t axis_health[STC_AXIS_COUNT];
 
   int32_t pos_raw[STC_AXIS_COUNT];
   int32_t vel_raw[STC_AXIS_COUNT];

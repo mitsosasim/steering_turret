@@ -98,6 +98,16 @@ typedef struct axis_stream_s {
   uint64_t last_cmd_ms;
 } axis_stream_t;
 
+typedef struct stc_axis_health_s {
+  uint8_t configured;
+  uint8_t connected;
+  uint8_t available;
+  uint8_t stale;
+  uint8_t fault_active;
+  uint8_t degraded;
+  uint64_t last_rx_ms;
+} stc_axis_health_t;
+
 double axis_counts_to_deg(const axis_cfg_t* cfg, int32_t counts);
 int32_t axis_deg_to_counts(const axis_cfg_t* cfg, double deg);
 
