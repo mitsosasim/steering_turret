@@ -54,6 +54,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #ifdef __linux__
@@ -81,6 +82,15 @@ constexpr const char* kAxisLabels[STC_ICD_AXES_COUNT] = {
   "SUT7 AZ", "SUT7 EL",
   "SUT8 AZ", "SUT8 EL",
 };
+
+uint8_t resolveControllerId() {
+  uint8_t ctrl_id = 21;
+  const char* env = std::getenv("STC_CTRL_ID");
+  if (env != nullptr && *env != '\0') {
+    ctrl_id = static_cast<uint8_t>(std::atoi(env));
+  }
+  return ctrl_id;
+}
 constexpr const char* kDevRawPanelEnv = "STC_DIAG_DEV_RAW_PANEL";
 
 QString stateToString(uint8_t state) {
@@ -311,7 +321,7 @@ class DiagnosticsWindow : public QMainWindow {
   void makeHeader(stc_icd_cmd_t *cmd) {
     std::memcpy(cmd->magic, cfg_.cmd_magic, sizeof(cmd->magic));
     cmd->version = cfg_.protocol_version_default;
-    cmd->controller_id = 11;
+    cmd->controller_id = resolveControllerId();
     cmd->seq = nextSeq_++;
     cmd->timestamp_ms = static_cast<uint64_t>(QDateTime::currentMSecsSinceEpoch());
   }
