@@ -220,7 +220,13 @@ static uint64_t mono_ms(void);
 
 static void refresh_can_status(struct motion_backend* b) {
   if (!b) return;
+  int expected_axes = 0;
+  int connected_expected_axes = 0;
+  expected_connected_counts(b, &expected_axes, &connected_expected_axes);
+
   /* Aggregate per-axis connectivity into global CAN health for telemetry/state gating. */
+  b->snap.expected_motors = (uint8_t)((expected_axes < 0) ? 0 : expected_axes);
+  b->snap.connected_motors = (uint8_t)((connected_expected_axes < 0) ? 0 : connected_expected_axes);
   b->snap.can_ok = compute_can_ok(b);
   b->snap.capabilities.supports_native_a2_speed = 0;
   b->snap.capabilities.supports_native_absolute_position = 0;
