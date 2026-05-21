@@ -739,11 +739,8 @@ static int axis_in_runtime_range(const shared_data_t* sh, int axis) {
 
 /** Axis is operational only when mapped, expected, connected, and not faulted. */
 static int axis_is_operational(const shared_data_t* sh, int axis) {
-  if (!axis_in_runtime_range(sh, axis)) return 0;
-  if (!sh->axis_expected[axis]) return 0;
-  if (!sh->axis_health[axis].connected) return 0;
-  if (sh->axis_fault_active[axis]) return 0;
-  return 1;
+  char reason[32];
+  return stc_axis_can_accept_motion((shared_data_t*)sh, axis, reason, sizeof(reason)) ? 1 : 0;
 }
 
 static int axis_is_live_for_motion(const shared_data_t* sh, int axis) {
@@ -757,6 +754,35 @@ static int axis_is_live_for_motion(const shared_data_t* sh, int axis) {
     return 0;
   }
   return 1;
+}
+
+bool stc_axis_can_accept_motion(shared_data_t* d, int axis, char* reason, size_t reason_sz) {
+  if (reason && reason_sz) reason[0] = '\0';
+  if (!d) {
+    if (reason && reason_sz) snprintf(reason, reason_sz, "null_shared_data");
+    return false;
+  }
+  if (!axis_in_runtime_range(d, axis)) {
+    if (reason && reason_sz) snprintf(reason, reason_sz, "invalid_axis");
+    return false;
+  }
+  if (!d->axis_health[axis].configured) {
+    if (reason && reason_sz) snprintf(reason, reason_sz, "not_configured");
+    return false;
+  }
+  if (!d->axis_health[axis].connected) {
+    if (reason && reason_sz) snprintf(reason, reason_sz, "not_connected");
+    return false;
+  }
+  if (d->axis_fault_active[axis]) {
+    if (reason && reason_sz) snprintf(reason, reason_sz, "fault_active");
+    return false;
+  }
+  if (d->axis_health[axis].stale && d->strict_stale_policy) {
+    if (reason && reason_sz) snprintf(reason, reason_sz, "stale");
+    return false;
+  }
+  return true;
 }
 
 static int sut_index_from_laser_id(const shared_data_t* sh, uint8_t laser_id) {
@@ -3497,14 +3523,14 @@ int main(int argc, char** argv) {
 
                   if (sh.d.st_state != STC_STATE_OPER) {
                     v = STC_ERR_NOT_ALLOWED_STATE;
-                  } else if (axis < 0 || axis >= (int)STC_AXIS_COUNT || !configured) {
-                    v = STC_ERR_INVALID_AXIS;
-                  } else if (!connected) {
-                    v = STC_ERR_AXIS_NOT_CONNECTED;
-                  } else if (fault) {
-                    v = STC_ERR_AXIS_FAULT;
-                  } else if (stale && strict_stale) {
-                    v = STC_ERR_AXIS_STALE;
+                  } else {
+                    char reason[32];
+                    if (!stc_axis_can_accept_motion(&sh.d, axis, reason, sizeof(reason))) {
+                      if (strcmp(reason, "not_connected") == 0) v = STC_ERR_AXIS_NOT_CONNECTED;
+                      else if (strcmp(reason, "fault_active") == 0) v = STC_ERR_AXIS_FAULT;
+                      else if (strcmp(reason, "stale") == 0) v = STC_ERR_AXIS_STALE;
+                      else v = STC_ERR_INVALID_AXIS;
+                    }
                   }
                 }
                 if (v != STC_ERR_NO_ERROR) {
@@ -3682,7 +3708,7 @@ int main(int argc, char** argv) {
         int connected_axes = 0;
         int expected_axes = 0;
         for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-          if (d->axis_health[axis].connected) connected_axes++;
+          if (stc_axis_can_accept_motion((shared_data_t*)d, (int)axis, NULL, 0)) connected_axes++;
           if (d->cfg[axis].driver != STC_AXIS_DRIVER_DISABLED) expected_axes++;
         }
         append_hw_infof(hw_info, sizeof(hw_info), &off, &required,

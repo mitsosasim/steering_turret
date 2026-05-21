@@ -765,7 +765,11 @@ int can_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mas
 
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
     if (!axis_selected(axes_mask, axis)) continue;
+    if (!b->axis[axis].connected && b->snap.axis_connected[axis]) {
+      STC_LOG_ERROR("LIVENESS MISMATCH axis%zu server_connected=1 backend_connected=0", axis);
+    }
     if (!axis_ready_for_motion(b, axis)) return -1;
+    if (!b->axis[axis].connected || !b->axis[axis].ops || !axis_driver_ctx(&b->axis[axis])) return -1;
   }
 
   uint32_t touched_mask = 0u;
@@ -784,7 +788,7 @@ int can_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mas
           const double max_speed_motor_dps = fabs(axis_output_to_motor_deg(b, axis, speed_limit_deg_s[axis]));
           const int32_t raw_delta = myact_deg_to_raw_0p01(delta_motor_deg);
           const uint16_t max_speed_dps = (uint16_t)llround(max_speed_motor_dps);
-          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=relative value=%.3f output_deg motor_deg=%.3f profile_speed=%.3f deg/s",
+          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=relative output_deg=%.3f motor_deg=%.3f profile_speed=%.3f",
             axis, node, values_deg_or_dps[axis], delta_motor_deg, speed_limit_deg_s[axis]);
           rc = myact_position_inc(&b->axis[axis].u.x8.ctx, max_speed_dps, raw_delta, &fb);
           break;
@@ -792,8 +796,8 @@ int can_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mas
         case STC_AXIS_MOTION_SPEED: {
           const double speed_motor_dps = axis_output_to_motor_deg(b, axis, values_deg_or_dps[axis]);
           const int32_t raw_speed = myact_speed_dps_to_raw(speed_motor_dps);
-          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=speed value=%.3f deg/s profile_speed=%.3f deg/s",
-            axis, node, values_deg_or_dps[axis], speed_limit_deg_s[axis]);
+          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=speed output_deg=%.3f motor_deg=%.3f profile_speed=%.3f",
+            axis, node, values_deg_or_dps[axis], speed_motor_dps, speed_limit_deg_s[axis]);
           rc = myact_speed(&b->axis[axis].u.x8.ctx, raw_speed, &fb);
           break;
         }
@@ -803,8 +807,8 @@ int can_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mas
           const double max_speed_motor_dps = fabs(axis_output_to_motor_deg(b, axis, speed_limit_deg_s[axis]));
           const int32_t raw_abs = myact_deg_to_raw_0p01(abs_motor_deg);
           const uint16_t max_speed_dps = (uint16_t)llround(max_speed_motor_dps);
-          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=absolute value=%.3f deg profile_speed=%.3f deg/s",
-            axis, node, values_deg_or_dps[axis], speed_limit_deg_s[axis]);
+          STC_LOG_INFO("MYACT motion axis%zu node=%u mode=absolute output_deg=%.3f motor_deg=%.3f profile_speed=%.3f",
+            axis, node, values_deg_or_dps[axis], abs_motor_deg, speed_limit_deg_s[axis]);
           rc = myact_position_abs(&b->axis[axis].u.x8.ctx, max_speed_dps, raw_abs, &fb);
           break;
         }
