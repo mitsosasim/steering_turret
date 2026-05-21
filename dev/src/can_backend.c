@@ -296,7 +296,7 @@ int myact_backend_discover_axis(motion_backend_t* backend, size_t axis, const ch
     const int ang_rc = myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
     if (st2_rc == MYACT_OK || ang_rc == MYACT_OK) {
       STC_LOG_WARN("MYACT axis%zu model read timed out, but status2/angle replied; accepting configured myact_x8_25 node as connected", axis);
-      strncpy(model, "unknown", sizeof(model) - 1);
+      snprintf(model, sizeof(model), "%s", "unknown");
     } else {
       STC_LOG_ERROR("MYACT axis%zu discovery FAILED rc=%d reason=myact_read_model expected_rx=0x%03X", axis, rc, (unsigned)(0x240u + node_id));
       myact_socketcan_close(&b->axis[axis].u.x8.io);
