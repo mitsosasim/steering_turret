@@ -56,6 +56,7 @@ static void test_runtime_backend_and_driver_selection(void) {
 
   init_backend_cfg_for_test(&cfg);
   snprintf(cfg.backend, sizeof(cfg.backend), "%s", "can");
+  cfg.num_axes = (int)STC_AXIS_COUNT;
   cfg.axis_enabled[0] = 1;
   cfg.axis_driver[0] = STC_AXIS_DRIVER_PD4C;
   require_true(select_runtime_backend(&cfg, &runtime_backend) == 0, "can backend + pd4c accepted");
