@@ -80,6 +80,8 @@ typedef struct {
   stc_axis_driver_t driver;
   const stc_axis_driver_ops_t* ops;
   int connected;
+  int identity_ok;
+  int identity_degraded;
   int enabled;
   int faulted;
   uint64_t last_rx_ms;
@@ -198,7 +200,10 @@ static void expected_connected_counts(const struct motion_backend* b, int* expec
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       if (!b->cfg.axis_enabled[axis] || b->cfg.axis_cfg[axis].driver == STC_AXIS_DRIVER_DISABLED) continue;
       expected++;
-      if (b->axis[axis].connected) connected++;
+      const int eligible = b->cfg.require_identity_for_pbit
+        ? (b->axis[axis].connected && b->axis[axis].identity_ok)
+        : b->axis[axis].connected;
+      if (eligible) connected++;
     }
   }
   if (expected_axes) *expected_axes = expected;
@@ -543,6 +548,8 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
           break;
         }
         b->axis[axis].connected = 1;
+        b->axis[axis].identity_ok = 1;
+        b->axis[axis].identity_degraded = 0;
         b->snap.axis_available[axis] = 1;
         b->snap.can_connected_devices++;
         b->axis[axis].last_rx_ms = mono_ms();
@@ -554,6 +561,8 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
       case STC_AXIS_DRIVER_MYACT_X8_25: {
         int discovery_rc = myact_backend_discover_axis((motion_backend_t*)b, axis, cfg->can_if, node_id);
         if (discovery_rc == MYACT_OK) {
+          b->axis[axis].identity_ok = 0;
+          b->axis[axis].identity_degraded = 1;
           b->snap.can_connected_devices++;
           int32_t angle_raw_0p01 = 0;
           (void)myact_read_angle_multi(&b->axis[axis].u.x8.ctx, &angle_raw_0p01);
@@ -598,6 +607,9 @@ int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t**
         axis,
         node_id,
         b->node_discovery[node_id].identity_rc);
+    }
+    if (!b->axis[axis].identity_ok) {
+      STC_LOG_INFO("axis%zu identity=unknown health=connected_degraded_identity", axis);
     }
   }
   if (cfg->can_discovery_enabled) {

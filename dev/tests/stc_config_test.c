@@ -494,6 +494,45 @@ static void test_bench_x8_25_mapping_defaults(void) {
   expect_true(cfg.sut_count == 0, "expected stc_bench_x8_25.ini sut_count == 0");
   expect_true(cfg.turret_az_axis == -1 && cfg.turret_el_axis == -1, "expected stc_bench_x8_25.ini turret_axes == -1,-1");
   expect_true(cfg.mirror_axis[0] == 0, "expected stc_bench_x8_25.ini mirror1_axis == 0");
+  expect_true(cfg.require_identity_for_pbit == 0, "expected stc_bench_x8_25.ini require_identity_for_pbit == 0");
+}
+
+static void test_require_identity_for_pbit_boolean_values(void) {
+  const char* cfg_text_tmpl =
+      "[Runtime]\n"
+      "backend=can\n"
+      "require_identity_for_pbit=%s\n"
+      "\n"
+      "[CAN]\n"
+      "ifname=can0\n"
+      "\n"
+      "[Axis0]\n"
+      "enabled=true\n"
+      "driver=myact_x8_25\n"
+      "node_id=1\n"
+      "diag_cat = 0x06\n"
+      "diag_subcat = 0x3F\n";
+
+  char cfg_text[512];
+  char path[64];
+  stc_config_t cfg;
+
+  snprintf(cfg_text, sizeof(cfg_text), cfg_text_tmpl, "false");
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(load_config(path, &cfg), "expected require_identity_for_pbit=false to parse");
+  expect_true(cfg.require_identity_for_pbit == 0, "expected require_identity_for_pbit=false => 0");
+  unlink(path);
+
+  snprintf(cfg_text, sizeof(cfg_text), cfg_text_tmpl, "0");
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(load_config(path, &cfg), "expected require_identity_for_pbit=0 to parse");
+  expect_true(cfg.require_identity_for_pbit == 0, "expected require_identity_for_pbit=0 => 0");
+  unlink(path);
+
+  snprintf(cfg_text, sizeof(cfg_text), cfg_text_tmpl, "maybe");
+  write_tmp_config(cfg_text, path, sizeof(path));
+  expect_true(!load_config(path, &cfg), "expected require_identity_for_pbit=maybe to fail");
+  unlink(path);
 }
 
 int main(void) {
@@ -508,6 +547,7 @@ int main(void) {
   test_runtime_backend_values();
   test_hardware_build_default_backend();
   test_bench_x8_25_mapping_defaults();
+  test_require_identity_for_pbit_boolean_values();
   fprintf(stderr, "PASS: stc_config_test\n");
   return 0;
 }
