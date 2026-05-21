@@ -194,6 +194,8 @@ static int compute_can_ok(const struct motion_backend* b) {
   return connected_expected_axes == expected_axes;
 }
 
+static uint64_t mono_ms(void);
+
 static void refresh_can_status(struct motion_backend* b) {
   if (!b) return;
   /* Aggregate per-axis connectivity into global CAN health for telemetry/state gating. */

@@ -121,27 +121,6 @@ static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
 }
 
 
-static void expected_motor_counts(const shared_data_t* d, int* expected_motors, int* connected_motors) {
-  int expected = 0;
-  int connected = 0;
-  if (d) {
-    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-      if (!d->axis_expected[axis]) continue;
-      expected++;
-      if (d->axis_available[axis]) connected++;
-    }
-  }
-  if (expected_motors) *expected_motors = expected;
-  if (connected_motors) *connected_motors = connected;
-}
-
-static int expected_motors_fully_connected(const shared_data_t* d) {
-  int expected = 0;
-  int connected = 0;
-  expected_motor_counts(d, &expected, &connected);
-  return (expected > 0) && (connected == expected);
-}
-
 static inline uint8_t stc_state_to_wire(stc_state_t s) {
   return (s == STC_STATE_FAIL) ? 0xFFu : (uint8_t)s;
 }
@@ -375,6 +354,28 @@ typedef struct shared_data {
   int selflev_pending;
   uint64_t selflev_due_ms;
 } shared_data_t;
+
+static void expected_motor_counts(const shared_data_t* d, int* expected_motors, int* connected_motors) {
+  int expected = 0;
+  int connected = 0;
+  if (d) {
+    for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
+      if (!d->axis_expected[axis]) continue;
+      expected++;
+      if (d->axis_available[axis]) connected++;
+    }
+  }
+  if (expected_motors) *expected_motors = expected;
+  if (connected_motors) *connected_motors = connected;
+}
+
+static int expected_motors_fully_connected(const shared_data_t* d) {
+  int expected = 0;
+  int connected = 0;
+  expected_motor_counts(d, &expected, &connected);
+  return (expected > 0) && (connected == expected);
+}
+
 
 typedef struct {
   pthread_mutex_t mtx;
