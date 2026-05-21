@@ -153,6 +153,18 @@ int motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_
 /** Copy latest backend snapshot for telemetry/diagnostics consumption by server. */
 int motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot);
 
+/* Dedicated MYACT backend entry points (used when backend=myact_x8_25). */
+int myact_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend);
+void myact_motion_backend_stop(motion_backend_t* backend);
+int myact_motion_backend_discover(motion_backend_t* backend);
+int myact_motion_backend_apply_pp_move(motion_backend_t* backend, uint32_t axes_mask, const double targets_deg[STC_AXIS_COUNT]);
+int myact_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]);
+int myact_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask, const double speeds_deg_s[STC_AXIS_COUNT]);
+int myact_motion_backend_quick_stop(motion_backend_t* backend, uint32_t axes_mask);
+int myact_motion_backend_clear_faults(motion_backend_t* backend, uint32_t axes_mask);
+int myact_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, uint8_t on_off);
+int myact_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot);
+
 #ifdef __cplusplus
 }
 #endif
