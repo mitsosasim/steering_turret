@@ -3406,6 +3406,15 @@ int main(int argc, char** argv) {
                 if (cmd.u.mirror.mirror_id != 0xFF) {
                   const int mirror_idx = (int)cmd.u.mirror.mirror_id - 1;
                   const int mirror_axis = (mirror_idx >= 0 && mirror_idx < sh.d.mirror_count) ? sh.d.mirror_axis[mirror_idx] : -1;
+                  if (mirror_axis >= 0) {
+                    STC_LOG_INFO("MIRROR id=%u maps to axis%d", cmd.u.mirror.mirror_id, mirror_axis);
+                  }
+                  if (sh.d.st_state != STC_STATE_OPER) {
+                    STC_LOG_WARN("MIRROR id=%u rejected: state=%s (OPER required)",
+                                 cmd.u.mirror.mirror_id,
+                                 stc_state_name(sh.d.st_state));
+                    v = STC_ERR_NOT_ALLOWED_STATE;
+                  }
                   if (mirror_axis >= 0 && !axis_is_live_for_motion(&sh.d, mirror_axis)) {
                     STC_LOG_WARN("MIRROR id=%u maps to axis%d but axis is not connected; rejecting motion",
                                  cmd.u.mirror.mirror_id, mirror_axis);

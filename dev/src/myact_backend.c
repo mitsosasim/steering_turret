@@ -154,9 +154,11 @@ static int send_myact_cmd(struct motion_backend* b, uint8_t node_id, uint8_t cmd
   f.data[5] = (uint8_t)((value >> 8) & 0xFF);
   f.data[6] = (uint8_t)((value >> 16) & 0xFF);
   f.data[7] = (uint8_t)((value >> 24) & 0xFF);
-  STC_LOG_DEBUG("MYACT TX id=0x%03X dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X",
-                (unsigned)f.can_id, (unsigned)f.can_dlc,
-                f.data[0], f.data[1], f.data[2], f.data[3], f.data[4], f.data[5], f.data[6], f.data[7]);
+  if (cmd == MYACT_CMD_STOP || cmd == MYACT_CMD_SPEED || cmd == MYACT_CMD_POS_ABS || cmd == MYACT_CMD_POS_INC) {
+    STC_LOG_INFO("MYACT TX id=0x%03X cmd=%02X data=%02X %02X %02X %02X %02X %02X %02X %02X",
+                 (unsigned)f.can_id, (unsigned)cmd,
+                 f.data[0], f.data[1], f.data[2], f.data[3], f.data[4], f.data[5], f.data[6], f.data[7]);
+  }
 
   return (write(fd, &f, sizeof(f)) == (ssize_t)sizeof(f)) ? 0 : -1;
 }
@@ -477,23 +479,13 @@ static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uin
         STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, effective_delta, max_speed);
         b->last_abs_via_a8_service[axis] = 1;
       } else log_myact_failure(b, axis, "A8", cmd_ok);
-    } else if (b->native_abs_validated[axis]) {
+    } else {
       const int32_t target_0p01deg = (int32_t)llround(target_deg * gr * 100.0);
       cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_ABS, speed_dps, target_0p01deg);
       if (cmd_ok == 0) {
         STC_LOG_INFO("axis%zu MYACT A4 abs_deg=%.3f speed=%.3f rc=OK", axis, target_deg, max_speed);
         b->last_abs_via_a8_service[axis] = 0;
       } else log_myact_failure(b, axis, "A4", cmd_ok);
-    } else {
-      const double current_deg = local_axis_counts_to_deg(cfg, b->snap.pos_raw[axis]);
-      const double delta_deg = target_deg - current_deg;
-      expected_target_deg = target_deg;
-      const int32_t delta_0p01deg = (int32_t)llround(delta_deg * gr * 100.0);
-      cmd_ok = send_myact_cmd(b, node_id, MYACT_CMD_POS_INC, speed_dps, delta_0p01deg);
-      if (cmd_ok == 0) {
-        STC_LOG_INFO("axis%zu MYACT A8 relative_deg=%.3f speed=%.3f rc=OK", axis, delta_deg, max_speed);
-        b->last_abs_via_a8_service[axis] = 1;
-      } else log_myact_failure(b, axis, "A8", cmd_ok);
     }
     if (cmd_ok == 0) {
       b->speed_active[axis] = 0;
