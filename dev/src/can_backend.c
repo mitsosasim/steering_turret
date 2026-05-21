@@ -890,11 +890,18 @@ int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t
       }
     }
     b->snap.last_rx_ms[axis] = b->axis[axis].last_rx_ms;
+    b->snap.axis_connected[axis] = b->axis[axis].connected ? 1u : 0u;
+    b->snap.axis_available[axis] = b->snap.axis_connected[axis];
     if (b->axis[axis].driver == STC_AXIS_DRIVER_MYACT_X8_25) {
-      b->snap.fault_active[axis] = (stc_diag_myact_error_severity((uint16_t)b->snap.status_word[axis]) == STC_DIAG_MYACT_SEV_CRITICAL) ? 1u : 0u;
+      b->snap.axis_fault_active[axis] =
+          (stc_diag_myact_error_severity((uint16_t)b->snap.status_word[axis]) == STC_DIAG_MYACT_SEV_CRITICAL) ? 1u : 0u;
     } else {
-      b->snap.fault_active[axis] = (b->snap.status_word[axis] & 0x0008u) ? 1u : 0u;
+      b->snap.axis_fault_active[axis] = (b->snap.status_word[axis] & 0x0008u) ? 1u : 0u;
     }
+    b->snap.axis_stale[axis] = (b->cfg.can_timeout_ms > 0 && b->axis[axis].last_rx_ms > 0 &&
+                                (now - b->axis[axis].last_rx_ms) > (uint64_t)b->cfg.can_timeout_ms) ? 1u : 0u;
+    b->snap.axis_moving[axis] = (b->snap.vel_raw[axis] > 5 || b->snap.vel_raw[axis] < -5) ? 1u : 0u;
+    b->snap.fault_active[axis] = b->snap.axis_fault_active[axis];
     b->snap.command_age_ms[axis] = (b->axis[axis].last_cmd_ms > 0 && now >= b->axis[axis].last_cmd_ms) ? (uint32_t)(now - b->axis[axis].last_cmd_ms) : 0u;
     const int32_t abs_err = b->snap.pos_raw[axis] - b->axis_last_cmd_pos_raw[axis];
     const int pos_still_far = (abs_err > 20 || abs_err < -20);

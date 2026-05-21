@@ -773,10 +773,16 @@ int myact_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot
   if (!b || !snapshot) return -1;
 
   pthread_mutex_lock(&b->lock);
+  const uint64_t now = now_ms();
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-    b->snap.fault_active[axis] = (b->snap.status_word[axis] != 0u) ? 1u : 0u;
+    b->snap.axis_connected[axis] = b->snap.axis_available[axis] ? 1u : 0u;
+    b->snap.axis_fault_active[axis] = (b->snap.status_word[axis] != 0u) ? 1u : 0u;
+    b->snap.fault_active[axis] = b->snap.axis_fault_active[axis];
     const uint64_t cmd_ms = b->last_cmd_ms[axis];
-    b->snap.command_age_ms[axis] = (cmd_ms > 0 && now_ms() >= cmd_ms) ? (uint32_t)(now_ms() - cmd_ms) : 0u;
+    b->snap.command_age_ms[axis] = (cmd_ms > 0 && now >= cmd_ms) ? (uint32_t)(now - cmd_ms) : 0u;
+    b->snap.axis_stale[axis] = (b->cfg.can_timeout_ms > 0 && b->snap.last_rx_ms[axis] > 0 &&
+                                (now - b->snap.last_rx_ms[axis]) > (uint64_t)b->cfg.can_timeout_ms) ? 1u : 0u;
+    b->snap.axis_moving[axis] = (b->snap.vel_raw[axis] > 5 || b->snap.vel_raw[axis] < -5) ? 1u : 0u;
     const int32_t pos_err = b->snap.pos_raw[axis] - b->cmd_pos_raw[axis];
     const int pos_still_far = (pos_err > 20 || pos_err < -20);
     const int vel_still_zero = (b->snap.vel_raw[axis] < 5 && b->snap.vel_raw[axis] > -5);

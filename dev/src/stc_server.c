@@ -1265,8 +1265,8 @@ static void* can_worker_thread(void* arg) {
       a->sh->d.supports_native_absolute_position = snap.capabilities.supports_native_absolute_position;
       memcpy(a->sh->d.can_discovered_nodes, snap.can_discovered_nodes, sizeof(a->sh->d.can_discovered_nodes));
       for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
-        a->sh->d.axis_available[axis] = snap.axis_available[axis];
-        a->sh->d.axis_fault_active[axis] = snap.fault_active[axis] ? 1u : 0u;
+        a->sh->d.axis_available[axis] = snap.axis_connected[axis];
+        a->sh->d.axis_fault_active[axis] = snap.axis_fault_active[axis] ? 1u : 0u;
         uint64_t rx_ms = snap.last_rx_ms[axis];
         if (rx_ms == 0 && a->sh->d.axis_expected[axis]) {
           /*
@@ -1378,7 +1378,6 @@ static void* can_worker_thread(void* arg) {
         const int timed_out = elapsed_ms_nonnegative(now, a->sh->d.last_rx_ms[axis]) > can_timeout_ms;
         stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
       }
-      a->sh->d.axis_fault_active[axis] = axis_fault ? 1u : 0u;
       if (expected && axis_fault) critical_axis_faults++;
       if (stale) critical_axis_stale++;
     }
