@@ -32,6 +32,12 @@ typedef enum {
 } stc_state_t;
 
 typedef enum {
+  STC_FAIL_CAUSE_NONE = 0,
+  STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS,
+  STC_FAIL_CAUSE_RUNTIME_CRITICAL_FAULT
+} stc_fail_cause_t;
+
+typedef enum {
   EVT_PBIT_OK = 0,
   EVT_PBIT_FAIL,
   EVT_IBIT_COMPLETE_OK,
