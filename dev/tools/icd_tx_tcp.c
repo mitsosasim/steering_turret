@@ -165,7 +165,17 @@ static void print_hw_info_pretty(const char* payload) {
 
   printf("\nMappings:\n");
   printf("  Turret: %s\n", turret[0] ? turret : "disabled");
-  printf("  Mirror 1: %s\n", mirror[0] ? mirror : "none");
+  if (mirror[0]) {
+    int mirror_id = -1;
+    int axis = -1;
+    if (sscanf(mirror, "%d:%d", &mirror_id, &axis) == 2) {
+      printf("  Mirror %d: Axis %d\n", mirror_id, axis);
+    } else {
+      printf("  Mirror: %s\n", mirror);
+    }
+  } else {
+    printf("  Mirror: none\n");
+  }
   printf("  SUT: %s\n", sut[0] ? sut : "none");
 }
 
