@@ -289,9 +289,7 @@ class DiagnosticsWindow : public QMainWindow {
     simTimer_->setInterval(20);
     connect(simTimer_, &QTimer::timeout, this, &DiagnosticsWindow::tickSimulation);
 
-    applyingCommandAvailability_ = true;
     onCommandSelectionChanged(commandBox_->currentIndex());
-    applyingCommandAvailability_ = false;
     appendLog("Diagnostics GUI initialized.");
     runCapabilityStartupCheck();
   }
@@ -299,13 +297,11 @@ class DiagnosticsWindow : public QMainWindow {
  private:
   void onCommandSelectionChanged(int index) {
     payloadStack_->setCurrentIndex(index);
-    updateCommandAvailability();
   }
 
   void onCommandUserActivated(int) {
     if (!commandBox_) return;
-    selectedCommandUi_ = static_cast<UiCommand>(commandBox_->currentData().toInt());
-    userSelectedCommand_ = true;
+    updateCommandAvailability();
   }
 
   UiCommand currentUiCommand() const {
@@ -1341,18 +1337,9 @@ class DiagnosticsWindow : public QMainWindow {
 
   void updateCommandAvailability() {
     if (!commandBox_ || !sendButton_) return;
-    QSignalBlocker block(commandBox_);
-    applyingCommandAvailability_ = true;
-    const UiCommand desiredCommand = userSelectedCommand_ ? selectedCommandUi_
-                                                          : static_cast<UiCommand>(commandBox_->currentData().toInt());
-    const int desiredIdx = commandBox_->findData(static_cast<int>(desiredCommand));
-    if (desiredIdx >= 0 && commandBox_->currentIndex() != desiredIdx) {
-      commandBox_->setCurrentIndex(desiredIdx);
-    }
 
     const int idx = commandBox_->currentIndex();
     if (idx < 0) {
-      applyingCommandAvailability_ = false;
       return;
     }
     const UiCommand c = currentUiCommand();
@@ -1373,7 +1360,6 @@ class DiagnosticsWindow : public QMainWindow {
       sendButton_->setToolTip("");
     }
     sendButton_->setEnabled(allowed);
-    applyingCommandAvailability_ = false;
   }
 
   void setUiCommandEnabled(UiCommand cmd, bool enabled) {
@@ -1792,9 +1778,6 @@ class DiagnosticsWindow : public QMainWindow {
   int preferredSutId_{0xFF};
   int lastConnectedDevices_{0};
   int lastDiscoveredDevices_{0};
-  bool userSelectedCommand_{false};
-  bool applyingCommandAvailability_{false};
-  UiCommand selectedCommandUi_{UiCommand::CuState};
   bool mirrorSelectionValid_{true};
   bool sutSelectionValid_{true};
   std::vector<int> configuredTurretAxes_{};
