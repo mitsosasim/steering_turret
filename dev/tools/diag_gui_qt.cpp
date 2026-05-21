@@ -626,6 +626,24 @@ class DiagnosticsWindow : public QMainWindow {
       } else if (key == "mirror_ids") {
         const auto parsed = parseIdList(value, 1, 255);
         if (!parsed.empty()) configuredMirrorIds_ = parsed;
+      } else if (key == "mirror_axes") {
+        QSet<int> mirrorIds;
+        for (const QString &entry : value.split(',', Qt::SkipEmptyParts)) {
+          const QStringList pair = entry.split(':');
+          if (pair.size() != 2) continue;
+          bool idOk = false;
+          bool axisOk = false;
+          const int mirrorId = pair[0].trimmed().toInt(&idOk);
+          const int axis = pair[1].trimmed().toInt(&axisOk);
+          if (!idOk || !axisOk || mirrorId <= 0 || mirrorId > 255 || axis < 0 || axis >= kAxisCount) continue;
+          mirrorIds.insert(mirrorId);
+        }
+        if (!mirrorIds.isEmpty()) {
+          configuredMirrorIds_.clear();
+          configuredMirrorIds_.reserve(mirrorIds.size());
+          for (const int id : mirrorIds) configuredMirrorIds_.push_back(id);
+          std::sort(configuredMirrorIds_.begin(), configuredMirrorIds_.end());
+        }
       } else if (key == "mirror_count") {
         bool ok = false;
         const int count = value.toInt(&ok);
@@ -681,6 +699,7 @@ class DiagnosticsWindow : public QMainWindow {
     // Backward-compatible fallback parser for legacy free-text HW info payloads.
     const QRegularExpression turretRx("turret_axes\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
     const QRegularExpression mirrorRx("mirror_ids\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression mirrorAxesRx("mirror_axes\\s*=\\s*([0-9,;: ]+)", QRegularExpression::CaseInsensitiveOption);
     const QRegularExpression mirrorCountRx("mirror_count\\s*=\\s*(\\d+)", QRegularExpression::CaseInsensitiveOption);
 
     const auto turretMatch = turretRx.match(hwInfo);
@@ -694,6 +713,26 @@ class DiagnosticsWindow : public QMainWindow {
       const auto parsed = parseIdList(mirrorMatch.captured(1), 1, 255);
       if (!parsed.empty()) configuredMirrorIds_ = parsed;
     } else {
+      const auto mirrorAxesMatch = mirrorAxesRx.match(hwInfo);
+      if (mirrorAxesMatch.hasMatch()) {
+        QSet<int> mirrorIds;
+        for (const QString &entry : mirrorAxesMatch.captured(1).split(',', Qt::SkipEmptyParts)) {
+          const QStringList pair = entry.split(':');
+          if (pair.size() != 2) continue;
+          bool idOk = false;
+          bool axisOk = false;
+          const int mirrorId = pair[0].trimmed().toInt(&idOk);
+          const int axis = pair[1].trimmed().toInt(&axisOk);
+          if (!idOk || !axisOk || mirrorId <= 0 || mirrorId > 255 || axis < 0 || axis >= kAxisCount) continue;
+          mirrorIds.insert(mirrorId);
+        }
+        if (!mirrorIds.isEmpty()) {
+          configuredMirrorIds_.clear();
+          configuredMirrorIds_.reserve(mirrorIds.size());
+          for (const int id : mirrorIds) configuredMirrorIds_.push_back(id);
+          std::sort(configuredMirrorIds_.begin(), configuredMirrorIds_.end());
+        }
+      }
       const auto countMatch = mirrorCountRx.match(hwInfo);
       if (countMatch.hasMatch()) {
         bool ok = false;

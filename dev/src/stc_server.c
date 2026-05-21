@@ -122,6 +122,17 @@ static uint64_t abs_diff_u64(uint64_t a, uint64_t b) {
   return (a >= b) ? (a - b) : (b - a);
 }
 
+static int startup_accept_ready_locked(const shared_t* sh) {
+  if (!sh) return 0;
+  const stc_state_t state = sh->d.st_state;
+  if (state == STC_STATE_SAFE || state == STC_STATE_OPER) return 1;
+  if (state == STC_STATE_FAIL &&
+      sh->d.fail_cause != STC_FAIL_CAUSE_STARTUP_PBIT_NO_MOTORS) {
+    return 1;
+  }
+  return 0;
+}
+
 static int append_hw_infof(char* dst, size_t cap, size_t* off, size_t* required, const char* fmt, ...) {
   if (!dst || !off || !required || !fmt) return -1;
   va_list ap;
@@ -3078,6 +3089,31 @@ int main(int argc, char** argv) {
   pthread_mutex_unlock(&sh.mtx);
   if (sh.d.st_state == STC_STATE_FAIL) {
     STC_LOG_WARN("startup failed; continuing in FAIL to allow recovery path");
+  }
+
+  /* Do not start TCP command accept until startup reaches a stable terminal
+   * state (SAFE/recovered, or non-recoverable FAIL). This prevents transient
+   * REQ_HW_INFO responses from exposing stale startup PBIT FAIL.
+   */
+  {
+    const uint64_t startup_gate_deadline_ms = mono_ms() + (uint64_t)BACKEND_STARTUP_WAIT_TIMEOUT_MS;
+    for (;;) {
+      pthread_mutex_lock(&sh.mtx);
+      const int ready = startup_accept_ready_locked(&sh);
+      const stc_state_t state = sh.d.st_state;
+      const stc_fail_cause_t fail_cause = sh.d.fail_cause;
+      pthread_mutex_unlock(&sh.mtx);
+      if (ready || atomic_load(&g_stop)) break;
+
+      if (mono_ms() >= startup_gate_deadline_ms) {
+        STC_LOG_WARN("startup accept gate timeout after %d ms (state=%s fail_cause=%d); opening TCP listener",
+                     BACKEND_STARTUP_WAIT_TIMEOUT_MS,
+                     stc_state_name(state),
+                     (int)fail_cause);
+        break;
+      }
+      usleep(50 * 1000);
+    }
   }
 
   // UDP telemetry threads
