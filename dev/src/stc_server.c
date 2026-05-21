@@ -267,6 +267,7 @@ typedef struct shared_data {
   uint32_t can_timeout_ms;
   uint32_t startup_feedback_grace_ms;
   int strict_stale_policy;
+  int allow_degraded_startup;
 
   // --- software state / navigation
   stc_state_t st_state;
@@ -372,6 +373,7 @@ typedef struct {
   int backend_startup_ok;
   int backend_expected_motors;
   int backend_connected_motors;
+  int backend_inventory_valid;
 } shared_t;
 
 #define BACKEND_STARTUP_WAIT_TIMEOUT_MS 10000
@@ -1207,6 +1209,7 @@ static void* can_worker_thread(void* arg) {
     a->sh->backend_startup_ok = 0;
     a->sh->backend_expected_motors = 0;
     a->sh->backend_connected_motors = 0;
+    a->sh->backend_inventory_valid = 0;
     pthread_cond_broadcast(&a->sh->startup_cv);
     pthread_mutex_unlock(&a->sh->mtx);
     return NULL;
@@ -1217,20 +1220,24 @@ static void* can_worker_thread(void* arg) {
   motion_snapshot_t startup_snap;
   int startup_expected_motors = 0;
   int startup_connected_motors = 0;
+  int startup_inventory_valid = 0;
   if (motion_backend_get_snapshot(backend, &startup_snap) == 0) {
+    startup_inventory_valid = 1;
     for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
       if (!backend_cfg.axis_enabled[axis]) continue;
       startup_expected_motors++;
       if (startup_snap.axis_available[axis]) startup_connected_motors++;
     }
   }
-  const int startup_ok = (startup_expected_motors > 0) &&
-                         (startup_connected_motors == startup_expected_motors);
+  const int startup_ok = startup_inventory_valid &&
+                         (startup_expected_motors > 0) &&
+                         (startup_connected_motors >= startup_expected_motors);
   pthread_mutex_lock(&a->sh->mtx);
   a->sh->backend_startup_done = 1;
   a->sh->backend_startup_ok = startup_ok;
   a->sh->backend_expected_motors = startup_expected_motors;
   a->sh->backend_connected_motors = startup_connected_motors;
+  a->sh->backend_inventory_valid = startup_inventory_valid;
   pthread_cond_broadcast(&a->sh->startup_cv);
   pthread_mutex_unlock(&a->sh->mtx);
 
@@ -1375,7 +1382,10 @@ static void* can_worker_thread(void* arg) {
        */
       axis_fault = a->sh->d.axis_fault_active[axis] ? 1 : 0;
       if (!in_startup_grace && can_timeout_ms > 0) {
-        const int timed_out = elapsed_ms_nonnegative(now, a->sh->d.last_rx_ms[axis]) > can_timeout_ms;
+        const uint64_t last_rx_ms = a->sh->d.last_rx_ms[axis];
+        const int have_first_sample = (last_rx_ms > 0);
+        const int timed_out = have_first_sample &&
+                              (elapsed_ms_nonnegative(now, last_rx_ms) > can_timeout_ms);
         stale = strict_stale_policy ? (expected && timed_out) : (expected && connected && timed_out);
       }
       if (expected && axis_fault) critical_axis_faults++;
@@ -2247,6 +2257,8 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
 
   const int expected_motors = sh->backend_expected_motors;
   const int connected_motors = sh->backend_connected_motors;
+  const int inventory_valid = sh->backend_inventory_valid ? 1 : 0;
+  const int allow_degraded_startup = sh->d.allow_degraded_startup ? 1 : 0;
 
   int network_ok = 1;
   struct in_addr parsed_addr;
@@ -2257,9 +2269,12 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
   if (parse_ipv4_addr(net->tlmh_ip, &parsed_addr) != 0) network_ok = 0;
   if (parse_ipv4_addr(net->tlml_ip, &parsed_addr) != 0) network_ok = 0;
 
-  const int motors_ok = (expected_motors > 0) && (connected_motors == expected_motors);
+  const int motors_ok = (expected_motors > 0) && (connected_motors >= expected_motors);
+  const int motors_degraded = (expected_motors > 0) &&
+                              (connected_motors < expected_motors) &&
+                              allow_degraded_startup;
   STC_LOG_INFO("PBIT motor_check=%s expected_motors=%d connected_motors=%d",
-               motors_ok ? "OK" : "FAIL",
+               motors_ok ? "OK" : (motors_degraded ? "DEGRADED" : "FAIL"),
                expected_motors,
                connected_motors);
   STC_LOG_INFO("PBIT network_check=%s can_if=%s can_bitrate=%d tcp_port=%d tlmh=%s:%d tlml=%s:%d",
@@ -2272,8 +2287,18 @@ static stc_event_t run_startup_pbit(const shared_t* sh, const runtime_net_t* net
                net->tlml_ip ? net->tlml_ip : "<null>",
                net->tlml_port);
 
-  stc_diag_set_pbit_result(motors_ok && network_ok);
+  stc_diag_set_pbit_result(inventory_valid && network_ok && (motors_ok || motors_degraded));
   const int pass = run_pbit_startup() ? 1 : 0;
+  if (!inventory_valid) {
+    STC_LOG_ERROR("PBIT result: FAIL (backend inventory unavailable)");
+    return EVT_PBIT_FAIL;
+  }
+  if (motors_degraded && network_ok) {
+    STC_LOG_WARN("PBIT result: DEGRADED (SAFE) expected_motors=%d connected_motors=%d allow_degraded_startup=1",
+                 expected_motors,
+                 connected_motors);
+    return EVT_PBIT_OK;
+  }
   if (pass) {
     STC_LOG_INFO("PBIT result: PASS");
     return EVT_PBIT_OK;
@@ -2360,6 +2385,7 @@ static void apply_config_to_shared(shared_t* sh, const stc_config_t* cfg) {
   sh->d.position_timeout_ms = (cfg->position_timeout_ms > 0) ? cfg->position_timeout_ms : 5000;
   sh->d.position_poll_ms = (cfg->position_poll_ms > 0) ? cfg->position_poll_ms : 50;
   sh->d.strict_stale_policy = cfg->strict_stale_policy ? 1 : 0;
+  sh->d.allow_degraded_startup = cfg->allow_degraded_startup ? 1 : 0;
 }
 
 static int config_has_enabled_driver(const stc_config_t* cfg, stc_axis_driver_t driver) {
@@ -2581,6 +2607,7 @@ int main(int argc, char** argv) {
   sh.d.can_timeout_ms = 1000;
   sh.d.startup_feedback_grace_ms = 3000;
   sh.d.strict_stale_policy = 0;
+  sh.d.allow_degraded_startup = 0;
   sh.d.st_state = STC_STATE_INIT;
   sh.d.fail_cause = STC_FAIL_CAUSE_NONE;
   for (size_t axis = 0; axis < STC_AXIS_COUNT; axis++) {
@@ -2822,6 +2849,7 @@ int main(int argc, char** argv) {
     sh.d.can_timeout_ms = net.can_timeout_ms;
     sh.d.can_scan_max_node = (uint8_t)((net.can_scan_max_node > 0) ? net.can_scan_max_node : 0);
     sh.d.strict_stale_policy = parsed_cfg.strict_stale_policy ? 1 : 0;
+    sh.d.allow_degraded_startup = parsed_cfg.allow_degraded_startup ? 1 : 0;
 
     apply_config_to_shared(&sh, &parsed_cfg);
   } else {
@@ -2931,6 +2959,7 @@ int main(int argc, char** argv) {
     sh.backend_startup_ok = 0;
     sh.backend_expected_motors = 0;
     sh.backend_connected_motors = 0;
+    sh.backend_inventory_valid = 0;
   }
   stc_state_t next_state = STC_STATE_INIT;
   const stc_event_t pbit_evt = run_startup_pbit(&sh, &net);

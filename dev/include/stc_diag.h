@@ -24,6 +24,7 @@ typedef struct shared_data shared_data_t;
 /** Top-level health state exported to state-machine and telemetry paths. */
 typedef enum {
   STC_DIAG_HEALTH_OK = 0,
+  STC_DIAG_HEALTH_DEGRADED_SAFE,
   STC_DIAG_HEALTH_CRITICAL_FAULT
 } stc_diag_health_t;
 

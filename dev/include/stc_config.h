@@ -63,6 +63,7 @@ typedef struct stc_config_s {
   int can_timeout_ms;
   int startup_feedback_grace_ms;
   int strict_stale_policy;
+  int allow_degraded_startup;
   int speed_watchdog_ms;
   int speed_stream_period_ms;
   double position_tolerance_deg;
