@@ -9,7 +9,7 @@ This README is the authoritative operational guide for build, deployment, bench 
 - `CMakeLists.txt`: top-level build configuration.
 - `src/`: server and core runtime logic.
 - `include/`: public/internal headers used by project targets.
-- `dev/`: bench configs, scripts, and test assets (non-authoritative docs removed; this root README is canonical).
+- `dev/`: bench configs, scripts, and test assets.
 - `deploy/`: systemd unit files and deployment helpers.
 - `scripts/`: utility scripts (including virtual CAN setup helpers where available).
 - `build/`: out-of-source build artifacts (generated).
@@ -53,33 +53,30 @@ sudo pacman -S --needed \
 
 ## 5. Build commands
 ```bash
-# Clean hardware build with GUI
+# Hardware build with GUI
 rm -rf build
-
 cmake -S . -B build \
   -DUSE_SIMULATOR=OFF \
   -DBUILD_DIAG_GUI=ON \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
-
 cmake --build build -j"$(nproc)"
+
 # Hardware build without GUI
 rm -rf build
-
 cmake -S . -B build \
   -DUSE_SIMULATOR=OFF \
   -DBUILD_DIAG_GUI=OFF \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
-
 cmake --build build -j"$(nproc)"
+
 # Simulator build
 rm -rf build
-
 cmake -S . -B build \
   -DUSE_SIMULATOR=ON \
   -DBUILD_DIAG_GUI=ON \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
-
 cmake --build build -j"$(nproc)"
+
 # Warning check
 cmake --build build -j"$(nproc)" 2>&1 | tee /tmp/stc_build.log
 grep -i "warning:" /tmp/stc_build.log || echo "OK: no compiler warnings"
@@ -108,22 +105,28 @@ candump -tz -cae can0,141:7FF,241:7FF \
   | tee "logs/can/stc_x8_server_$(date +%F_%H%M%S).candump.log"
 ```
 
-
-
-## 8. Running the server
-Default run:
+## 7. Running the server
+Command prototype:
 
 ```bash
-./build/stc_server
+./build/stc_server [--config <path/to/config.ini>] [other-flags]
 ```
 
-Bench-specific run:
+Examples:
 
 ```bash
+# Default config
+./build/stc_server
+
+# Bench config override
 ./build/stc_server --config dev/config/stc_bench_x8_25.ini
 ```
 
-## 9. Running telemetry receivers
+Notes:
+- CLI flags override values loaded from config files.
+- `--config` only selects the base config source; explicit flags still take precedence.
+
+## 8. Running telemetry receivers
 ```bash
 ./build/tlm_rx_udp 6010 --verbose \
   2>&1 | tee "logs/server/tlmh_$(date +%F_%H%M%S).log"
@@ -131,33 +134,31 @@ Bench-specific run:
   2>&1 | tee "logs/server/tlml_$(date +%F_%H%M%S).log"
 ```
 
-## 10. Sending ICD commands
+## 9. Sending ICD commands
 ```bash
 ./build/icd_tx_tcp 127.0.0.1 7000 req_hw
 ./build/icd_tx_tcp 127.0.0.1 7000 req_sw_version
 ./build/icd_tx_tcp 127.0.0.1 7000 req_work_time
 
 ./build/icd_tx_tcp 127.0.0.1 7000 cu_state 2
-./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5 # shouldnt execute because we are not in OPER state
+./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5  # expected reject if not in OPER
 
 ./build/icd_tx_tcp 127.0.0.1 7000 cu_state 3
-./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5 
-./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel -5 
+./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5
+./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel -5
 ./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 speed 5
 sleep 1
 ./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 speed 0
 ./build/icd_tx_tcp 127.0.0.1 7000 cu_state 2
 ```
 
-## 11. Running the Qt diagnostic GUI
+## 10. Running the Qt diagnostic GUI
 Windows + VcXsrv:
-
 1. Start VcXsrv / XLaunch on Windows.
 2. Select Multiple windows.
 3. Select Start no client.
 4. Disable access control.
-5. SSH using trusted X11 forwarding:
-ssh -Y alma@stc-office
+5. SSH using trusted X11 forwarding: `ssh -Y alma@stc-office`.
 
 Test:
 
@@ -173,11 +174,45 @@ QT_DEBUG_PLUGINS=0 ./build/diag_gui_qt \
   2>&1 | tee "logs/gui/diag_gui_$(date +%F_%H%M%S).log"
 ```
 
+## 11. Running tests
+### 11.1 Build-integrated test run (ctest)
+Run after a successful `cmake --build build ...`:
 
-## 12. Running tests
+```bash
+ctest --test-dir build --output-on-failure
+```
 
+This runs the CTest suite registered in `CMakeLists.txt`, including server/logic tests and the hardware-tagged X8 CAN test (`x8_25_test_can_hw`, label `hardware`).
 
-Optional full qualification:
+### 11.2 Server/logic tests (safe default pipeline)
+Recommended non-hardware pipeline:
+
+```bash
+ctest --test-dir build --output-on-failure --exclude-label-regex '^hardware$'
+```
+
+Focused runs:
+
+```bash
+ctest --test-dir build -R 'test_actions|stc_state_test|stc_diag_test|test_diag_codes|test_diag_state_integration|test_icd_codec|test_axis_cfg_map|stc_config_test|test_log_concurrency|test_can_worker_concurrency|test_motion_backend_router|test_myact_socketcan_ids|test_x8_25_protocol' --output-on-failure
+```
+
+### 11.3 Low-level motor library tests
+#### X8 low-level bench tests
+- Source: `dev/tests/x8_25_test.c` (built as `./build/x8_25_test_can`).
+- CTest hardware entry:
+
+```bash
+ctest --test-dir build -R '^x8_25_test_can_hw$' --output-on-failure
+```
+
+- Direct run (explicit interface/node):
+
+```bash
+./build/x8_25_test_can can0 1
+```
+
+- Optional full qualification example:
 
 ```bash
 ./build/x8_25_test_can can0 1 \
@@ -208,12 +243,37 @@ Optional full qualification:
   --active-min-frame-ratio 0.70
 ```
 
+#### Nanotec PD4-C low-level tests
+- Source: `dev/tests/pd4c_test.c` (standalone/manual test program).
+- Compile and run manually:
 
+```bash
+cc -std=c11 -O2 -Idev/include dev/tests/pd4c_test.c dev/src/pd4c.c -lm -o /tmp/pd4c_test
+/tmp/pd4c_test can0 1
+```
 
+### 11.4 Test source files currently used for this process
+Server/logic + integration test sources under `dev/tests/`:
+- `test_actions.c`
+- `stc_state_test.c`
+- `stc_diag_test.c`
+- `test_diag_codes.c`
+- `test_diag_state_integration.c`
+- `test_icd_codec.c`
+- `test_myact_socketcan_ids.c`
+- `test_x8_25_protocol.c`
+- `test_axis_cfg_map.c`
+- `stc_config_test.c`
+- `test_log_concurrency.c`
+- `test_can_worker_concurrency.c`
+- `test_motion_backend_router.c`
+- `test_can_backend_can_ok.c` (targeted source-level backend check)
 
+Low-level motor tests:
+- `x8_25_test.c` (binary: `x8_25_test_can`)
+- `pd4c_test.c` (manual standalone)
 
-## Runtime backend vs axis motor driver
-
+## 12. Runtime backend vs axis motor driver
 The server has two layers:
 
 1. Runtime backend:
@@ -233,10 +293,7 @@ Warnings:
 - The CAN runtime opens only the axes explicitly enabled in the config.
 - CAN discovery is disabled by default and must be explicitly enabled.
 
-
-
-
-## 14. Real-time scheduling and capabilities
+## 13. Real-time scheduling and capabilities
 `stc_server` supports runtime RT settings such as FIFO/RR/OTHER policies and per-thread priorities.
 
 Example capability grant for deployed binary:
@@ -253,7 +310,7 @@ sudo setcap cap_net_admin+ep /opt/stc/bin/diag_gui_qt
 getcap /opt/stc/bin/diag_gui_qt
 ```
 
-## 15. Systemd deployment
+## 14. Systemd deployment
 ```bash
 sudo install -d /opt/stc/deploy
 sudo install -m 0755 deploy/stc_preflight.sh /opt/stc/deploy/stc_preflight.sh
@@ -263,44 +320,42 @@ sudo systemctl enable --now stc_server
 sudo systemctl status stc_server --no-pager
 ```
 
-## 16. Troubleshooting
+## 15. Troubleshooting
 - `diag_gui_qt` missing: rebuild with `-DBUILD_DIAG_GUI=ON` and ensure Qt6 packages are installed.
 - CAN link issues: re-run CAN setup commands and verify `ip -details -statistics link show can0`.
 - No telemetry seen: confirm server is running, UDP ports (6010/6020) are reachable, and receiver commands are bound as expected.
 - Command failures: verify TCP endpoint (`127.0.0.1:7000`) and CU mode transitions (`cu_state` commands).
 - Warning audit: run the warning check command block from Section 5 and inspect `/tmp/stc_build.log`.
 
-## 17. TLML/TLMH protocol summary
+## 16. TLML/TLMH protocol summary
 ### TLMH high-rate telemetry
-
-Default rate: 100 Hz  
-Default port: 6010  
-Canonical axis count: 18
+- Default rate: 100 Hz
+- Default port: 6010
+- Canonical axis count: 18
 
 Payload:
-- position[18] float
-- rates[18] float
-- acceleration[18] float
+- `position[18]` float
+- `rates[18]` float
+- `acceleration[18]` float
 
 ### TLML low-rate telemetry
-
-Default rate: 10 Hz  
-Default port: 6020  
-Base size before diagnostics: 100 bytes
+- Default rate: 10 Hz
+- Default port: 6020
+- Base size before diagnostics: 100 bytes
 
 Payload includes:
-- state
-- uptime
+- `state`
+- `uptime`
 - environment fields
 - WGS84/manual position fields
-- heading
-- motor_status[18]
-- laser_status[8]
-- level_x / level_y
-- error_count
+- `heading`
+- `motor_status[18]`
+- `laser_status[8]`
+- `level_x` / `level_y`
+- `error_count`
 - diagnostics array
 
-motor_status[18] follows the canonical motor axis order:
+`motor_status[18]` follows the canonical motor axis order:
 0 ST az
 1 ST el
 2 SUT1 az
@@ -309,7 +364,7 @@ motor_status[18] follows the canonical motor axis order:
 16 SUT8 az
 17 SUT8 el
 
-laser_status[8] follows:
+`laser_status[8]` follows:
 0 SUT1 laser
 ...
 7 SUT8 laser
