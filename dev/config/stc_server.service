@@ -2,7 +2,15 @@
 #
 # Property of ALMA SISTEMI SRL.
 # This file is part of the STC development codebase.
-# Documentation/comment ownership header only; no runtime behavior changes.
+#
+# File purpose:
+#   systemd unit for deploying stc_server from /opt/stc.
+#
+# Design notes:
+#   Encodes real-time scheduling expectations via CAP_SYS_NICE and RT priority limits.
+#   Assumes /opt/stc layout and explicit config path for deterministic startup behavior.
+#   Restart policy is tuned for unattended service recovery after runtime faults.
+#   Keep systemd directive syntax intact; comments-only edits must not alter semantics.
 
 [Unit]
 # systemd unit for persistent STC runtime startup after network is online.
