@@ -29,6 +29,7 @@ namespace {
 constexpr size_t kAxisCount = STC_AXIS_COUNT;
 constexpr uint16_t kStatusOperationEnabled = 0x1237u;
 
+/* Per-axis simulator ownership: plant model, static config, and protocol-facing mode/timestamp state. */
 struct SimAxis {
   MotorModel model{};
   axis_cfg_t cfg{};
@@ -36,6 +37,7 @@ struct SimAxis {
   uint64_t last_rx_ms{0};
 };
 
+/* Global simulator state and lock shared by the C API; mutex serializes all axis reads/writes. */
 struct SimState {
   std::array<SimAxis, kAxisCount> axes{};
   bool initialized{false};

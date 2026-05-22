@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   legacy turret simulator behavior and telemetry generation.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   combines state logic and motor models to emulate ST-side motion responses.
+ *   Owns integrator-thread lifecycle and telemetry snapshot composition for stub runtime.
+ *   Assumes functional protocol timing fidelity rather than hardware-real-time fidelity.
  */
 
 // TurretSimulator.cpp - kinematic simulation and telemetry builder.

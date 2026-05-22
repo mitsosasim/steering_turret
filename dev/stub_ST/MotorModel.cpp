@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   simple motor dynamics model used by simulator paths.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   favors deterministic bench behavior over a detailed hardware model.
+ *   Integrates axis kinematics in degrees/deg/s/deg/s^2 from monotonic clock deltas.
+ *   Applies acceleration, velocity, and position limits as simulator safety gates.
  */
 
 // MotorModel.cpp - simple kinematic motor simulator.

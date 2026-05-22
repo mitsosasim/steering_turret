@@ -46,10 +46,12 @@ public:
     /** @brief Construct state machine in default startup state. */
     CUStateMachine();
 
+    /** @brief Thread-safe read of current CU state for protocol responders. */
     State state() const;
     OperationalMode operationalMode() const;
     std::string stateName() const;
 
+    /** @brief Transition API family used by legacy command handlers to request state changes. */
     void powerOn();
     void powerOff();
     void reportPbit(bool ok);

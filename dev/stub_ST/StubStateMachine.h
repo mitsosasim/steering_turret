@@ -23,6 +23,7 @@
 class StubStateMachine {
 public:
     /** @brief ST-visible states encoded into telemetry and command gating logic. */
+    /* Main legacy stub state enum owned by command gating and telemetry status reporting. */
     enum class State : uint8_t {
         Init = 0,
         InitDone = 1,
@@ -44,6 +45,7 @@ public:
         return toString(state_);
     }
 
+    // Transition ownership stays inside this class; callers request changes through guarded helpers.
     void setState(State s) {
         std::lock_guard<std::mutex> lock(mutex_);
         state_ = s;

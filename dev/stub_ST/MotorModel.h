@@ -23,6 +23,7 @@
 class MotorModel {
 public:
     /** @brief Instantaneous motor kinematic state in axis units (degrees, deg/s, deg/s^2). */
+    /* Snapshot values are axis-space kinematics consumed by simulator telemetry builders. */
     struct State {
         double position{0.0};
         double velocity{0.0};
@@ -30,6 +31,7 @@ public:
     };
 
     /** @brief Axis limits enforced during commanding and integration. */
+    /* Limits are safety envelopes applied on every command and integration step. */
     struct Limits {
         double maxVelocity{45.0};     // unit per second
         double maxAcceleration{90.0}; // unit per second^2
