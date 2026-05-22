@@ -16,8 +16,11 @@
 #include <string.h>
 
 typedef struct { myact_can_frame_t tx; myact_can_frame_t rx[8]; int rx_n; int rx_i; uint64_t now; } bus_t;
+/* TX callback captures last emitted frame so encode-level expectations can be asserted deterministically. */
 static int send_cb(const myact_can_frame_t* f, void* u){bus_t*b=u; b->tx=*f; return MYACT_OK;}
+/* RX callback replays scripted frames; timeout behavior models missing-device protocol failures. */
 static int recv_cb(myact_can_frame_t* f,uint32_t t,void* u){(void)t; bus_t*b=u; if(b->rx_i>=b->rx_n)return MYACT_ETIMEDOUT; *f=b->rx[b->rx_i++]; return MYACT_OK;}
+/* Monotonic synthetic time source avoids wall-clock dependency in protocol retry paths. */
 static uint64_t time_cb(void* u){bus_t*b=u; return ++b->now;}
 
 static int check_expr(int expr, const char* msg){

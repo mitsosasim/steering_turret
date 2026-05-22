@@ -23,11 +23,13 @@
 #define TEST_ASSERT_OR_ABORT(cond) assert(cond)
 #endif
 
+/* Confirms fixed request/reply CAN-ID formulas required by MYACT transport ABI. */
 static void check_ids(uint8_t node, uint32_t req, uint32_t rep) {
   TEST_ASSERT_OR_ABORT((uint32_t)(0x140u + (uint32_t)node) == req);
   TEST_ASSERT_OR_ABORT((uint32_t)(0x240u + (uint32_t)node) == rep);
 }
 
+/* Regression set covers low/mid/high node IDs used in bench deployments. */
 int main(void) {
   check_ids(1u, 0x141u, 0x241u);
   check_ids(8u, 0x148u, 0x248u);

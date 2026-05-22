@@ -92,6 +92,7 @@ static void test_runtime_backend_and_driver_selection(void) {
   require_true(select_runtime_backend(&cfg, &runtime_backend) != 0, "pd4c backend string rejected");
 }
 
+/* Producer thread models command ingress pressure from control transport into the shared action queue. */
 static void* action_producer_thread(void* arg) {
   stress_ctx_t* ctx = (stress_ctx_t*)arg;
   for (int i = 0; i < 20000; i++) {
@@ -123,6 +124,7 @@ static void* action_producer_thread(void* arg) {
   return NULL;
 }
 
+/* Telemetry thread simulates asynchronous sensor updates racing with command execution and worker snapshots. */
 static void* telemetry_updater_thread(void* arg) {
   shared_t* sh = (shared_t*)arg;
   for (int i = 0; i < 30000; i++) {
@@ -141,6 +143,7 @@ static void* telemetry_updater_thread(void* arg) {
   return NULL;
 }
 
+/* Main orchestrates concurrent producers/worker and asserts no deadlock, dropped wakeups, or unsafe state drift. */
 int main(void) {
   test_runtime_backend_and_driver_selection();
   shared_t sh;

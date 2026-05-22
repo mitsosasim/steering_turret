@@ -24,12 +24,14 @@
 #define TEST_ASSERT_OR_ABORT(cond) assert(cond)
 #endif
 
+/* Applies one state event atomically and aborts on invalid transition to keep integration trace deterministic. */
 static stc_state_t apply(stc_state_t current, stc_event_t evt) {
   stc_state_t next = STC_STATE_INIT;
   TEST_ASSERT_OR_ABORT(stc_state_transition(current, evt, &next) == 0);
   return next;
 }
 
+/* Exercises PBIT/CBIT/IBIT health outcomes through state machine to protect FAIL and recovery gating contracts. */
 int main(void) {
   stc_state_t state = STC_STATE_INIT;
 

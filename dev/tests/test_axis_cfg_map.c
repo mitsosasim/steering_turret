@@ -16,6 +16,7 @@
 #include <assert.h>
 #include <string.h>
 
+/* Verifies one-to-one config->runtime mapping so enabled axis ownership and limits remain unchanged across parser/runtime refactors. */
 int main(void) {
   stc_config_t cfg;
   memset(&cfg, 0, sizeof(cfg));

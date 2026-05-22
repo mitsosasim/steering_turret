@@ -31,6 +31,7 @@ static void mock_reset(void) {
   memset(&g_mock, 0, sizeof(g_mock));
 }
 
+/* Mock open: records discovery attempts per node without touching real CAN interfaces. */
 int pd4c_open(pd4c_ctx_t* ctx, const char* ifname, uint8_t node_id) {
   (void)ifname;
   if (!ctx || node_id == 0 || node_id >= 128) return PD4C_EINVAL;
@@ -55,6 +56,7 @@ void pd4c_set_sdo_timeout(pd4c_ctx_t* ctx, int timeout_ms) {
   ctx->sdo_timeout_ms = timeout_ms;
 }
 
+/* Mock identity reads: responsive nodes emulate 0x1018 identity, non-responsive nodes time out. */
 int pd4c_sdo_read_u32(pd4c_ctx_t* ctx, uint16_t idx, uint8_t sub, uint32_t* out) {
   if (!ctx || !out) return PD4C_EINVAL;
   if (idx == 0x1018u && sub >= 0x01u && sub <= 0x04u) {
@@ -180,6 +182,7 @@ static void test_can_ok_all_expected_devices_connected(void) {
   motion_backend_stop(backend);
 }
 
+/* can_ok means at least one configured node is discoverable and identity/status reads complete within timeout. */
 int main(void) {
   test_can_ok_no_devices_connected();
   test_can_ok_partial_devices_connected();

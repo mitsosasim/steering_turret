@@ -1,3 +1,18 @@
+/*
+ * ALMA SISTEMI SRL - Steering Turret Control (STC)
+ *
+ * Property of ALMA SISTEMI SRL.
+ * This source file is part of the STC development codebase.
+ *
+ * File purpose:
+ *   Regression checks for diagnostic GUI command gating and packet-shape equivalence.
+ *
+ * Design notes:
+ *   Protects GUI-side helper behavior without requiring a live STC server.
+ *   Mirrors CLI packing assumptions so GUI regressions are caught at wire-shape level.
+ *   Host-side only: no CAN hardware or network transport is required.
+ */
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -7,6 +22,7 @@ extern "C" {
 #include "stc_icd.h"
 }
 
+/* Mirrors GUI safety gate: motion commands require OPER, mapping loaded, and hardware topology unless sim mode is active. */
 static bool command_allowed(bool is_oper, bool sim_mode, bool hw_topology_loaded, bool mapping_enabled, uint16_t cmd_id) {
   bool allowed = true;
   if (cmd_id == STC_CMD_TURRET || cmd_id == STC_CMD_MIRROR || cmd_id == STC_CMD_SUT) {
@@ -17,11 +33,13 @@ static bool command_allowed(bool is_oper, bool sim_mode, bool hw_topology_loaded
   return allowed;
 }
 
+/* Keeps remembered mirror selection stable across refreshes, but falls back deterministically when topology changes. */
 static uint8_t normalize_mirror_id(uint8_t remembered, const std::vector<uint8_t>& available) {
   for (uint8_t v : available) if (v == remembered) return remembered;
   return available.empty() ? 0xFFu : available.front();
 }
 
+/* Uses the same ICD defaults as CLI tooling so packet-byte equivalence assertions remain meaningful. */
 static std::vector<uint8_t> pack_cmd(const stc_icd_cmd_t& c) {
   uint8_t buf[(STC_ICD_MAX_PAYLOAD + 32)];
   size_t n = 0;

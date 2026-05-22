@@ -43,6 +43,7 @@ static void check_pthread(int rc, const char* what) {
   }
 }
 
+/* Hot path logger producer thread: stresses concurrent log writes from runtime-like worker contexts. */
 static void* logger_thread(void* arg) {
   intptr_t tid = (intptr_t)arg;
   while (atomic_load_explicit(&g_start_flag, memory_order_acquire) == 0) {
@@ -59,6 +60,7 @@ static void* logger_thread(void* arg) {
   return NULL;
 }
 
+/* Concurrent reconfiguration thread: toggles level/open/close to validate logger internal locking and lifetime safety. */
 static void* reconfig_thread(void* arg) {
   (void)arg;
   const char* path = "test_log_concurrency.log";
@@ -84,6 +86,7 @@ static void* reconfig_thread(void* arg) {
   return NULL;
 }
 
+/* Coordinates thread start barrier and completion checks; timing-sensitive but host-side only. */
 int main(void) {
   const char* path = "test_log_concurrency.log";
   remove(path);
