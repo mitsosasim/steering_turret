@@ -92,15 +92,6 @@ sudo ip link set can0 up type can bitrate 1000000 restart-ms 100
 ip -details -statistics link show can0
 ```
 
-For the current one-X8 bench:
-
-```bash
-cansend can0 141#8100000000000000 || true
-sleep 0.05
-cansend can0 141#8000000000000000 || true
-sleep 0.50
-```
-
 Virtual CAN:
 
 ```bash
@@ -110,30 +101,14 @@ sudo ip link set vcan0 up
 ip -details link show vcan0
 ```
 
-## 7. One-X8-25 bench configuration
-Use the bench config:
-- `dev/config/stc_bench_x8_25.ini`
-
-Recommended bring-up/reset flow:
+CAN capture:
 
 ```bash
-cd ~/STC
-
-pkill -f stc_server || true
-pkill -f diag_gui_qt || true
-pkill -f candump || true
-pkill -f tlm_rx_udp || true
-
-sudo ip link set can0 down || true
-sudo ip link set can0 up type can bitrate 1000000 restart-ms 100
-
-cansend can0 141#8100000000000000 || true
-sleep 0.05
-cansend can0 141#8000000000000000 || true
-sleep 0.50
-
-./build/stc_server --config dev/config/stc_bench_x8_25.ini
+candump -tz -cae can0,141:7FF,241:7FF \
+  | tee "logs/can/stc_x8_server_$(date +%F_%H%M%S).candump.log"
 ```
+
+
 
 ## 8. Running the server
 Default run:
@@ -163,11 +138,11 @@ Bench-specific run:
 ./build/icd_tx_tcp 127.0.0.1 7000 req_work_time
 
 ./build/icd_tx_tcp 127.0.0.1 7000 cu_state 2
-./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5 50
+./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5 # shouldnt execute because we are not in OPER state
 
 ./build/icd_tx_tcp 127.0.0.1 7000 cu_state 3
-./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5 50
-./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel -5 50
+./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel 5 
+./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 rel -5 
 ./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 speed 5
 sleep 1
 ./build/icd_tx_tcp 127.0.0.1 7000 mirror 1 speed 0
@@ -198,22 +173,9 @@ QT_DEBUG_PLUGINS=0 ./build/diag_gui_qt \
   2>&1 | tee "logs/gui/diag_gui_$(date +%F_%H%M%S).log"
 ```
 
-Offscreen smoke only:
-
-```bash
-QT_QPA_PLATFORM=offscreen ./build/diag_gui_qt
-```
 
 ## 12. Running tests
-Standalone X8 test commands:
 
-```bash
-./build/x8_25_test_can can0 1
-./build/x8_25_test_can can0 1 \
-  --server-equivalent-pack \
-  --brake-release-timeout-ms 3000 \
-  --brake-poll-ms 50
-```
 
 Optional full qualification:
 
@@ -246,18 +208,9 @@ Optional full qualification:
   --active-min-frame-ratio 0.70
 ```
 
-## 13. Logging and artifact collection
-CAN capture:
 
-```bash
-candump -tz -cae can0,141:7FF,241:7FF \
-  | tee "logs/can/stc_x8_server_$(date +%F_%H%M%S).candump.log"
-```
 
-Telemetry logs:
 
-```bash
-./build/tlm_rx_udp 6010 --verbose \
 
 ## Runtime backend vs axis motor driver
 
@@ -280,40 +233,8 @@ Warnings:
 - The CAN runtime opens only the axes explicitly enabled in the config.
 - CAN discovery is disabled by default and must be explicitly enabled.
 
-Expected one-X8 startup log:
 
-```text
-runtime_backend=hardware_can
-configured_axes=1 disabled_axes=17
-axis0 driver=myact_x8_25 protocol=myactuator node=1 role=mirror1
-```
 
-Mixed example:
-
-```ini
-[Axis0]
-enabled=true
-driver=pd4c
-node_id=1
-role=turret_az
-
-[Axis1]
-enabled=true
-driver=myact_x8_25
-node_id=2
-role=mirror1
-```
-  2>&1 | tee "logs/server/tlmh_$(date +%F_%H%M%S).log"
-./build/tlm_rx_udp 6020 --verbose \
-  2>&1 | tee "logs/server/tlml_$(date +%F_%H%M%S).log"
-```
-
-GUI logs:
-
-```bash
-QT_DEBUG_PLUGINS=0 ./build/diag_gui_qt \
-  2>&1 | tee "logs/gui/diag_gui_$(date +%F_%H%M%S).log"
-```
 
 ## 14. Real-time scheduling and capabilities
 `stc_server` supports runtime RT settings such as FIFO/RR/OTHER policies and per-thread priorities.
