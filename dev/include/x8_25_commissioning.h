@@ -70,8 +70,10 @@ typedef enum {
 
 int myact_pid_read(myact_ctx_t* ctx, myact_pid_index_t index, float* out_value);
 int myact_pid_write_ram(myact_ctx_t* ctx, myact_pid_index_t index, float value);
+/* Persistent write: stores PID to non-volatile memory; run only in controlled commissioning windows. */
 int myact_pid_write_rom(myact_ctx_t* ctx, myact_pid_index_t index, float value);
 int myact_accel_read(myact_ctx_t* ctx, myact_accel_index_t index, int32_t* out_accel_dps2);
+/* Persistent write: updates startup acceleration defaults and survives reboot/power-cycle. */
 int myact_accel_write_rom(myact_ctx_t* ctx, myact_accel_index_t index, uint32_t accel_dps2);
 int myact_read_encoder_raw(myact_ctx_t* ctx, int32_t* out_raw);
 int myact_read_encoder_offset(myact_ctx_t* ctx, int32_t* out_offset);
