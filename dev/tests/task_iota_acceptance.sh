@@ -21,6 +21,7 @@ require_bin(){
   fi
 }
 
+# Phase 1: verify speed-mode command path and explicit zero-speed stop behavior.
 native_speed_move(){
   log "native speed move"
   run cu_state 3
@@ -29,6 +30,7 @@ native_speed_move(){
   run turret speed 0.0 0.0
 }
 
+# Phase 2: verify deterministic absolute-position command path and return-to-origin behavior.
 position_move(){
   log "position move deterministic path"
   run turret abs 8.0 0.0
@@ -36,6 +38,7 @@ position_move(){
   run turret abs 0.0 0.0
 }
 
+# Phase 3: verify quick-stop safety gate by dropping to SAFE during active speed command.
 quick_stop(){
   log "quick-stop"
   run turret speed 20.0 0.0
@@ -44,6 +47,7 @@ quick_stop(){
   run turret speed 0.0 0.0
 }
 
+# Phase 4: verify SAFE->OPER hold/release interoperability with controller state command.
 hold_release(){
   log "hold/release"
   run cu_state 2
@@ -51,12 +55,14 @@ hold_release(){
   run cu_state 3
 }
 
+# Phase 5: verify stream enable path; observable is live telemetry on UDP listener when attached.
 active_telemetry(){
   log "active telemetry (enable stream + optional listener)"
   run cu_state 3
   echo "INFO: run ./build/tlm_rx_udp in parallel to confirm live telemetry updates"
 }
 
+# Phase 6: verify representative request/response roundtrip commands through full STC server path.
 server_roundtrip(){
   log "server roundtrip through STC command path"
   run req_sw

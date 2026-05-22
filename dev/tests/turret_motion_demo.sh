@@ -34,6 +34,7 @@ send() {
   "$TX" "$HOST" "$PORT" "$@"
 }
 
+# Safety phase: always quiesce motion and return home, including interrupt path cleanup.
 safe_stop_and_home() {
   log "Safety stop + home"
   set +e
@@ -51,11 +52,14 @@ on_interrupt() {
 }
 trap on_interrupt INT TERM
 
+# Phase 0: bring runtime to OPER before sending motion commands.
 log "Starting turret motion demo host=$HOST port=$PORT"
 
+# Enter OPER state; expected observable is command acceptance for turret commands.
 send cu_state 3
 sleep 1
 
+# Phase 1: normalize initial pose to home so subsequent dwell timings are reproducible.
 log "Normalize start position to HOME=$HOME_DEG"
 send turret abs "$HOME_DEG" 0
 sleep "$HOME_SETTLE_S"
@@ -63,6 +67,7 @@ sleep "$HOME_SETTLE_S"
 log "Hold center for ${HOLD_CENTER_S}s"
 sleep "$HOLD_CENTER_S"
 
+# Phase 2: bounded sweep to minimum; expected stop at limit hold interval without faulting.
 log "Move to MIN=$MIN_DEG at ${MAX_LOAD_SPEED} deg/s"
 send turret speed -"$MAX_LOAD_SPEED" 0
 sleep "$MOVE_140_S"
@@ -70,6 +75,7 @@ send turret speed 0 0
 log "Hold at MIN for ${HOLD_LIMIT_S}s"
 sleep "$HOLD_LIMIT_S"
 
+# Phase 3: bounded sweep to maximum; validates opposite-direction command path symmetry.
 log "Move to MAX=$MAX_DEG at ${MAX_LOAD_SPEED} deg/s"
 send turret speed "$MAX_LOAD_SPEED" 0
 sleep "$MOVE_280_S"
@@ -77,6 +83,7 @@ send turret speed 0 0
 log "Hold at MAX for ${HOLD_LIMIT_S}s"
 sleep "$HOLD_LIMIT_S"
 
+# Phase 4: controlled return to home and settle before script exit.
 log "Return HOME at ${MAX_LOAD_SPEED} deg/s"
 send turret speed -"$MAX_LOAD_SPEED" 0
 sleep "$MOVE_140_S"

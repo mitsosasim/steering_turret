@@ -31,6 +31,7 @@ static void assert_true(int cond, const char* msg) {
   }
 }
 
+/* Simulator backend stub: deterministic in-memory state used to validate backend router dispatch behavior. */
 int sim_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out) {
   (void)cfg;
   static test_backend_t backend;

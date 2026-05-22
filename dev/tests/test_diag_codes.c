@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* Locks wire-level diagnostic word layout (cat/subcat/code) and MYACT fault mapping consumed by external tooling. */
 int main(void) {
   assert(stc_diag_encode(0x12, 0x34, 0xABCDu) == 0x1234ABCDu);
   assert(stc_diag_encode(0xAA, 0x55, 0x0000u) == 0xAA550000u);
