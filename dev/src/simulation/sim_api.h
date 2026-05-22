@@ -36,6 +36,7 @@ void sim_init(const axis_cfg_t* cfg, size_t axis_count);
 /** Tear down simulator state; no external transport resources are owned. */
 void sim_shutdown(void);
 /** Advance internal motor models one integrator step (deterministic dev behavior). */
+/** One integrator tick for all simulated axes; updates state heartbeat timestamps. */
 void sim_update(double dt_s);
 
 /** Set profile-position style target in degrees for one axis. */

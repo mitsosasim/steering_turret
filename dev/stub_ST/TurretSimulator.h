@@ -26,6 +26,7 @@
 #include <thread>
 
 /** @brief Composite simulator for ST az/el plus 8 SUT pairs (18 axes total). */
+/* Owns motor-model instances and integration thread for the legacy multi-axis process simulator. */
 class TurretSimulator {
 public:
     /** @brief mainAxes = [ST az, ST el], sutAxes = 8 SUTs × [az,el] in axis order. */

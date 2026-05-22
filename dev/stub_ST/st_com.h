@@ -33,6 +33,7 @@ using namespace st_protocol;
 namespace st_com {
 
 
+/* Socket ownership and timing policy for the legacy stub communications runtime. */
 struct Config {
     // TCP port for command/response channel.
     uint16_t listenCmdPort{7000};

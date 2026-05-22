@@ -202,6 +202,7 @@ void StCom::acceptLoop() {
     }
 }
 
+// Packet boundary handler: drains TCP stream buffer into complete protocol command frames.
 bool StCom::processClientData() {
     if (clientSocket_ < 0) {
         return false;
@@ -336,6 +337,7 @@ bool StCom::sendResponse(uint16_t cmdId,
     return sendResponse(resp);
 }
 
+// Serialization boundary: converts internal response struct ownership into wire-format byte payloads.
 std::vector<uint8_t> StCom::encodeResponse(const ResponseMessage& msg) const {
     const auto hSize = sizeof(msg.header);
     std::vector<uint8_t> buffer(hSize + msg.payload.size());

@@ -43,6 +43,7 @@
 // To modify version info, edit the CMakeLists.txt of the CU Core project.
 namespace version_info {
 
+// Consumer-visible semantic major version for software-identification responses.
 constexpr int major() noexcept {
     return CU_CORE_VERSION_MAJOR;
 }
@@ -55,6 +56,7 @@ constexpr int patch() noexcept {
     return CU_CORE_VERSION_PATCH;
 }
 
+// Consumer-visible semantic version string used in protocol payload formatting.
 inline std::string_view version_string() noexcept {
     return CU_CORE_VERSION_STRING;
 }

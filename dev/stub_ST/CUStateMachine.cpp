@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   control-unit state logic for the legacy ST stub simulator.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   emulates controller-side state transitions for simulator-driven protocol testing.
+ *   Owns only legacy stub runtime state semantics and not production CU behavior.
+ *   Transition APIs are mutex-guarded for thread-safe command/telemetry observers.
  */
 
 #include "CUStateMachine.h"

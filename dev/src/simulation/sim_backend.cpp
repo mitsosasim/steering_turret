@@ -67,6 +67,7 @@ static int32_t vel_deg_s_to_raw(const axis_cfg_t& cfg, double axis_deg_s) {
 
 }  // namespace
 
+/* Backend instance ownership: config, per-axis models, snapshot cache, and integrator thread state. */
 struct motion_backend {
   motion_backend_cfg_t cfg{};
   std::array<SimAxis, STC_AXIS_COUNT> axes{};
@@ -80,6 +81,7 @@ struct motion_backend {
 
 
 
+/* 10 ms propagation loop with speed-command watchdog enforcement for backend-contract parity. */
 static void integrator_loop(motion_backend* b) {
   using namespace std::chrono;
   constexpr auto period = milliseconds(10);
