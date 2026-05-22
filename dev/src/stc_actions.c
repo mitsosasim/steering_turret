@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Internal module implementation for STC runtime support services.
+ *   Action queue implementation for TCP-to-worker handoff.
  *
  * Design notes:
- *   Comment-only documentation refactor; runtime behavior is unchanged.
+ *   Thread-safe ring buffer with eventfd wakeups for producer/consumer handoff.
+ *   TCP-side validation owns frame/protocol checks before enqueue.
+ *   Worker thread owns backend execution after dequeue.
+ *   Stream-speed commands use keep-latest coalescing to drop stale intents.
  */
 
 #include "stc_actions.h"
@@ -21,7 +24,7 @@
 /* Queue is producer/consumer between TCP command thread and CAN worker.
  * eventfd wakeups integrate queue activity with poll/epoll without busy loops.
  */
-/* Mirror pre-validation lives in TCP path; queue receives only validated actions. */
+/* Wakeup side only; queue signaling does not transfer backend execution ownership. */
 static void actionq_notify_locked(actionq_t* q) {
   if (q->wake_fd < 0) return;
   const uint64_t one = 1;
@@ -32,6 +35,7 @@ static void actionq_notify_locked(actionq_t* q) {
 }
 
 static size_t actionq_filter_locked(actionq_t* q, stc_action_type_t type_to_drop) {
+  /* Coalesce stale stream-speed commands so worker always executes latest rate intent. */
   size_t kept = 0;
   stc_action_t compacted[STC_ACTIONQ_CAPACITY];
 

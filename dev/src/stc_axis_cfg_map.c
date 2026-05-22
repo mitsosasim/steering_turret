@@ -5,15 +5,19 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Startup mapping from parsed INI data into runtime axis_cfg_t structures.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Startup-only deterministic copy from parsed config into runtime structures.
+ *   No heap ownership is created here; caller owns input/output storage lifetime.
+ *   Copies limits, units, and driver metadata used by runtime/backend layers.
+ *   Computes whether each axis is expected to exist from enable/driver/node gates.
  */
 
 #include "stc_axis_cfg_map.h"
 
 void stc_axis_cfg_from_config(const stc_config_t* cfg, int axis, axis_cfg_t* out_cfg, uint8_t* out_axis_expected) {
+  /* Pure startup-time map helper; no runtime side effects beyond destination writes. */
   if (!cfg || !out_cfg || axis < 0 || axis >= (int)STC_AXIS_COUNT) return;
 
   out_cfg->driver = cfg->axis_driver[axis];

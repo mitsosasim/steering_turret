@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Internal module implementation for STC runtime support services.
+ *   Command clamping and saturation accounting for axis motion requests.
  *
  * Design notes:
- *   Comment-only documentation refactor; runtime behavior is unchanged.
+ *   Safety-sensitive pre-execution limits enforce configured mechanical bounds.
+ *   Position and speed are clamped independently so diagnostics can report cause.
+ *   Helpers preserve requested vs applied motion deltas for operator traceability.
  */
 
 #include "stc_limits.h"
@@ -31,6 +33,7 @@ bool stc_clamp_axis_cmd(const axis_cfg_t* cfg,
                         double* speed_deg_s,
                         bool* target_limited,
                         bool* speed_limited) {
+  /* Clamp target/speed independently and report exactly what was clipped. */
   bool limited = false;
   if (!cfg) return false;
 
@@ -69,6 +72,7 @@ bool stc_compute_effective_delta(double current_deg,
                                 double* requested_abs_deg,
                                 double* clamped_abs_deg,
                                 double* effective_delta_deg) {
+  /* Preserve both requested and applied movement for diagnostics/logging. */
   const double requested_abs = current_deg + requested_delta_deg;
   const double clamped_abs = stc_clamp(requested_abs, min_deg, max_deg);
   const double effective_delta = clamped_abs - current_deg;

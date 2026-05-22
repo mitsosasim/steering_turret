@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Internal module implementation for STC runtime support services.
+ *   Shared axis conversion and telemetry-derivation implementation.
  *
  * Design notes:
- *   Comment-only documentation refactor; runtime behavior is unchanged.
+ *   Central mechanical scaling logic is the single source of unit truth.
+ *   Shared helpers keep backend commands, telemetry, and diagnostics consistent.
+ *   Conversions guard invalid config values with deterministic safe fallbacks.
  */
 
 #include "stc_model.h"
@@ -51,6 +53,7 @@ const char* runtime_backend_to_string(stc_runtime_backend_t backend) {
 
 /** Convert encoder counts (motor-domain units) into physical axis degrees. */
 double axis_counts_to_deg(const axis_cfg_t* cfg, int32_t counts) {
+  /* Mechanical conversion source of truth: encoder counts -> physical degrees. */
   const double cpr = safe_cpr(cfg);
   const double gr = safe_gr(cfg);
   return ((double)counts) * 360.0 / (cpr * gr);
@@ -58,6 +61,7 @@ double axis_counts_to_deg(const axis_cfg_t* cfg, int32_t counts) {
 
 /** Convert physical axis degrees into encoder counts for command objects. */
 int32_t axis_deg_to_counts(const axis_cfg_t* cfg, double deg) {
+  /* Inverse mechanical conversion with saturation before integer narrowing. */
   const double cpr = safe_cpr(cfg);
   const double gr = safe_gr(cfg);
   double counts = deg * (cpr * gr) / 360.0;
@@ -115,6 +119,7 @@ void axis_telem_update(axis_telem_t* telem,
                        uint16_t status_word,
                        int8_t mode_disp,
                        uint64_t ts_ms) {
+  /* Timestamped derivative path keeps acceleration deterministic across backends. */
   if (!telem) return;
 
   telem->pos_raw = pos_raw;

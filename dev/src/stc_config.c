@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Internal module implementation for STC runtime support services.
+ *   STC configuration parser and default initialization.
  *
  * Design notes:
- *   Comment-only documentation refactor; runtime behavior is unchanged.
+ *   Startup-only parser with deterministic defaults before file overrides.
+ *   Strict key/value validation rejects malformed or ambiguous hardware mappings.
+ *   Inline '#' and ';' comments are stripped before semantic parsing.
+ *   Backend and driver aliases stay normalized for backward compatibility.
  */
 
 #include "stc_config.h"
@@ -129,6 +132,7 @@ static int parse_runtime_backend(const char* s, stc_runtime_backend_t* out) {
 }
 
 static int parse_axis_driver(const char* s, stc_axis_driver_t* out) {
+  /* Accepted aliases must remain backward-compatible with deployed configs. */
   if (!s || !out) return -1;
 
   if (strcasecmp(s, "disabled") == 0 || strcasecmp(s, "none") == 0) {
@@ -153,6 +157,7 @@ static int parse_axis_driver(const char* s, stc_axis_driver_t* out) {
 }
 /** Initialize deterministic baseline defaults before user INI overrides. */
 void stc_config_set_defaults(stc_config_t* cfg) {
+  /* Deterministic baseline: all runtime paths start from identical defaults. */
   if (!cfg) return;
   memset(cfg, 0, sizeof(*cfg));
 
@@ -247,6 +252,7 @@ void stc_config_set_defaults(stc_config_t* cfg) {
 }
 
 bool load_config(const char* path, stc_config_t* cfg) {
+  /* Reject malformed config early so motion cannot start with invalid mappings. */
   if (!path || !cfg) return false;
 
   stc_config_set_defaults(cfg);
