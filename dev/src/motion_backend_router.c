@@ -3,6 +3,15 @@
  *
  * Property of ALMA SISTEMI SRL.
  * This source file is part of the STC development codebase.
+ *
+ * File purpose:
+ *   Runtime router that binds the abstract motion backend API to simulator,
+ *   hardware CAN, MYACT, or mock implementations.
+ *
+ * Design notes:
+ *   Startup chooses one backend family from config and stores it globally.
+ *   Subsequent API calls forward only to that selected family.
+ *   Weak CAN symbols intentionally allow builds that omit hardware objects.
  */
 
 #include "motion_backend.h"
@@ -50,6 +59,7 @@ static int mock_motion_backend_clear_faults(motion_backend_t* b, uint32_t m){ (v
 static int mock_motion_backend_set_laser(motion_backend_t* b, uint8_t i, uint8_t o){ (void)b; (void)i; (void)o; return 0; }
 static int mock_motion_backend_get_snapshot(motion_backend_t* b, motion_snapshot_t* s){ (void)b; if (!s) return -1; memset(s, 0, sizeof(*s)); return 0; }
 
+/* Weak declarations intentionally allow linking without the hardware CAN backend. */
 __attribute__((weak)) int can_motion_backend_start(const motion_backend_cfg_t*, motion_backend_t**);
 __attribute__((weak)) void can_motion_backend_stop(motion_backend_t*);
 __attribute__((weak)) int can_motion_backend_discover(motion_backend_t*);
@@ -79,6 +89,7 @@ typedef struct {
 static routed_backend_t g_backend;
 static motion_backend_cfg_t g_backend_cfg;
 
+/* One-time startup selector: picks exactly one backend family for the process lifetime. */
 int motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend){
   if(!cfg||!out_backend) return -1;
   memset(&g_backend,0,sizeof(g_backend));
@@ -140,6 +151,7 @@ void motion_backend_stop(motion_backend_t* b){
 
 int motion_backend_discover(motion_backend_t* b){ (void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_discover(g_backend.impl); if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) return can_motion_backend_discover(g_backend.impl); if (g_backend.family == BACKEND_FAMILY_MYACT) return myact_motion_backend_discover(g_backend.impl); if (g_backend.family == BACKEND_FAMILY_MOCK) return mock_motion_backend_discover(g_backend.impl); STC_LOG_ERROR("motion_backend_discover: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
 int motion_backend_apply_pp_move(motion_backend_t* b,uint32_t m,const double t[STC_AXIS_COUNT]){ (void)b; if (g_backend.family == BACKEND_FAMILY_SIMULATOR) return sim_motion_backend_apply_pp_move(g_backend.impl,m,t); if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN) return can_motion_backend_apply_pp_move(g_backend.impl,m,t); if (g_backend.family == BACKEND_FAMILY_MYACT) return myact_motion_backend_apply_pp_move(g_backend.impl,m,t); if (g_backend.family == BACKEND_FAMILY_MOCK) return mock_motion_backend_apply_pp_move(g_backend.impl,m,t); STC_LOG_ERROR("motion_backend_apply_pp_move: unsupported backend family backend=%s", g_backend.type ? g_backend.type : "(null)"); return -1; }
+/* Mixed motion path: hardware CAN may execute native mixed commands; others split into speed+position. */
 int motion_backend_apply_motion(motion_backend_t* b,uint32_t m,const stc_axis_motion_kind_t k[STC_AXIS_COUNT],const double v[STC_AXIS_COUNT],const double s[STC_AXIS_COUNT]){
   (void)b;
   if (g_backend.family == BACKEND_FAMILY_HARDWARE_CAN && can_motion_backend_apply_motion) {

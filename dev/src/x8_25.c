@@ -87,6 +87,7 @@ static void wr_u32_le(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)((v >> 24) & 0xFFu);
 }
 
+/* Fast-path command packer with no heap or blocking: signed 0.01 A torque/current command. */
 int myact_pack_a1_torque(int16_t iq_0p01a, uint8_t out[8]) {
     if (!out) return MYACT_EINVAL;
     memset(out, 0, 8);
@@ -95,6 +96,7 @@ int myact_pack_a1_torque(int16_t iq_0p01a, uint8_t out[8]) {
     return MYACT_OK;
 }
 
+/* Fast-path command packer for signed 0.01 deg/s speed setpoints. */
 int myact_pack_a2_speed(int32_t speed_0p01dps, uint8_t out[8]) {
     if (!out) return MYACT_EINVAL;
     memset(out, 0, 8);
@@ -225,6 +227,7 @@ static int parse_status1(const myact_can_frame_t* fr, uint64_t ts_ms, myact_stat
     return MYACT_OK;
 }
 
+/* Decode vendor status-2 reply and normalize electrical/mechanical units into cache fields. */
 static int parse_status2(const myact_can_frame_t* fr, uint64_t ts_ms, myact_status2_t* out) {
     int rc = proto_expect(fr, MYACT_CMD_STATUS2, 8);
     if (!out) return MYACT_EINVAL;
@@ -511,6 +514,7 @@ static int myact_parse_frame(myact_ctx_t* ctx, const myact_can_frame_t* fr) {
     return MYACT_EVENT_NONE;
 }
 
+/* Bounded poll loop: matches synchronous replies first, then updates async cache/events for callers. */
 int myact_poll(myact_ctx_t* ctx, uint32_t timeout_ms) {
     myact_can_frame_t fr;
     int rc;
