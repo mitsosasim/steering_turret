@@ -61,6 +61,7 @@ static void enable_tlml_only(int port, int* tlml_port, int* tlmh_enabled) {
 }
 
 static void hexdump_line(const uint8_t* b, size_t n) {
+  /* Raw-wire utility for packet boundary inspection during decoder bring-up. */
   for (size_t i = 0; i < n; i++) {
     printf("%02X", b[i]);
     if (i + 1 < n) printf(" ");
@@ -70,6 +71,7 @@ static void hexdump_line(const uint8_t* b, size_t n) {
 
 static int open_mcast_rx(const char* group_or_ip, int port, const char* ifname) {
   /* Socket setup supports both multicast group join and direct unicast bind. */
+  /* Ownership: caller owns returned socket descriptor and closes it at shutdown. */
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) return -1;
 
@@ -139,6 +141,8 @@ static double monotonic_sec(void) {
 }
 
 int main(int argc, char** argv) {
+  /* Non-real-time host loop: poll-driven decode prioritizes observability over
+   * deterministic latency and assumes kernel socket buffering handles bursts. */
   const char* ifname = NULL;
 
   const char* tlmh_ip = "239.255.10.2";

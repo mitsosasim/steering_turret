@@ -94,6 +94,8 @@ constexpr const char* kAxisLabels[STC_ICD_AXES_COUNT] = {
 };
 
 uint8_t resolveControllerId() {
+  // Operator-side ownership: default CU/controller ID matches bench convention and
+  // can be overridden per process to target a specific server instance.
   uint8_t ctrl_id = 21;
   const char* env = std::getenv("STC_CTRL_ID");
   if (env != nullptr && *env != '\0') {
@@ -118,6 +120,8 @@ QString stateToString(uint8_t state) {
 }
 
 QString nackErrToString(uint16_t errCode) {
+  // Convert wire-level NACK numeric codes into stable, human-facing labels for
+  // operators while preserving unknown codes for protocol debugging.
   const char* codeName = stc_error_code_name(static_cast<stc_nack_err_t>(errCode));
   if (!codeName || std::strcmp(codeName, "UNKNOWN") == 0) {
     return QString("Unknown err_code=0x%1").arg(errCode, 4, 16, QChar('0'));
@@ -131,6 +135,8 @@ QString nackErrToString(uint16_t errCode) {
 }
 
 QString decodeMotorStatusLabels(uint8_t statusBits) {
+  // Decode motor status bitfield exactly as carried in telemetry/RSP payloads.
+  // Assumes ICD bit assignments are authoritative and may evolve by firmware rev.
   if (statusBits == 0x00) return "Disabled / Not configured";
   QStringList labels;
   if (statusBits & 0x02) labels << "Connected";
@@ -225,7 +231,9 @@ const std::array<CommandSpec, 19> kCommandSpecs{{
 }
 
 class DiagnosticsWindow : public QMainWindow {
- public:
+public:
+  // GUI object owns sockets/timers on Qt main thread; all slot callbacks run
+  // serially in this event loop and must stay non-blocking (operator tool only).
   DiagnosticsWindow() {
     setWindowTitle("STC Diagnostics Console");
     resize(1300, 840);
@@ -313,6 +321,8 @@ class DiagnosticsWindow : public QMainWindow {
 
  private:
   void onCommandSelectionChanged(int index) {
+    // Safety gate: UI enables parameter editors only for currently selected ICD
+    // command so operators cannot mix unrelated payload fields accidentally.
     payloadStack_->setCurrentIndex(index);
   }
 
@@ -538,6 +548,8 @@ class DiagnosticsWindow : public QMainWindow {
   }
 
   void onTcpReadyRead() {
+    // Packet-boundary assumption: TCP is stream-oriented, so responses are staged
+    // through an accumulation buffer until a complete ICD RSP frame is available.
     // Stream parser for TCP responses:
     // accumulate bytes, frame by frame using fixed header + payload_size.
     rspBuffer_.append(tcpSocket_->readAll());

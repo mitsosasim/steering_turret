@@ -78,6 +78,7 @@ static int recv_exact(int fd, uint8_t* buf, size_t len) {
 }
 
 static int tcp_connect(const char* host, const char* port) {
+  /* Socket ownership: caller owns returned fd and must close it on all paths. */
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC;
@@ -132,6 +133,8 @@ static const char* kv_lookup(const char* payload, const char* key, char* out, si
 }
 
 static void print_hw_info_pretty(const char* payload) {
+  /* Decode assumption: payload is textual key/value data from STC_HW_INFO and
+   * remains wire-compatible with server-side field names across tool revisions. */
   char mode[64]="?", state[32]="?", pbit[32]="?", exp[32]="0", conn[32]="0";
   char axes[1800]="", turret[128]="", mirror[256]="", sut[256]="";
   kv_lookup(payload,"mode=",mode,sizeof(mode));
@@ -185,6 +188,8 @@ static void print_hw_info_pretty(const char* payload) {
 
 static int read_rsp_and_print(int fd, const stc_icd_cfg_t* cfg, uint16_t sent_cmd_id, uint8_t requested_cu_state, int has_requested_cu_state) {
   /* Read fixed RSP header first, then read payload according to payload_size field. */
+  /* Packet boundary rule: recv_exact enforces full header/payload reads so TCP
+   * segmentation cannot corrupt ICD frame parsing in host-side verification. */
   // RSP header is 14 bytes after our ICD-aligned fix
   uint8_t hdr[14];
   int rr = recv_exact(fd, hdr, sizeof(hdr));
