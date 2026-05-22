@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Runtime backend for MYACTUATOR axes above the low-level X8 protocol library.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Owns vendor I/O, feedback normalization, watchdog enforcement, and snapshot
+ *   publication in one worker-controlled backend.
+ *   A single pthread worker is the only owner of live CAN I/O state.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -66,6 +68,7 @@ typedef struct {
   uint64_t cmd_ts_ms;
 } axis_mailbox_t;
 
+/* Backend state is shared under lock, while the worker thread exclusively performs vendor I/O. */
 struct motion_backend {
   motion_backend_cfg_t cfg;
   int can_socket[STC_AXIS_COUNT];
@@ -433,6 +436,7 @@ static int axis_stop_locked(struct motion_backend* b, size_t axis, uint64_t t_ms
   return stop_rc;
 }
 
+/* Translate normalized runtime commands (deg / deg/s) into MYACT raw protocol frames. */
 static void apply_axis_command_locked(struct motion_backend* b, size_t axis, uint64_t t_ms) {
   const uint8_t node_id = b->cfg.axis_node_id[axis];
   if (!node_id) return;
@@ -577,6 +581,7 @@ static void enforce_watchdog_locked(struct motion_backend* b, uint64_t t_ms) {
   }
 }
 
+/* Single-owner vendor I/O loop: serializes command apply, feedback poll, watchdog, and snapshot refresh. */
 static void* backend_loop(void* arg) {
   struct motion_backend* b = (struct motion_backend*)arg;
 

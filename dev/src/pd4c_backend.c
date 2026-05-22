@@ -1,3 +1,17 @@
+/*
+ * ALMA SISTEMI SRL - Steering Turret Control (STC)
+ *
+ * Property of ALMA SISTEMI SRL.
+ * This source file is part of the STC development codebase.
+ *
+ * File purpose:
+ *   Thin PD4-C backend compatibility wrapper over the shared CAN backend.
+ *
+ * Design notes:
+ *   Intentionally contains only forwarding helpers so older PD4-C entry points
+ *   remain available without duplicating backend state or behavior.
+ */
+
 #include "motion_backend.h"
 
 int can_motion_backend_start(const motion_backend_cfg_t*, motion_backend_t**);
@@ -10,6 +24,7 @@ int can_motion_backend_clear_faults(motion_backend_t*, uint32_t);
 int can_motion_backend_set_laser(motion_backend_t*, uint8_t, uint8_t);
 int can_motion_backend_get_snapshot(motion_backend_t*, motion_snapshot_t*);
 
+/* Compatibility shim: preserve legacy pd4c_* symbols while delegating all logic to can_backend.c. */
 int pd4c_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) { return can_motion_backend_start(cfg, out_backend); }
 void pd4c_motion_backend_stop(motion_backend_t* backend) { can_motion_backend_stop(backend); }
 int pd4c_motion_backend_discover(motion_backend_t* backend) { return can_motion_backend_discover(backend); }

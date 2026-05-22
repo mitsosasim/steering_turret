@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Implementation/declarations for the STC development codebase.
+ *   Linux SocketCAN transport binding for the MYACT X8 protocol API.
  *
  * Design notes:
- *   Documentation/comment ownership header only; no runtime behavior changes.
+ *   Owns one raw CAN socket with node-scoped receive filters.
+ *   Binds one node's service and motion reply IDs to one interface.
+ *   Transport layer only moves frames; x8_25.c owns protocol semantics.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -39,6 +41,7 @@ static uint64_t sockcan_time_ms(void* user) {
     return ((uint64_t)ts.tv_sec * 1000ULL) + ((uint64_t)ts.tv_nsec / 1000000ULL);
 }
 
+/* Transport-only TX path: frame meaning is defined by the upper protocol layer. */
 static int sockcan_send(const myact_can_frame_t* fr, void* user) {
     myact_socketcan_t* io = (myact_socketcan_t*)user;
     struct can_frame c = {0};
@@ -53,6 +56,7 @@ static int sockcan_send(const myact_can_frame_t* fr, void* user) {
     return (write(io->fd, &c, sizeof(c)) == (ssize_t)sizeof(c)) ? MYACT_OK : MYACT_EIO;
 }
 
+/* Transport-only RX path with bounded wait; parser decisions stay in x8_25.c. */
 static int sockcan_recv(myact_can_frame_t* out, uint32_t to_ms, void* user) {
     myact_socketcan_t* io = (myact_socketcan_t*)user;
     struct pollfd p;
@@ -74,6 +78,7 @@ static int sockcan_recv(myact_can_frame_t* out, uint32_t to_ms, void* user) {
     return MYACT_OK;
 }
 
+/* Open and bind one PF_CAN raw socket configured for a single MYACT node ID. */
 int myact_socketcan_open(myact_socketcan_t* io, const char* ifname, uint8_t node_id) {
     if (!io || !ifname || !ifname[0] || node_id < MYACT_NODE_ID_MIN || node_id > MYACT_NODE_ID_MAX) return MYACT_EINVAL;
     memset(io, 0, sizeof(*io));

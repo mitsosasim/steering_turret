@@ -522,6 +522,7 @@ static int discover_responsive_nodes(struct motion_backend* b) {
   return responsive_count;
 }
 
+/* Creates shared backend state, initializes per-axis drivers, and probes configured axes. */
 int can_motion_backend_start(const motion_backend_cfg_t* cfg, motion_backend_t** out_backend) {
   if (!cfg || !out_backend) return -1;
   struct motion_backend* b = (struct motion_backend*)calloc(1, sizeof(*b));
@@ -759,6 +760,7 @@ int can_motion_backend_apply_speed(motion_backend_t* backend, uint32_t axes_mask
   return 0;
 }
 
+/* Mixed ABS/REL/SPEED entry point: normalizes per-axis intent before issuing driver commands. */
 int can_motion_backend_apply_motion(motion_backend_t* backend, uint32_t axes_mask, const stc_axis_motion_kind_t kind[STC_AXIS_COUNT], const double values_deg_or_dps[STC_AXIS_COUNT], const double speed_limit_deg_s[STC_AXIS_COUNT]) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !kind || !values_deg_or_dps || !speed_limit_deg_s) return -1;
@@ -909,6 +911,7 @@ int can_motion_backend_set_laser(motion_backend_t* backend, uint8_t laser_id, ui
   return 0;
 }
 
+/* Sole refresh/publication gate for the shared snapshot consumed by upper runtime layers. */
 int can_motion_backend_get_snapshot(motion_backend_t* backend, motion_snapshot_t* snapshot) {
   struct motion_backend* b = (struct motion_backend*)backend;
   if (!b || !snapshot) return -1;
