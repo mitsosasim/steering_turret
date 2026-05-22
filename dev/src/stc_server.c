@@ -547,6 +547,7 @@ static int is_allowed_controller(uint8_t cid, const shared_data_t* sh) {
 static stc_nack_err_t validate_cmd_fast(const stc_icd_cfg_t* cfg,
                                        const shared_data_t* sh,
                                        const stc_icd_cmd_t* c) {
+  /* Cheap ingress precheck only: parses/validates, but never touches backend state. */
   // magic
   if (!(c->magic[0] == cfg->cmd_magic[0] && c->magic[1] == cfg->cmd_magic[1] &&
         c->magic[2] == cfg->cmd_magic[2] && c->magic[3] == cfg->cmd_magic[3])) {
@@ -1232,6 +1233,7 @@ _Atomic uint64_t g_can_worker_action_dispatch_iterations = 0;
 
 /** CAN worker owns backend lifetime, executes queued actions, and updates shared health/telemetry. */
 static void* can_worker_thread(void* arg) {
+  /* Ownership boundary: only this thread may call motion_backend_* APIs. */
   can_worker_arg_t* a = (can_worker_arg_t*)arg;
   const uint64_t maintenance_period_ms = 10;
   uint64_t speed_stream_period_ms = 50;
@@ -2063,6 +2065,7 @@ static void* diag_server_thread(void* arg) {
 
 /** High-rate telemetry publisher thread (TLMH) with periodic scheduling and jitter accounting. */
 static void* tlmh_tx_thread(void* arg) {
+  /* Snapshot reader only; this thread never owns command execution decisions. */
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
@@ -2124,6 +2127,7 @@ static void* tlmh_tx_thread(void* arg) {
 
 /** Low-rate telemetry publisher thread (TLML) carrying health/state/diagnostic summaries. */
 static void* tlml_tx_thread(void* arg) {
+  /* Snapshot reader only; health/state publication does not mutate command ownership. */
   tlm_tx_arg_t* a = (tlm_tx_arg_t*)arg;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
@@ -2634,6 +2638,7 @@ static int select_runtime_backend(const stc_config_t* cfg, stc_runtime_backend_t
 
 /** Process entrypoint: startup/config, thread bring-up, TCP command loop, orderly shutdown. */
 int main(int argc, char** argv) {
+  /* Startup gate: complete backend discovery/state init before opening TCP listener. */
   int exit_code = 0;
   int threads_started = 0;
   int can_thread_started = 0;
@@ -3043,7 +3048,7 @@ int main(int argc, char** argv) {
   STC_LOG_INFO("runtime_backend=%s", runtime_backend_to_string(parsed_cfg.runtime_backend));
   log_enabled_axis_drivers(&parsed_cfg);
 
-  // CAN worker thread
+  // CAN worker thread (sole backend owner)
   can_worker_arg_t carg = { .can_if = net.can_if, .can_bitrate = net.can_bitrate, .can_restart_ms = net.can_restart_ms, .can_scan_max_node = net.can_scan_max_node, .can_discovery_enabled = net.can_discovery_enabled, .backend_name = backend_name, .primary_node_id = parsed_cfg.primary_node_id, .primary_tx_id = parsed_cfg.primary_tx_id, .primary_rx_id = parsed_cfg.primary_rx_id, .primary_motion_tx_id = parsed_cfg.primary_motion_tx_id, .primary_motion_rx_id = parsed_cfg.primary_motion_rx_id, .travel_min_deg = parsed_cfg.travel_min_deg, .travel_max_deg = parsed_cfg.travel_max_deg, .profile_max_speed_deg_s = parsed_cfg.profile_max_speed_deg_s, .profile_max_accel_deg_s2 = parsed_cfg.profile_max_accel_deg_s2, .telemetry_interval_ms = parsed_cfg.telemetry_interval_ms, .experimental_native_speed_mode = parsed_cfg.experimental_native_speed_mode, .sh = &sh, .q = &q };
   if (create_thread_with_sched(&th_can,
                                "can_worker_thread",
@@ -3060,6 +3065,7 @@ int main(int argc, char** argv) {
 
   pthread_mutex_lock(&sh.mtx);
   if (!sh.backend_startup_done) {
+    /* Fail-stop startup gate: if backend discovery stalls, force non-OK startup state. */
     struct timespec abs_deadline;
     clock_gettime(CLOCK_REALTIME, &abs_deadline);
     abs_deadline.tv_sec += BACKEND_STARTUP_WAIT_TIMEOUT_MS / 1000;
@@ -3129,7 +3135,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // UDP telemetry threads
+  // UDP telemetry threads (publish shared snapshots; no backend ownership)
   udp_h = open_udp_tx();
   if (udp_h >= 0) udp_h_open = 1;
   udp_l = open_udp_tx();

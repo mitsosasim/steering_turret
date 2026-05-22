@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Internal module implementation for STC runtime support services.
+ *   Thread-safe process logger used by STC runtime and tests.
  *
  * Design notes:
- *   Comment-only documentation refactor; runtime behavior is unchanged.
+ *   One global sink with mutex serialization across all producer threads.
+ *   Runtime log-level updates and writes share the same lock to avoid races.
+ *   Wall-clock timestamp formatting favors operator readability during incidents.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -106,6 +108,7 @@ void stc_log_set_level(stc_log_level_t level) {
 }
 
 void stc_vlog(stc_log_level_t level, const char* fmt, va_list ap) {
+  /* Internal formatted sink path; public wrappers feed into this single backend. */
   char ts[64];
   format_timestamp(ts, sizeof(ts));
 

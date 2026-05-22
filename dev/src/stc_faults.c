@@ -5,10 +5,12 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Internal module implementation for STC runtime support services.
+ *   Small fault-detection helpers reused by runtime health checks.
  *
  * Design notes:
- *   Comment-only documentation refactor; runtime behavior is unchanged.
+ *   Centralizes DS402 bit checks and stale-feedback timeout logic.
+ *   Monotonic time deltas are used so callers can apply consistent severity policy.
+ *   Shared thresholds avoid drift between worker, diagnostics, and safety gates.
  */
 
 #include "stc_faults.h"
@@ -17,6 +19,7 @@
  * other state bits in the statusword.
  */
 int stc_detect_ds402_fault(uint16_t status) {
+  /* DS402 rule here is intentionally narrow: bit 3 alone indicates fault state. */
   return (status & 0x0008u) != 0u;
 }
 
@@ -24,6 +27,7 @@ int stc_detect_ds402_fault(uint16_t status) {
  * timeout policy across transports and backend implementations.
  */
 int stc_detect_can_timeout(uint64_t now_ms, uint64_t last_rx_ms, uint32_t timeout_ms) {
+  /* Monotonic age check only; caller decides whether timeout is warn/fail. */
   if (now_ms < last_rx_ms) {
     return 0;
   }

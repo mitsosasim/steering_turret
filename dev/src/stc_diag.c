@@ -5,10 +5,13 @@
  * This source file is part of the STC development codebase.
  *
  * File purpose:
- *   Internal module implementation for STC runtime support services.
+ *   Diagnostic word encoding and lightweight PBIT/CBIT/IBIT state helpers.
  *
  * Design notes:
- *   Comment-only documentation refactor; runtime behavior is unchanged.
+ *   Transport-agnostic health logic shared by runtime and tests.
+ *   Startup/readiness and runtime-fault checks are intentionally lightweight.
+ *   Fixed-size slot table provides deterministic per-shared-data test hooks.
+ *   This module does not own network/backend execution paths.
  */
 
 #include "stc_diag.h"
@@ -41,6 +44,7 @@ typedef struct {
 static cbit_slot_t g_cbit_slots[8];
 
 static cbit_slot_t* cbit_find_slot(shared_data_t* shared, bool create) {
+  /* Per-shared-data testability hook, not a runtime database abstraction. */
   if (!shared) return NULL;
 
   cbit_slot_t* free_slot = NULL;
@@ -62,6 +66,7 @@ bool run_pbit_startup(void) {
 
 /** CBIT escalates to critical when any registered runtime source flags it. */
 stc_diag_health_t run_cbit_cycle(shared_data_t* shared) {
+  /* Maps shared-data fault flags to health state only; no transport/backend control. */
   cbit_slot_t* slot = cbit_find_slot(shared, false);
   if (!slot) return STC_DIAG_HEALTH_OK;
   return slot->critical ? STC_DIAG_HEALTH_CRITICAL_FAULT : STC_DIAG_HEALTH_OK;
