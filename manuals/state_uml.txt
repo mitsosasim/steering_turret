@@ -1,0 +1,58 @@
+@startuml
+hide empty description
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #1f77b4
+  BorderColor #0b3d91
+  FontColor white
+}
+
+'========================
+' Top-level states
+'========================
+[*] --> OFF
+
+OFF --> INIT : PowerOn / enter_init()
+
+state INIT {
+  [*] --> InitActions
+  InitActions : do / hw_init(); can_init(); load_config(); pbit_start()
+  InitActions --> [*] : PBIT_OK
+}
+INIT --> INIT_DONE : PBIT_OK
+INIT --> FAIL : PBIT_FAIL
+
+INIT_DONE --> SAFE : Auto / enter_safe()
+
+' SAFE is the hub
+SAFE --> OPERATIONAL : Arm [cbits_ok && interlocks_ok] / enable_motors()
+SAFE --> SELF_LEVELLING : SelfLevellingStart [sl_allowed] / sl_start()
+SAFE --> SAFE : CBIT_OK / update_health_ok()
+SAFE --> FAIL : CBIT_FAIL / latch_fault()
+
+OPERATIONAL --> SAFE : SafeCmd / disable_motors()
+OPERATIONAL --> OPERATIONAL : CBIT_OK / update_health_ok()
+OPERATIONAL --> FAIL : CBIT_FAIL / latch_fault()
+OPERATIONAL --> IBIT_RUNNING : IBITStart / ibit_start()
+
+SELF_LEVELLING --> OPERATIONAL : SelfLevellingEnd [sl_success] / sl_stop_ok()
+SELF_LEVELLING --> SAFE : AbortSL / sl_abort(); disable_motors()
+SELF_LEVELLING --> FAIL : SL_Fail / latch_fault()
+
+IBIT_RUNNING --> OPERATIONAL : IBIT_OK_Armed [arm_permitted] / ibit_finish_ok()
+IBIT_RUNNING --> SAFE : IBIT_OK_Safe / ibit_finish_ok(); disable_motors()
+IBIT_RUNNING --> FAIL : IBIT_FAIL / latch_fault()
+IBIT_RUNNING --> SAFE : AbortIBIT / ibit_abort(); disable_motors()
+
+' Global transition: ANY --> FAIL on critical fault
+state "AnyState" as ANY
+ANY --> FAIL : CriticalFault / latch_fault()
+
+' Store mode (if used)
+SAFE --> STORE : StoreCmd [store_allowed] / enter_store()
+STORE --> SAFE : ExitStore / exit_store()
+
+FAIL --> IBIT_RUNNING : IBITStart / ibit_start()
+FAIL --> SAFE : ResetFaults [faults_cleared && cbits_ok] / clear_latch(); enter_safe()
+
+@enduml
