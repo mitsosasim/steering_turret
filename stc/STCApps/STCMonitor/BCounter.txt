@@ -1,9 +1,0 @@
-170
-STCMonitor
-/home/alma/STCApps/STCMonitor/BCounter.h
-#define VERSION 1
-#define RELEASE 0
-#define DRAFT 'a'
-//comment 4
-//comment 5
-//comment 6

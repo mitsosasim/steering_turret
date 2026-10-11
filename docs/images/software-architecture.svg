@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620" role="img" aria-labelledby="title desc">
+  <title id="title">Steering Turret Control software architecture</title>
+  <desc id="desc">A control client sends TCP commands to a validated runtime. A dedicated worker uses either a CAN motor backend or a simulator. Separate UDP threads return motion and health telemetry to the client.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#5f7898"/></marker>
+  </defs>
+  <rect width="1120" height="620" rx="18" fill="#f4f7fb"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="44" y="50" font-size="15" font-weight="700" letter-spacing="2" fill="#536f90">STEERING TURRET CONTROL</text>
+    <text x="44" y="87" font-size="29" font-weight="700" fill="#142b45">One control path. Two motion backends.</text>
+    <text x="44" y="115" font-size="16" fill="#53677e">Network communication, motion transactions, and telemetry have separate responsibilities.</text>
+    <rect x="44" y="185" width="235" height="108" rx="12" fill="white" stroke="#c9d5e3" stroke-width="2"/>
+    <text x="64" y="220" font-size="20" font-weight="700" fill="#142b45">Control client</text>
+    <text x="64" y="250" font-size="16" fill="#53677e">Qt console or CLI</text>
+    <text x="64" y="275" font-size="14" fill="#53677e">Commands and responses</text>
+    <rect x="384" y="175" width="318" height="128" rx="12" fill="#142b45"/>
+    <text x="406" y="210" font-size="20" font-weight="700" fill="white">C / C++ runtime</text>
+    <text x="406" y="240" font-size="16" fill="#d3dfeb">Binary codec · state checks · limits</text>
+    <text x="406" y="267" font-size="16" fill="#d3dfeb">Action queue · shared snapshots</text>
+    <rect x="790" y="175" width="282" height="128" rx="12" fill="white" stroke="#c9d5e3" stroke-width="2"/>
+    <text x="812" y="210" font-size="20" font-weight="700" fill="#142b45">Motion worker</text>
+    <text x="812" y="240" font-size="16" fill="#53677e">Owns the selected backend</text>
+    <text x="812" y="267" font-size="16" fill="#53677e">Ordered motion and stop work</text>
+    <path d="M279 235H374" stroke="#5f7898" stroke-width="2.5" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="326" y="218" text-anchor="middle" font-size="14" fill="#53677e">TCP</text>
+    <path d="M702 238H780" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <rect x="384" y="370" width="318" height="138" rx="12" fill="white" stroke="#c9d5e3" stroke-width="2"/>
+    <text x="406" y="405" font-size="20" font-weight="700" fill="#142b45">Telemetry threads</text>
+    <text x="406" y="434" font-size="16" fill="#53677e">Motion feedback · 100 Hz default</text>
+    <text x="406" y="461" font-size="16" fill="#53677e">Health and state · 10 Hz default</text>
+    <text x="406" y="487" font-size="14" fill="#53677e">UDP unicast to the active client</text>
+    <path d="M543 303V360" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <path d="M384 438H161V303" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <text x="174" y="425" font-size="14" fill="#53677e">UDP telemetry</text>
+    <rect x="790" y="370" width="282" height="82" rx="12" fill="#e2eef5" stroke="#adc5d5" stroke-width="1.5"/>
+    <text x="810" y="400" font-size="18" font-weight="700" fill="#142b45">SocketCAN motor backend</text>
+    <text x="810" y="429" font-size="15" fill="#3f6079">CANopen / CiA 402 · vendor CAN</text>
+    <rect x="790" y="482" width="282" height="82" rx="12" fill="#e8f0e7" stroke="#b5c9b0" stroke-width="1.5"/>
+    <text x="810" y="513" font-size="18" font-weight="700" fill="#142b45">Software simulator</text>
+    <text x="810" y="541" font-size="15" fill="#53677e">Functional checks without motors</text>
+    <path d="M931 303V360" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <path d="M1051 303V472" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <text x="44" y="578" font-size="13" fill="#63788e">Software architecture illustration. Configured rates do not establish measured hard real-time guarantees.</text>
+  </g>
+</svg>

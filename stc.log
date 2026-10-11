@@ -1,0 +1,76 @@
+2026-10-11 16:57:57.204 | INFO  | build_fingerprint git_sha=unknown build_timestamp=Oct 11 2026 16:53:37 log_level=debug
+2026-10-11 16:57:57.204 | INFO  | RT scheduling disabled by config.
+2026-10-11 16:57:57.204 | INFO  | runtime_backend=simulator
+2026-10-11 16:57:57.204 | INFO  | configured_axes=0 disabled_axes=18
+2026-10-11 16:57:57.204 | DEBUG | axis0 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis1 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis2 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis3 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis4 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis5 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis6 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis7 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis8 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis9 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis10 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis11 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis12 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis13 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis14 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis15 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis16 disabled
+2026-10-11 16:57:57.204 | DEBUG | axis17 disabled
+2026-10-11 16:57:57.204 | INFO  | can_worker_thread scheduling request: RT disabled, using default pthread attrs
+2026-10-11 16:57:57.204 | INFO  | can_worker_thread effective scheduling: policy=SCHED_OTHER priority=0
+2026-10-11 16:57:57.204 | INFO  | BACKEND_STARTUP_BEGIN
+2026-10-11 16:57:57.204 | INFO  | backend_transport=simulator can_if=can0 node_id=1 tx=0x141 rx=0x241 watchdog_ms=250 telem_interval_ms=10 native_speed_mode=0
+2026-10-11 16:57:57.204 | INFO  | BACKEND_STARTUP_DONE expected=0 connected=0
+2026-10-11 16:57:57.204 | DEBUG | axis0 liveness changed: connected=1 available=1 stale=0 fault=0
+2026-10-11 16:57:57.204 | INFO  | OBS timing | tlmh(samples=0 sent=0 deadline_miss=0 no_dest=0 send_err=0 jitter_us=min:0.0 avg:0.0 max:0.0) | tlml(samples=0 sent=0 deadline_miss=0 no_dest=0 send_err=0 jitter_us=min:0.0 avg:0.0 max:0.0) | cmd(samples=0 pending) | queue_depth_peak=0
+2026-10-11 16:57:57.204 | INFO  | PBIT_BEGIN
+2026-10-11 16:57:57.204 | INFO  | PBIT motor_check=FAIL expected_motors=0 connected_motors=0
+2026-10-11 16:57:57.204 | INFO  | PBIT network_check=OK can_if=can0 can_bitrate=1000 tcp_port=7000 tlmh=127.0.0.1:6010 tlml=127.0.0.1:6020
+2026-10-11 16:57:57.204 | ERROR | PBIT result: FAIL
+2026-10-11 16:57:57.204 | WARN  | startup failed; continuing in FAIL to allow recovery path
+2026-10-11 16:57:57.204 | INFO  | tlmh_tx_thread scheduling request: RT disabled, using default pthread attrs
+2026-10-11 16:57:57.204 | INFO  | tlmh_tx_thread effective scheduling: policy=SCHED_OTHER priority=0
+2026-10-11 16:57:57.204 | INFO  | tlml_tx_thread scheduling request: RT disabled, using default pthread attrs
+2026-10-11 16:57:57.204 | INFO  | tlml_tx_thread effective scheduling: policy=SCHED_OTHER priority=0
+2026-10-11 16:57:57.204 | INFO  | CAN worker on can0
+2026-10-11 16:57:57.204 | INFO  | STC server listening on TCP port 7000
+2026-10-11 16:57:57.204 | INFO  | UDP telemetry static destination: TLMH 127.0.0.1:6010 @100Hz | TLML 127.0.0.1:6020 @10Hz
+2026-10-11 16:57:57.254 | INFO  | Client connected: 127.0.0.1:33332
+2026-10-11 16:57:57.254 | INFO  | TLMH config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.254 | INFO  | TLML config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.254 | INFO  | Client closed
+2026-10-11 16:57:57.254 | INFO  | Client disconnected; static telemetry destination preserved
+2026-10-11 16:57:57.255 | INFO  | Client connected: 127.0.0.1:33334
+2026-10-11 16:57:57.255 | INFO  | TLMH config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.255 | INFO  | TLML config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.255 | DEBUG | CMD: ver=1 ctrl=21 cmd_id=0x0013 seq=1 ts=1791730677255 payload=0
+2026-10-11 16:57:57.255 | DEBUG |   (decoded)
+2026-10-11 16:57:57.255 | INFO  | TCP ACK sent: command accepted cmd=0x13 seq=1
+2026-10-11 16:57:57.255 | INFO  | Client closed
+2026-10-11 16:57:57.255 | INFO  | Client disconnected; static telemetry destination preserved
+2026-10-11 16:57:57.256 | INFO  | Client connected: 127.0.0.1:33342
+2026-10-11 16:57:57.256 | INFO  | TLMH config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.256 | INFO  | TLML config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.256 | DEBUG | CMD: ver=1 ctrl=21 cmd_id=0x0012 seq=1 ts=1791730677256 payload=0
+2026-10-11 16:57:57.256 | DEBUG |   REQ_SW_VERSION
+2026-10-11 16:57:57.256 | INFO  | TCP ACK sent: command accepted cmd=0x12 seq=1
+2026-10-11 16:57:57.256 | INFO  | Client closed
+2026-10-11 16:57:57.256 | INFO  | Client disconnected; static telemetry destination preserved
+2026-10-11 16:57:57.257 | INFO  | Client connected: 127.0.0.1:33350
+2026-10-11 16:57:57.257 | INFO  | TLMH config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.257 | INFO  | TLML config IP matches active CU IP: 127.0.0.1
+2026-10-11 16:57:57.257 | DEBUG | CMD: ver=1 ctrl=21 cmd_id=0x0014 seq=1 ts=1791730677257 payload=0
+2026-10-11 16:57:57.257 | DEBUG |   (decoded)
+2026-10-11 16:57:57.257 | INFO  | TCP ACK sent: command accepted cmd=0x14 seq=1
+2026-10-11 16:57:57.257 | INFO  | Client closed
+2026-10-11 16:57:57.257 | INFO  | Client disconnected; static telemetry destination preserved
+2026-10-11 16:57:57.257 | INFO  | Shutdown signal received; stopping STC server
+2026-10-11 16:59:53.185 | INFO  | build_fingerprint git_sha=unknown build_timestamp=Oct 11 2026 16:53:37 log_level=debug
+2026-10-11 16:59:53.185 | ERROR | dev/config/stc_simulator.ini: missing diagnostic category/subcategory for axis 0
+2026-10-11 16:59:53.185 | ERROR | Failed to load config file: dev/config/stc_simulator.ini
+2026-10-11 17:00:57.784 | INFO  | build_fingerprint git_sha=unknown build_timestamp=Oct 11 2026 16:53:37 log_level=debug
+2026-10-11 17:00:57.784 | ERROR | simulator backend requested but config contains enabled hardware axes; disable axes or use backend=can

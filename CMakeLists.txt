@@ -48,13 +48,13 @@ add_executable(stc_server
   dev/src/myact_backend.c    # myactuator backend family
 )
 
-if(NOT USE_SIMULATOR)
-  target_sources(stc_server PRIVATE
-    # Transport/runtime dependencies for CAN-backed families.
-    dev/src/x8_25.c
-    dev/src/myact_socketcan.c
-  )
-endif()
+# CAN families remain in the runtime router when simulation is enabled.
+# Their low-level dependencies must therefore link in both build variants.
+target_sources(stc_server PRIVATE
+  dev/src/x8_25.c
+  dev/src/myact_socketcan.c
+)
+target_compile_definitions(stc_server PRIVATE _DEFAULT_SOURCE _POSIX_C_SOURCE=200809L)
 
 add_executable(icd_tx_tcp
   dev/tools/icd_tx_tcp.c
@@ -124,6 +124,8 @@ target_link_libraries(stc_state_test PRIVATE m)
 if(USE_SIMULATOR)
   target_compile_definitions(stc_state_test PRIVATE SIMULATION)
   target_link_libraries(stc_state_test PRIVATE simulator)
+  target_sources(stc_state_test PRIVATE dev/src/pd4c.c dev/src/x8_25.c dev/src/myact_socketcan.c)
+  target_compile_definitions(stc_state_test PRIVATE _DEFAULT_SOURCE _POSIX_C_SOURCE=200809L)
 else()
   target_compile_definitions(stc_state_test PRIVATE
     _DEFAULT_SOURCE
@@ -455,4 +457,15 @@ add_executable(test_diag_gui_regressions
 )
 target_include_directories(test_diag_gui_regressions PRIVATE ${PROJECT_SOURCE_DIR}/dev/include)
 target_compile_options(test_diag_gui_regressions PRIVATE -Wall -Wextra)
+
+if(USE_SIMULATOR)
+  target_sources(stc_diag_test PRIVATE dev/src/pd4c.c dev/src/x8_25.c dev/src/myact_socketcan.c)
+  target_compile_definitions(stc_diag_test PRIVATE _DEFAULT_SOURCE _POSIX_C_SOURCE=200809L)
+endif()
+
+if(BUILD_TESTING)
+  # The configuration test reads example INI files from the source tree.
+  set_tests_properties(stc_config_test PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+  add_test(NAME test_diag_gui_regressions COMMAND test_diag_gui_regressions)
+endif()
 

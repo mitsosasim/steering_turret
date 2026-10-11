@@ -1,7 +1,6 @@
 /*
- * ALMA SISTEMI SRL - Steering Turret Control (STC)
+ * Steering Turret Control (STC)
  *
- * Property of ALMA SISTEMI SRL.
  * This source file is part of the STC development codebase.
  *
  * File purpose:
@@ -24,7 +23,7 @@
 /*
  * STC ICD codec (transport-agnostic)
  * - Parses/builds TCP CMD and RSP frames
- * - Parses/builds UDP multicast telemetry frames (TLMH/TLML)
+ * - Parses/builds UDP telemetry frames (TLMH/TLML)
  * - No struct-casting; all little-endian manual packing/unpacking
  *
  * Project decisions:
