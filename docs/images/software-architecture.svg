@@ -39,7 +39,7 @@
     <text x="810" y="513" font-size="18" font-weight="700" fill="#142b45">Software simulator</text>
     <text x="810" y="541" font-size="15" fill="#53677e">Functional checks without motors</text>
     <path d="M931 303V360" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
-    <path d="M1051 303V472" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <path d="M931 338H1094V523H1082" stroke="#5f7898" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
     <text x="44" y="578" font-size="13" fill="#63788e">Software architecture illustration. Configured rates do not establish measured hard real-time guarantees.</text>
   </g>
 </svg>
