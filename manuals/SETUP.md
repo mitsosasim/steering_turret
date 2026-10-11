@@ -140,11 +140,11 @@ candump -tz can0 | tee logs/can/session.log
 | `myact_x8_25` | MYACTUATOR vendor CAN |
 | `disabled` | Unmapped axis |
 
-Examples are under [`dev/config/`](../dev/config/). Confirm node IDs, bus settings, encoder scaling, gear ratio, limits, and logical mappings for your bench. CAN discovery is disabled by default; missing axis sections do not automatically enable motors.
+Examples are under [`dev/config/`](../dev/config/). Both bench profiles currently select MYACTUATOR. For a Nanotec PD4-C bench, select `driver=pd4c` in the enabled axis section. Confirm node IDs, bus settings, encoder scaling, gear ratio, limits, and logical mappings for your bench. CAN discovery is disabled by default; missing axis sections do not automatically enable motors.
 
 ```bash
 ./build-can/stc_server --config dev/config/stc_bench_one_motor.ini --backend can
-# Or, for the other motor family:
+# Or use the dedicated X8-25 bench profile:
 ./build-can/stc_server --config dev/config/stc_bench_x8_25.ini --backend can
 ```
 
