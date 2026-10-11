@@ -1,1 +1,0 @@
-cantransmit.o: ../cantransmit.c

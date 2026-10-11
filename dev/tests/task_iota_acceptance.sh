@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# ALMA SISTEMI SRL - Steering Turret Control (STC)
+# Steering Turret Control (STC)
 #
-# Property of ALMA SISTEMI SRL.
 # This script is part of the STC development codebase.
 # Checks integration-level command responses to catch regressions in control-path interoperability.
 

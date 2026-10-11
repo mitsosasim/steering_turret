@@ -1,1 +1,0 @@
-canreceive.o: ../canreceive.c

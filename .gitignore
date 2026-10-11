@@ -12,6 +12,7 @@ tlm_rx_udp
 
 # build dirs
 build/
+build-*/
 out/
 bin/
 build_gui/
