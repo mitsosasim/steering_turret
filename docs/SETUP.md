@@ -1,6 +1,6 @@
 # Build and setup
 
-Run the commands below from the repository root. Start with the simulator; hardware commands require a configured CAN interface and a reviewed motor configuration.
+Run the commands below from the repository root. Start with the simulator. Hardware commands require a configured CAN interface and a reviewed motor configuration.
 
 ## Requirements
 
@@ -60,7 +60,7 @@ ctest --test-dir build-can -R '^x8_25_test_can_hw$' --output-on-failure
 ./build/stc_server --backend simulator --rt-enabled 0
 ```
 
-This is a no-axis smoke run. It starts the network server without motors or RT privileges, but the startup inventory check reports FAIL because the expected motor count is zero. Status requests and telemetry remain available. The current configuration guard also rejects simulator startup with enabled hardware-driver axes. Use the backend regression tests for simulated motion; this command does not demonstrate a complete simulated turret session.
+This is a no-axis smoke run. It starts the network server without motors or RT privileges, but the startup inventory check reports FAIL because the expected motor count is zero. Status requests and telemetry remain available. The current configuration guard also rejects simulator startup with enabled hardware-driver axes. Use the backend regression tests for simulated motion. This command does not demonstrate a complete simulated turret session.
 
 In another terminal:
 
@@ -140,7 +140,7 @@ candump -tz can0 | tee logs/can/session.log
 | `myact_x8_25` | MYACTUATOR vendor CAN |
 | `disabled` | Unmapped axis |
 
-Examples are under [`dev/config/`](../dev/config/). Both bench profiles currently select MYACTUATOR. For a Nanotec PD4-C bench, select `driver=pd4c` in the enabled axis section. Confirm node IDs, bus settings, encoder scaling, gear ratio, limits, and logical mappings for your bench. CAN discovery is disabled by default; missing axis sections do not automatically enable motors.
+Examples are under [`dev/config/`](../dev/config/). Both bench profiles currently select MYACTUATOR. For a Nanotec PD4-C bench, select `driver=pd4c` in the enabled axis section. Confirm node IDs, bus settings, encoder scaling, gear ratio, limits, and logical mappings for your bench. CAN discovery is disabled by default. Missing axis sections do not automatically enable motors.
 
 ```bash
 ./build-can/stc_server --config dev/config/stc_bench_one_motor.ini --backend can
@@ -148,7 +148,7 @@ Examples are under [`dev/config/`](../dev/config/). Both bench profiles currentl
 ./build-can/stc_server --config dev/config/stc_bench_x8_25.ini --backend can
 ```
 
-Motion is gated by operational state and axis availability. An ACK means the command was accepted under the protocol rules; check feedback to establish physical completion.
+Motion is gated by operational state and axis availability. An ACK means the command was accepted under the protocol rules. Check feedback to establish physical completion.
 
 ## Low-level motor bench tools
 
@@ -197,7 +197,7 @@ See [`deploy/OPERATOR_RUNBOOK.md`](../deploy/OPERATOR_RUNBOOK.md) for the privil
 | Symptom | Check |
 |---|---|
 | GUI target missing | Qt6 packages and `BUILD_DIAG_GUI=ON` |
-| RT startup fails | Capabilities, resource limits, scheduler policy; use `--rt-enabled 0` for simulation |
+| RT startup fails | Capabilities, resource limits, scheduler policy. Use `--rt-enabled 0` for simulation |
 | CAN backend fails | Interface state, bitrate, permissions, wiring, enabled axes, node IDs |
 | No telemetry | TCP client connection, receiver binding, UDP ports, firewall |
 | Motion rejected | Operational state, live axis availability, payload range, configured limits |

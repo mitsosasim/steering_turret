@@ -10,13 +10,13 @@ This is an implementation reference for the active C codec and server. The wire 
 | TLMH | UDP unicast | Port 6010, 100 Hz | Axis motion feedback |
 | TLML | UDP unicast | Port 6020, 10 Hz | State and health |
 
-UDP telemetry is directed to the active TCP client's address. Rates and ports are configurable. Sequence numbers help clients detect ordering or missing telemetry; UDP does not guarantee delivery.
+UDP telemetry is directed to the active TCP client's address. Rates and ports are configurable. Sequence numbers help clients detect ordering or missing telemetry. UDP does not guarantee delivery.
 
 Multi-byte integers and floating-point values are encoded little-endian. The version byte defaults to `0x01`. Magic values are literal ASCII bytes, not integers sent in host byte order. The codec packs fields explicitly rather than serializing native structs.
 
 ## Command frame
 
-The command header is 20 bytes. Total size is `20 + payload_size`; the codec supports at most 2048 payload bytes.
+The command header is 20 bytes. Total size is `20 + payload_size`. The codec supports at most 2048 payload bytes.
 
 | Offset | Size | Field |
 |---:|---:|---|
@@ -65,14 +65,14 @@ The codec recognizes the following payload shapes. Recognition by the codec does
 | `0x000C` | FACTORY | 0 | None |
 | `0x000D` | SELFTEST | 0 | None |
 | `0x000E` | SHUTDOWN | 0 | None |
-| `0x000F` | CONFIG | Variable | Raw payload; consult runtime support |
+| `0x000F` | CONFIG | Variable | Raw payload. Consult runtime support |
 | `0x0010` | MANUALPOS | 32 | Latitude, longitude, altitude, heading: four `f64` values |
 | `0x0011` | POSMODE | 1 | Mode `u8` |
 | `0x0012` | REQ_SW_VERSION | 0 | None |
 | `0x0013` | REQ_HW_INFO | 0 | None |
 | `0x0014` | REQ_WORK_TIME | 0 | None |
 
-Motion types are relative `0`, absolute `1`, and speed `2`. Position values refer to the external load in degrees; speed values use degrees per second. SUT is the protocol's name for a paired payload-axis group. Logical objects are mapped to axes through configuration.
+Motion types are relative `0`, absolute `1`, and speed `2`. Position values refer to the external load in degrees. Speed values use degrees per second. SUT is the protocol's name for a paired payload-axis group. Logical objects are mapped to axes through configuration.
 
 Movement and speed streaming require OPER and an eligible axis. State transitions, limits, and driver availability can reject otherwise well-formed frames. See [`stc_state.c`](../dev/src/stc_state.c) for the active transition rules.
 

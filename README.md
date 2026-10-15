@@ -2,34 +2,43 @@
 
 Low-level embedded Linux control for a military steering turret, with real-time scheduling, CAN motor control, and fault handling for critical defense applications.
 
+<table>
+  <tr>
+    <th width="50%">Front view</th>
+    <th width="50%">Rear view</th>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="middle"><a href="docs/images/turret-front.png"><img src="docs/images/turret-front.png" width="100%" alt="Steering turret platform, front view"></a></td>
+    <td width="50%" align="center" valign="middle"><a href="docs/images/turret-back.png"><img src="docs/images/turret-back.png" width="100%" alt="Steering turret platform, rear view"></a></td>
+  </tr>
+</table>
+
 **C11 / C++17 · Linux / ARM64 · SocketCAN · CANopen / CiA 402 · TCP / UDP · Qt6**
 
-[Engineering report](manuals/steering-turret-report.pdf) · [Build and setup](manuals/SETUP.md) · [Software architecture](manuals/ARCHITECTURE.md) · [Protocol reference](manuals/communication_protocol.md)
+[Engineering report](docs/manuals/steering-turret-report.pdf) · [Build and setup](docs/SETUP.md) · [Software architecture](docs/ARCHITECTURE.md) · [Protocol reference](docs/communication_protocol.md)
 
 ## What it does
 
-STC connects a control application to a multi-axis motor system. It receives movement commands, checks whether they are allowed, drives the motors, and sends back position, speed, and health information. A software simulator implements the motor-backend interface for functional tests.
+STC connects a control application to a multi-axis motor system. It receives movement commands, checks whether they are allowed, drives the motors, and sends back position, speed, and health information. A software simulator implements the same motion interface for functional tests.
 
-![STC diagnostic console showing motor status, live telemetry, and command controls](docs/images/diagnostics-console.png)
+## Contributions
 
-*Diagnostic console during a CAN bench session. This view shows one connected actuator; it is not evidence of a full 18-axis hardware test.*
+I was the sole engineer responsible for the control-software stack, from low-level motor integration to diagnostics, hardware testing, and deployment. My work covered:
 
-## My engineering work
-
-I developed the control software and motor integration as the engineer responsible for this software stack. My work covered:
-
-- **Low-level motor control:** Nanotec PD4-C CANopen / CiA 402 integration and a separate MYACTUATOR CAN driver, including command encoding, feedback, and unit conversion.
-- **Concurrent runtime:** a dedicated motion worker, shared-state synchronization, bounded command queues, and periodic telemetry threads.
-- **Fault handling:** state-based motion checks, position and speed limits, stale-feedback detection, speed-stream watchdogs, and stop requests after critical faults.
-- **Communication:** a binary TCP command/response codec and UDP telemetry at configurable rates, with defaults of 100 Hz for motion and 10 Hz for health.
-- **Integration tools:** a Qt diagnostic console, command-line clients, actuator bench utilities, a simulator, and regression tests.
-- **Embedded deployment:** configuration-driven startup, systemd services, Linux real-time scheduling controls, and CPU-affinity guidance for ARM64 targets.
+- **Embedded C/C++ and Linux:** modular control software, POSIX APIs, configuration parsing, and ARM64 deployment on RockPro64.
+- **Motor integration:** Nanotec PD4-C CANopen / CiA 402 and MYACTUATOR vendor CAN drivers, including command encoding, feedback, encoder scaling, unit conversion, and real-motor bring-up.
+- **Software architecture:** a common motion interface for hardware and simulation, per-axis driver selection, logical axis mapping, and separation of network, control, and telemetry work.
+- **Concurrency and timing:** a dedicated motion worker, bounded queues, keep-latest speed updates, mutex-protected shared state, monotonic clocks, and periodic telemetry threads.
+- **Fault handling:** state-based motion checks, position and speed limits, stale-feedback detection, speed-stream watchdogs, diagnostic codes, and controlled stop requests after critical faults.
+- **Networking and protocols:** a binary TCP command/response codec, explicit little-endian serialization, and UDP telemetry with configurable rates, defaulting to 100 Hz for motion and 10 Hz for health.
+- **Diagnostics and verification:** a Qt6 console, command-line clients, actuator bench tools, software simulation, regression and concurrency tests, CAN traffic inspection, and testing with real hardware motors.
+- **Build, deployment, and documentation:** CMake, GCC/G++, CTest, systemd services, Linux capabilities, real-time scheduling controls, CPU-affinity configuration, setup guides, and an engineering report.
 
 ## System at a glance
 
-![Software architecture: control client, runtime, telemetry, and selectable motor backends](docs/images/software-architecture.svg)
+![Software architecture showing the motion interface, hardware motor families, and simulator](docs/images/software-architecture.svg)
 
-The network and telemetry threads stay separate from motor transactions. A single worker owns the motion backend, so hardware access has a clear ordering and commands are checked against current state and axis availability.
+The motion worker owns the selected backend. Hardware mode routes each configured axis to the Nanotec or MYACTUATOR library, while simulator mode uses the same motion interface without physical motors. Network and telemetry threads remain separate from motor transactions.
 
 ## Technology stack
 
@@ -43,9 +52,15 @@ The network and telemetry threads stay separate from motor transactions. A singl
 | Build and verification | CMake, GCC/G++, CTest, protocol and concurrency regression tests |
 | Deployment | systemd, Linux capabilities, FIFO/RR scheduling controls, CPU affinity |
 
+## Diagnostics and target hardware
+
+![STC diagnostic console showing motor status, live telemetry, and command controls](docs/images/diagnostics-console.png)
+
+*Qt diagnostic console with live telemetry and motor controls.*
+
 <img src="docs/images/embedded-target.jpg" width="420" alt="RockPro64 embedded Linux target board">
 
-*RockPro64 embedded target, shown in the engineering report.*
+*RockPro64 embedded target.*
 
 ## Explore the implementation
 
@@ -57,7 +72,7 @@ The network and telemetry threads stay separate from motor transactions. A singl
 | [`pd4c.c`](dev/src/pd4c.c) / [`x8_25.c`](dev/src/x8_25.c) | Two different low-level motor protocols |
 | [`stc_state.c`](dev/src/stc_state.c) / [`stc_limits.c`](dev/src/stc_limits.c) | State transitions and motion checks |
 | [`diag_gui_qt.cpp`](dev/tools/diag_gui_qt.cpp) | Operator diagnostics and live hardware inventory |
-| [`dev/tests/`](dev/tests/) | Existing codec, configuration, routing, state, and concurrency tests |
+| [`dev/tests/`](dev/tests/) | Codec, configuration, routing, state, and concurrency tests |
 
 ## Build and run software checks
 
@@ -78,12 +93,12 @@ This no-axis smoke run reports FAIL because the startup motor-inventory check ha
 ./build/icd_tx_tcp 127.0.0.1 7000 req_hw
 ```
 
-See [Build and setup](manuals/SETUP.md) for GUI setup, telemetry, CAN bench work, and service deployment.
+See [Build and setup](docs/SETUP.md) for GUI setup, telemetry, CAN bench work, and service deployment.
 
 ## Scope and verification
 
-The software represents up to 18 axes and supports simulation and individual-actuator bench workflows. Those capabilities do not establish that every axis has been tested together on hardware. The simulator checks functional behavior; hardware timing and mechanical behavior require separate bench validation.
-
-Real-time scheduling is configurable. This repository does not establish certified hard real-time deadlines or a certified safety level. Laser fields currently represent commanded software state; a physical laser backend is not integrated. Autonomous visual tracking and payload operation are outside the demonstrated control-software scope.
+- Autonomous visual tracking and payload operation are outside the demonstrated control-software scope.
+- Laser control is functional in software. A physical laser backend is not integrated.
+- Real-time scheduling is configurable. Certified hard real-time deadlines and safety levels are not established here, as they depend on the deployment platform, operating system, workload complexity, and configuration.
 
 **Software engineering: Dimitrios Asimakopoulos**
